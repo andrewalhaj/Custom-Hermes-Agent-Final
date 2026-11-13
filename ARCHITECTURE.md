@@ -498,7 +498,7 @@ Initial codes:
 | `memory.write_rejected` | Hermes refused a built-in memory write |
 | `events.write_failed` | An `events` row could not be written; logged locally at ERROR |
 | `job.failed`, `job.missed`, `job.no_output` | A scheduled job failed or the startup check crashed; a scheduled job did not run, or took input and produced nothing |
-| `host.missing` | An agent host on the job-health check's list wrote no heartbeat in the last 36 hours |
+| `host.missing` | An agent host on the job-health check's list wrote no heartbeat in the last 24 hours |
 | `unhandled` | Anything not in the catalog, outside a guard. Recorded with its traceback by the boundary wrapper or the job wrapper. |
 
 ### 6.2 Where a failure appears
@@ -514,7 +514,7 @@ A retry that succeeds is recorded as `degraded` with its retry count, so a flaky
 
 ### 6.3 Absence checks
 
-Some failures raise nothing. A daily check flags any scheduled job with no fresh success (`job.missed`), and any job that processed input but produced no output for more than one run (`job.no_output`). The daily report is itself checked by its absence: a day with no report is treated as a failure (OPERATIONS.md section 4). A failed startup check is recorded in `events`, so it reaches the daily report when the host can reach the store. A host that cannot reach the store, or does not run at all, is caught by its absence: a heartbeat job on every agent host writes one `host.heartbeat` event a day, and the job-health check, which has the list of agent hosts in its configuration, records `host.missing` for any host with no heartbeat in the last 36 hours.
+Some failures raise nothing. A daily check flags any scheduled job with no fresh success (`job.missed`), and any job that processed input but produced no output for more than one run (`job.no_output`). The daily report is itself checked by its absence: a day with no report is treated as a failure (OPERATIONS.md section 4). A failed startup check is recorded in `events`, so it reaches the daily report when the host can reach the store. A host that cannot reach the store, or does not run at all, is caught by its absence: a heartbeat job on every agent host writes one `host.heartbeat` event a day, and the job-health check, which has the list of agent hosts in its configuration, records `host.missing` for any host with no heartbeat in the last 24 hours.
 
 ## 7. Logging
 
