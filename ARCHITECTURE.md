@@ -180,8 +180,8 @@ For the facts store:
      - The routing request runs under the judge deadline, and the action query as a whole under its own deadline, well inside Hermes's callback timeout (section 3.6). If the routing request errors or misses its deadline, the action query is skipped for that turn, the failure is recorded (`judge.error` or `judge.timeout`), and the turn carries a note with the code. If the search that follows misses the action query's deadline, that is `recall.timeout`.
      - A model that writes the action as free text is not used. In a benchmark on an agent host with no GPU, a local one took 4.5 to 8 seconds for each message. The judge answered in about 0.2 seconds, and its pick was among the answers the test's labels accepted on 42 of 44 messages (#15). Whether a search by the picked action finds the same facts as a search by a freely written one has not been measured; the eval set settles it before the action query is relied on (#26).
    - **The message query, second.** `prefetch()` searches the user's words across the stores, under its own deadline below Hermes's 8-second limit.
-3. **Questions about past work widen the search.** They fetch more results and add past sessions.
-4. **"What is left to do?" is not a similarity search.** A question about open work returns the newest digests' open items for the current project, newest first. Such a question has no topic words to match, and its answer depends on recency.
+3. **Questions about past work widen the search.** They fetch more results and add past sessions. A question about past work is one that the recall gate's patterns match (section 5.3), so the search and the gate always agree on it.
+4. **"What is left to do?" is not a similarity search.** A question about open work returns the newest digests' open items for the current project, newest first. Such a question has no topic words to match, and its answer depends on recency. It is recognised by patterns kept in the same configuration file as the recall gate's.
 5. **Slot rules keep the mix fair.** The merge drops reranked facts under the score floor, then applies a cap on digests, reserved places for references and the per-message cut. The floor applies only where the score is a probability: the judge's rerank score for a fact. Results ranked by fusion alone, which are session chunks, references, and facts whose rerank failed, have no floor and are cut by rank only.
 6. **Results are attached to the message** as recalled notes, labelled as notes and not as instructions. Each note shows its origin, its basis, the date it was stored and, when checked since, the date it was last verified.
 7. **The agent can also search on demand** with the memory search tool.
@@ -220,7 +220,6 @@ Still open, each tracked in its own issue:
 - Whether reference chunks move into the shared store (#3).
 - How the service finds the Python that Hermes runs on, the install and update procedure with real packages, and an absence check for an agent host (#29).
 - Whether Hermes's safe-worker mode leaves the guards' hooks unfired (#23).
-- How questions about past work and about open work are recognised (#25).
 - Whether a search by the picked action finds what a search by a freely written one would, and whether a low-probability pick should count (#26).
 
 ### 3.7 What leaves the host
@@ -451,7 +450,7 @@ Hermes's memory tool enforces the size limits of `MEMORY.md` and `USER.md` itsel
 
 ### 5.6 Known limits
 
-- Detection is by pattern. A question phrased outside the patterns gets no reminder.
+- Detection is by pattern. A question phrased outside the patterns gets no reminder, no wider search and no open-items answer.
 - A lookup check proves that a lookup happened, not that it was the right one.
 - While a reply is held, tool progress and reasoning still show unless turned off, and commentary between tool calls is dropped.[4]
 - Any exemption, such as for subagents or system notifications, is written down. An exempt path produces unguarded claims.
