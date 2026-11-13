@@ -28,13 +28,13 @@ These placeholders appear in the documentation. Each deployment sets them in its
 | Hermes, its plugins, the guards and the memory provider | Every machine in `<agent-hosts>` |
 | Embedding (`qwen3-embedding:4b`) | Locally, on every machine in `<agent-hosts>`. It is the only model an agent host must run, and it meets the recall deadline without a GPU: about 0.3 seconds for a query on a CPU-only host (#15). |
 | Bulk embedding, such as the eval set or an import | Any machine set up as in section 3, preferably one with a GPU: a CPU-only host took about 3.6 seconds for each chunk (#15). Every machine runs the same pinned build, so its vectors are comparable with any other machine's (ARCHITECTURE.md section 3.2). |
-| Judge, reranker and message routing | `<judge-model>`, hosted |
-| Fact extraction | `<extraction-model>`, local or hosted |
-| Session digests | `<digest-model>`, hosted |
+| Judge, reranker and message routing | `<judge-model>`, hosted. The first deployment uses TypeSafe's Jev 1.14.0, pinned. |
+| Fact extraction | `<extraction-model>`, hosted. The first deployment uses Claude Haiku 5.5 (`claude-haiku-5-5`) through the Anthropic API. |
+| Session digests | `<digest-model>`, hosted. The first deployment uses the same model as fact extraction. |
 | The memory store | One Supabase project, `<project-ref>`, shared by every machine in `<agent-hosts>` |
 | Scheduled jobs | Hermes cron on `<job-host>`. A machine that sleeps cannot be the only job host: a job that does not run is reported as `job.missed`, but nothing runs it. |
 
-The memory store outlives any one machine and is shared by all of them. What each hosted part receives is listed in ARCHITECTURE.md section 3.7; each deployment confirms that list against its own `<judge-model>`, `<extraction-model>` and `<digest-model>`.
+The memory store outlives any one machine and is shared by all of them. What each hosted part receives is listed in ARCHITECTURE.md section 3.7; each deployment confirms that list against its own `<judge-model>`, `<extraction-model>` and `<digest-model>`. Extraction is hosted because a local model on an agent host with no GPU took 4.5 to 8 seconds for each message (#15), and Jev cannot write text.
 
 ## 3. Machine setup
 
