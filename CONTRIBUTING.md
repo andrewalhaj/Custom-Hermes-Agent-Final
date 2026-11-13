@@ -379,7 +379,7 @@ There is no count ratchet: the repository starts with no catch-everything handle
 
 ### 8.1 Repository settings
 
-Branch protection and rulesets are available on public repositories, and on private repositories only with GitHub Pro, Team or Enterprise.[18] This repository is public, and all seven rows are set: the first three in the repository's settings, the last four as one ruleset on `main` that lists no one who may bypass it. A merge therefore needs a pull request, squash-merged, with the `tests` check passed, and nobody can force-push to `main` or delete it. If the repository is made private on GitHub Free again, the ruleset stops applying, and W8 and W9 rest again on the maintainer and on how each agent is configured (section 9).
+Branch protection and rulesets are available on public repositories, and on private repositories only with GitHub Pro, Team or Enterprise.[18] This repository is public. The first three rows are set in its settings, and the last four as one ruleset on `main` with no bypass list, configured and read back on 2026-11-13 but not yet seen to block a push (rule C6). The ruleset enforces part of W8 and W9: a change reaches `main` only through a pull request, squash-merged, with the `tests` check passed, and `main` cannot be force-pushed or deleted. It does not enforce who merges, or W9 on other branches, and an account with admin rights can edit it, so those parts still rest on the maintainer and on how each agent is configured (section 9). If the repository is made private on GitHub Free again, the ruleset stops applying.
 
 | Setting | Why |
 |---|---|
@@ -387,7 +387,7 @@ Branch protection and rulesets are available on public repositories, and on priv
 | Default squash title: "Pull request title" | One naming rule for commits on `main`.[8] |
 | Automatically delete head branches | Removes the remote branch on merge. For a pull request from a fork, the fork's own setting applies.[19] |
 | Require a pull request before merging | Nothing lands without one.[18] |
-| Do not allow bypassing the above settings | Administrators are exempt by default.[18] |
+| Do not allow bypassing the above settings | In a ruleset, only those on its bypass list can bypass it; this one lists no one.[25] |
 | Allow force pushes and allow deletions: off | Protects the history.[18] |
 | Require status checks to pass. Add each CI check after it has run once and passed. | Nothing merges on a red check.[20] |
 
@@ -547,3 +547,4 @@ AI coding agents are welcome contributors, under the same rules as everyone else
 - [22] [pip-audit README](https://github.com/pypa/pip-audit/blob/main/README.md)
 - [23] [Context files (Hermes Agent documentation)](https://hermes-agent.nousresearch.com/docs/user-guide/features/context-files)
 - [24] [Build a Hermes plugin (Hermes Agent developer guide)](https://hermes-agent.nousresearch.com/docs/developer-guide/plugins)
+- [25] [About rulesets (GitHub Docs)](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/about-rulesets)
