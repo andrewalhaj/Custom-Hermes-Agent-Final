@@ -428,6 +428,18 @@ jobs:
           echo "$out"
           [ "$rc" -eq 1 ]   # 1 = findings reported; 0 = rules are off; 2 = ruff failed
           for code in BLE001 S110 E722; do grep -q "$code" <<< "$out" || { echo "ruff no longer reports $code"; exit 1; }; done
+      - name: ruff lints every tracked Python file
+        shell: bash
+        run: |
+          # Catches anything that drops files from linting: include, exclude, .gitignore, ruff's default excludes.
+          python - <<'PY'
+          import pathlib, subprocess, sys
+          root = pathlib.Path.cwd().resolve()
+          run = lambda *cmd: subprocess.run(cmd, check=True, capture_output=True, text=True).stdout.splitlines()
+          linted = {pathlib.Path(p).resolve().relative_to(root).as_posix() for p in run("ruff", "check", "--show-files", ".") if p.strip()}
+          missing = sorted(set(run("git", "ls-files", "*.py")) - linted)
+          sys.exit("tracked Python files that ruff does not lint:\n" + "\n".join(missing) if missing else 0)
+          PY
       - name: ruff configuration lives in the root pyproject.toml and narrows nothing
         shell: bash
         run: |
@@ -457,7 +469,7 @@ Lint selection in `pyproject.toml`. Use `extend-select`, which adds to ruff's de
 extend-select = ["BLE001", "S110"]
 ```
 
-- `ruff check .` covers every Python file in the repository, tests included. All ruff configuration lives in the root `pyproject.toml`: no `ruff.toml`, `.ruff.toml` or nested `pyproject.toml`, no `exclude` or `extend-exclude`, and no per-file ignores for these rules. With one configuration file, the probe step proves the rules are on for every file.
+- `ruff check .` covers every Python file in the repository, tests included. All ruff configuration lives in the root `pyproject.toml`: no `ruff.toml`, `.ruff.toml` or nested `pyproject.toml`, no `exclude` or `extend-exclude`, and no per-file ignores for these rules. With one configuration file, the probe step proves the rules are on for every file, and the coverage step proves every tracked Python file is linted, whatever would otherwise drop it (`include`, `.gitignore`, or ruff's default excludes such as `dist/`).
 - Pin ruff to one version in the project's dev dependencies, so local runs and CI agree.
 - The job name is what appears as the status check to require.
 - Give any step that pipes a tool into a count or a test `shell: bash`, and never end it with `|| true`. Without `shell: bash` a failed command in the middle of a pipe does not stop the step, so a tool that did not start reads as a count of 0 and the check passes.[21] A check must tell "found nothing" from "the tool failed", as the `noqa` step above does. Prove each step with its failing case before relying on it (C6).
