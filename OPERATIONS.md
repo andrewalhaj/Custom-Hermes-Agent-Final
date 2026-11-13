@@ -26,8 +26,8 @@ These placeholders appear in the documentation. Each deployment sets them in its
 | Part | Where |
 |---|---|
 | Hermes, its plugins, the guards and the memory provider | Every machine in `<agent-hosts>` |
-| Embedding (`qwen3-embedding:4b`) | Locally, on every machine in `<agent-hosts>`. It is the only model an agent host runs, so an agent host needs no GPU (measured in #15). |
-| Bulk embedding, such as the eval set or an import | Any machine that runs the pinned embedding build, preferably one with a GPU. The vectors are the same wherever they are made (section 3). |
+| Embedding (`qwen3-embedding:4b`) | Locally, on every machine in `<agent-hosts>`. It is the only model an agent host must run, and it meets the recall deadline without a GPU: about 0.3 seconds for a query on a CPU-only host (#15). |
+| Bulk embedding, such as the eval set or an import | Any machine set up as in section 3, preferably one with a GPU: a CPU-only host took about 3.6 seconds for each chunk (#15). Every machine runs the same pinned build, so its vectors are comparable with any other machine's (ARCHITECTURE.md section 3.2). |
 | Judge, reranker and message routing | `<judge-model>`, hosted |
 | Fact extraction | `<extraction-model>`, local or hosted |
 | Session digests | `<digest-model>`, hosted |
