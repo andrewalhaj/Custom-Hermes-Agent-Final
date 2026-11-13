@@ -379,7 +379,7 @@ There is no count ratchet: the repository starts with no catch-everything handle
 
 ### 8.1 Repository settings
 
-Branch protection and rulesets are available on public repositories, and on private repositories only with GitHub Pro, Team or Enterprise.[18] While this repository is private on GitHub Free, the last four rows below cannot be set. A red check then does not block a merge by itself, so W8 (merge only on green) and W9 rest on the maintainer and on how each agent is configured (section 9). The first three rows work on every plan.
+Branch protection and rulesets are available on public repositories, and on private repositories only with GitHub Pro, Team or Enterprise.[18] This repository is public, and all seven rows are set: the first three in the repository's settings, the last four as one ruleset on `main` that lists no one who may bypass it. A merge therefore needs a pull request, squash-merged, with the `tests` check passed, and nobody can force-push to `main` or delete it. If the repository is made private on GitHub Free again, the ruleset stops applying, and W8 and W9 rest again on the maintainer and on how each agent is configured (section 9).
 
 | Setting | Why |
 |---|---|
