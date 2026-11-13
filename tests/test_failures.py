@@ -24,7 +24,9 @@ def _rows(dsn):
 
 
 def _json_lines(caplog):
-    return [(r.levelno, json.loads(r.getMessage())) for r in caplog.records if r.name == failures.__name__]
+    # the event lines only: the job wrapper's traceback line is free text (logger.exception, rule C2)
+    return [(r.levelno, json.loads(r.getMessage())) for r in caplog.records
+            if r.name == failures.__name__ and r.getMessage().startswith("{")]
 
 
 def test_record_writes_one_row_and_logs_the_same_fields(db, caplog):
@@ -95,6 +97,21 @@ def test_job_wrapper_records_a_crash_inside_an_open_transaction(db, job):
         failures.run_job("nightly", job, source="host-a", connect=lambda: psycopg.connect(db["agent"]))
     assert exit_info.value.code != 0
     assert [(r[4], r[5]) for r in _rows(db["agent"])] == [("unhandled", "failed"), ("job.failed", "failed")]
+
+
+@pytest.mark.parametrize("autocommit", [False, True])
+def test_job_wrapper_logs_a_lost_connection_and_exits_non_zero(db, caplog, autocommit):
+    def lose_connection(conn):
+        conn.execute("select pg_terminate_backend(pg_backend_pid())")   # stands in for a restart or a network loss
+
+    with pytest.raises(SystemExit) as exit_info:
+        failures.run_job("nightly", lose_connection, source="host-a",
+                         connect=lambda: psycopg.connect(db["agent"], autocommit=autocommit))
+    assert exit_info.value.code != 0
+    assert [line["code"] for _, line in _json_lines(caplog)] == [
+        "unhandled", "events.write_failed", "job.failed", "events.write_failed",
+    ]
+    assert _rows(db["agent"]) == []
 
 
 def test_job_wrapper_returns_quietly_when_the_job_succeeds(db):
