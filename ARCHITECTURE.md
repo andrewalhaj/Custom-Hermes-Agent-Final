@@ -219,7 +219,6 @@ Still open, each tracked in its own issue:
 
 - Whether reference chunks move into the shared store (#3).
 - How the score floor applies when stores' scores are not on one scale (#4).
-- Whether stored rows are keyed by session id or conversation id (#17).
 - How the service finds the Python that Hermes runs on, the install and update procedure with real packages, and an absence check for an agent host (#29).
 - Which hook the fact gate and the recall gate count a lookup from (#22).
 - Whether Hermes's safe-worker mode leaves the guards' hooks unfired (#23).
@@ -259,7 +258,7 @@ The memory store is a Supabase project: Postgres with the `pgvector` extension. 
 3. **Nothing is hard-deleted by the agent.** A fact is superseded, with a pointer to its replacement, or retired, with a reason. The row stays.
 4. **Every vector records the build that made it.** A change of embedding model is a visible migration, not a silent mismatch.
 5. **Nothing unused.** No column, index or function argument exists without code that reads it.
-6. **Any machine can write a session chunk.** A chunk is identified by its source, session, message position and chunk number, never by an identifier from one machine's local store. With `compression.in_place: false`, Hermes replaces a conversation's `session_id` when it compresses the transcript, while the `conversation_id` stays the same; the default, `true`, keeps the `session_id`.[14][15] Which of the two these rows carry is open (#17).
+6. **Any machine can write a session chunk.** A chunk is identified by its source, session, message position and chunk number, never by an identifier from one machine's local store. Rows carry Hermes's `session_id`. Compressing a transcript keeps it while `compression.in_place` is `true`, the default, which every agent host keeps; with `false`, Hermes would give the conversation a new `session_id`, and one conversation's rows would sit under two.[14][15] Hermes also changes the `session_id` on purpose, when a session is resumed, branched, reset or started anew, and tells the provider through `on_session_switch`; rows already written keep the id they had.[14] A chunk written again at the same position, after Hermes rewinds a session, replaces the earlier one. Chunks for messages a rewind removed stay until retention deletes them (section 4.3).
 
 ### 4.2 Schema
 
@@ -432,7 +431,7 @@ Hermes's memory tool enforces the size limits of `MEMORY.md` and `USER.md` itsel
 
   - the ordinary load reports no error, every guard's hooks are registered, and the provider loads (`guard.not_loaded`);
   - the build's own settings, such as the store's address and the machine's name, are present and valid (`config.missing`);
-  - Hermes's own settings have the values the build depends on (`config.unsafe`): plugin isolation is `in_process`; `approvals.mode` is not `off`; `approvals.cron_mode`, `approvals.single_query_mode` and `approvals.unattended_mode` are `deny`; and `HERMES_YOLO_MODE` is not set.
+  - Hermes's own settings have the values the build depends on (`config.unsafe`): plugin isolation is `in_process`; `approvals.mode` is not `off`; `approvals.cron_mode`, `approvals.single_query_mode` and `approvals.unattended_mode` are `deny`; `HERMES_YOLO_MODE` is not set; and `compression.in_place` is `true`.
 
   It is a check before the start, not proof about the running process (section 5.6). How the service finds the Python that Hermes runs on is open (#29).
 - **A missing setting inside Hermes.** The plugin's `pre_llm_call` hook checks the build's settings on every turn. When one is missing or invalid, it blocks the turn with a notice that names the setting (`config.missing`), so the agent never runs a turn with the build half configured. The manifest declares no settings for Hermes to check: Hermes would only log a warning for a bad `config_schema` value, or disable a plugin whose `requires_env` variable is unset, and start anyway.[15]

@@ -49,6 +49,7 @@ Every machine that runs the agent:
    |---|---|---|
    | `memory.provider` | This build's provider | Hermes runs one external memory provider, and this setting selects it.[2] |
    | `memory.write_approval` | `true` | Every write to `MEMORY.md` and `USER.md` waits for a person's approval, so a wrong assumption is never saved unchecked. |
+   | `compression.in_place` | `true` (default) | With `false`, compressing a transcript gives the conversation a new session id, and rows written before and after it no longer match (ARCHITECTURE.md section 4.1).[3] The startup check fails otherwise. |
    | `logging.max_size_mb`, `logging.backup_count` | Defaults (5, 3) or larger | Long enough to cover the period between daily reports |
    | `HERMES_PLUGINS_DEBUG` | Never set | Its console copy of plugin logs is not redacted |
    | `HERMES_SAFE_MODE`, or the `--safe-mode` flag that sets it | Never used | It makes Hermes skip plugin discovery, so the ordinary load never happens and the guards' hooks are not registered at all (ARCHITECTURE.md section 1).[3] |
