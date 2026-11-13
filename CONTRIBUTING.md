@@ -379,16 +379,16 @@ There is no count ratchet: the repository starts with no catch-everything handle
 
 ### 8.1 Repository settings
 
-Branch protection and rulesets are available on public repositories, and on private repositories only with GitHub Pro, Team or Enterprise.[18] This repository is public. The first three rows are set in its settings, and the last four as one ruleset on `main` with no bypass list, configured and read back on 2026-11-13 but not yet seen to block a push (rule C6). The ruleset enforces part of W8 and W9: a change reaches `main` only through a pull request, squash-merged, with the `tests` check passed, and `main` cannot be force-pushed or deleted. It does not enforce who merges, or W9 on other branches, and an account with admin rights can edit it, so those parts still rest on the maintainer and on how each agent is configured (section 9). If the repository is made private on GitHub Free again, the ruleset stops applying.
+Branch protection and rulesets are available on public repositories, and on private repositories only with GitHub Pro, Team or Enterprise.[18][25] This repository is public. The first three rows are set in its settings, and the last four as one ruleset on `main` with no bypass list, configured and read back on 2026-11-13 but not yet seen to block a push (rule C6). The ruleset enforces part of W8 and W9: a change reaches `main` only through a pull request, squash-merged, with the `tests` check passed, and `main` cannot be force-pushed or deleted. It does not enforce who merges, or W9 on other branches, and an account with admin rights can edit it, so those parts still rest on the maintainer and on how each agent is configured (section 9). If the repository is made private on GitHub Free again, the ruleset stops applying.
 
 | Setting | Why |
 |---|---|
 | Allow squash merging only | Every pull request lands on `main` as one commit.[7] |
 | Default squash title: "Pull request title" | One naming rule for commits on `main`.[8] |
 | Automatically delete head branches | Removes the remote branch on merge. For a pull request from a fork, the fork's own setting applies.[19] |
-| Require a pull request before merging | Nothing lands without one.[18] |
-| Do not allow bypassing the above settings | In a ruleset, only those on its bypass list can bypass it; this one lists no one.[25] |
-| Allow force pushes and allow deletions: off | Protects the history.[18] |
+| Require a pull request before merging | Nothing lands without one.[25] |
+| No bypass list | In a ruleset, only those on its bypass list can bypass it; this one lists no one.[25] |
+| Block force pushes and deletion | Protects the history.[25] |
 | Require status checks to pass. Add each CI check after it has run once and passed. | Nothing merges on a red check.[20] |
 
 ### 8.2 The CI workflow
