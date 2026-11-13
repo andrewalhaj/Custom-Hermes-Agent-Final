@@ -19,6 +19,3 @@ packages = []
 
 [tool.ruff.lint]
 extend-select = ["BLE001", "S110"]
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
