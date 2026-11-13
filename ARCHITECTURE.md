@@ -22,7 +22,7 @@ The build extends Hermes through its documented extension points and leaves the 
 |---|---|---|
 | Memory provider | A memory provider plugin. Hermes allows one external provider at a time, calls it before each turn, and exposes its tools to the agent.[2][3] | Stores and searches long-term memory (sections 2–4) |
 | Guards | Plugin hooks that run before the model is called, before each tool call and on the final reply.[4] | Force lookups and stop unsafe actions (section 5) |
-| Skills | Hermes skills. Hermes lists every skill's name and description in the prompt itself, so recall does not search them. | Procedures the agent follows for recurring tasks |
+| Skills | Hermes skills. Hermes lists every skill's name and description in the prompt itself, so recall does not search them. | Procedures the agent follows for recurring tasks. The build ships none at first; a skill is added, through a pull request, when a recurring task needs one. |
 | Instruction files | `AGENTS.md`, loaded from the directory a session runs in, and `SOUL.md`, loaded only from the Hermes home directory.[5] | The agent's operating rules and identity. This repository contains neither file (CONTRIBUTING.md section 9). |
 
 Hermes's built-in memory stays on. It is two size-limited files, `MEMORY.md` (2,200 characters) and `USER.md` (1,375 characters), loaded into the prompt at the start of each session.[6] They hold standing rules and preferences. Identity is `SOUL.md`, not memory. Everything else lives in the memory provider.
