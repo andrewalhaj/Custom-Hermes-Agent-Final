@@ -242,7 +242,11 @@ gh api repos/<owner>/<repo>/pulls/<n>/comments      # comments on lines
    `git diff origin/main <branch> -- $(git diff --name-only origin/main...<branch>)` must print nothing.
    If it prints anything, stop and tell a maintainer.
 3. Delete the branch, local and remote, with a maintainer's yes (W9). Give the tip hash so it can be restored. GitHub deletes the remote branch itself when automatic deletion is on (section 8.1).
-4. Confirm CI passed on `main`: `gh run list --branch main --limit 1`. If it failed in the code, tell a maintainer at once and propose a revert pull request.
+4. Confirm CI passed on the merge commit: `gh run list --workflow CI --commit <merge-sha> --json status,conclusion`, where `<merge-sha>` is the full `mergeCommit` hash from step 1.
+   - It must print a run whose `conclusion` is `success`.
+   - An empty list (`[]`) is not a pass. The run has not started yet, or the hash is shortened or wrong: the command needs the full hash and exits 0 either way. Run it again, and tell a maintainer if it stays empty.
+   - Do not read the newest run on `main` instead. Other workflows, such as GitHub's own Dependency Graph, run on the same commit and can be listed first.
+   - If CI failed in the code, tell a maintainer at once and propose a revert pull request.
 5. End-of-task check: `git status -sb`, `git branch -vv`, `git stash list`. Only `main` should be left. Then `git status --short --ignored`: every `!!` entry must be a cache or build directory (4.4). Anything else there was never committed; tell a maintainer.
 
 ### 4.8 What a squash-merge changes
