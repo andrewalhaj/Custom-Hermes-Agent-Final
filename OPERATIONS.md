@@ -71,7 +71,7 @@ Every machine that runs the agent:
 | Job | Runs | What it does | Its own failure |
 |---|---|---|---|
 | Retention | Daily | Deletes `events` rows and session chunks older than 90 days. Misses worth keeping are copied into the eval set before then (ARCHITECTURE.md section 3.8). Runs as `<maintenance-role>`, not a machine's agent role. | `job.failed` |
-| Job-health check | Daily, before the report | Flags any job with no fresh success (`job.missed`) and any job that took input but produced nothing for more than one run (`job.no_output`) | Reported by the report's absence |
+| Job-health check | Daily, before the report | Flags any job with no fresh success (`job.missed`), any job that took input but produced nothing for more than one run (`job.no_output`), and any agent host with no heartbeat event in the last 24 hours (ARCHITECTURE.md section 6.3) | Reported by the report's absence |
 | Daily failure report | Daily, at a fixed time | Sends the day's failures from `events`, grouped by code and machine, and every "always" answer given to the write gate that day, as a dated Markdown file to `<operators-channel>`. With nothing to report it sends a one-line all-clear that names the jobs that ran. | A missing report |
 
 Every job runs through the job wrapper (ARCHITECTURE.md section 6.1), so a crash is recorded in `events` as `unhandled` and `job.failed` before the job exits non-zero.

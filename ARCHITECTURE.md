@@ -510,7 +510,7 @@ A retry that succeeds is recorded as `degraded` with its retry count, so a flaky
 
 ### 6.3 Absence checks
 
-Some failures raise nothing. A daily check flags any scheduled job with no fresh success (`job.missed`), and any job that processed input but produced no output for more than one run (`job.no_output`). The daily report is itself checked by its absence: a day with no report is treated as a failure (OPERATIONS.md section 4). A failed startup check is recorded in `events`, so it reaches the daily report when the host can reach the store. A host that cannot reach the store, or does not run at all, has no absence check yet (#29).
+Some failures raise nothing. A daily check flags any scheduled job with no fresh success (`job.missed`), and any job that processed input but produced no output for more than one run (`job.no_output`). The daily report is itself checked by its absence: a day with no report is treated as a failure (OPERATIONS.md section 4). A failed startup check is recorded in `events`, so it reaches the daily report when the host can reach the store. A host that cannot reach the store, or does not run at all, is caught by its absence: each agent host writes one heartbeat event a day, and the job-health check flags any host with none in the last 24 hours.
 
 ## 7. Logging
 
