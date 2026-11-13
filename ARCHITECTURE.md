@@ -205,6 +205,7 @@ Still open, each tracked in its own issue:
 - What the write gate does when Hermes's approval gate is bypassed (#21).
 - Which hook the fact gate and the recall gate count a lookup from (#22).
 - Whether Hermes's safe-worker mode leaves the guards' hooks unfired (#23).
+- How a "what is left to do" question is recognised (#25).
 
 ### 3.7 What leaves the host
 
