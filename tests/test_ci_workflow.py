@@ -34,7 +34,7 @@ def run_in_repo(tmp_path, script, files):
         path.write_text(body)
         subprocess.run(["git", "-C", str(tmp_path), "add", "-f", name], check=True)
     result = subprocess.run(["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", script],
-                            cwd=tmp_path, capture_output=True, text=True)
+                            check=False, cwd=tmp_path, capture_output=True, text=True)  # the exit code is the result
     return result.returncode
 
 
