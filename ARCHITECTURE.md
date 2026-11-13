@@ -222,7 +222,6 @@ Still open, each tracked in its own issue:
 - How the score floor applies when stores' scores are not on one scale (#4).
 - Whether stored rows are keyed by session id or conversation id (#17).
 - How the service finds the Python that Hermes runs on, the install and update procedure with real packages, and an absence check for an agent host (#29).
-- What the write gate does when Hermes's approval gate is bypassed (#21).
 - Which hook the fact gate and the recall gate count a lookup from (#22).
 - Whether Hermes's safe-worker mode leaves the guards' hooks unfired (#23).
 - How questions about past work and about open work are recognised (#25).
@@ -414,7 +413,7 @@ What counts as a checkable question, a question about past work, a managed file 
 Two of the guards rest on Hermes mechanisms that the table does not name:
 
 - **The verify gate records a read from `post_tool_call`**, and only when the call's `status` is `ok`. It keeps the record in the plugin's local state (section 2).
-- **The write gate asks through Hermes's own approval gate**, by returning the `approve` directive from `pre_tool_call`. The request goes to a person; Hermes's model-based approval is not on this path. Hermes blocks the call when the person denies it, when the gate errors or times out, and when nobody can answer: in a scheduled run under the default `approvals.cron_mode: deny`, and in any other non-interactive context apart from the bypasses in section 5.6.[14] When a person is asked, the answer arrives after the guard has returned, so it is recorded from Hermes's `post_approval_response` hook. When the gate decides without asking, no approval hook fires, and a block shows only as `post_tool_call` with the status `blocked`. How each outcome is recorded, and under which code, is part of #21.
+- **The write gate asks through Hermes's own approval gate**, by returning the `approve` directive from `pre_tool_call`. The request goes to a person; Hermes's model-based approval is not on this path. Hermes blocks the call when the person denies it, when the gate errors or times out, and when nobody can answer: in a scheduled run under the default `approvals.cron_mode: deny`, and in any other non-interactive context apart from the bypasses in section 5.6.[14] Each request carries a rule key for the one action pattern it matched, so a person's "always" answer covers that pattern and not the whole tool; without a key, Hermes keys the answer on the tool.[4][14] The write gate records each request it sends in `events`. A person's answer arrives after the guard has returned, so it is recorded from Hermes's `post_approval_response` hook, and every "always" answer is listed in the daily report (OPERATIONS.md section 4). When the gate decides without asking, no approval hook fires, and a block shows only as `post_tool_call` with the status `blocked`. Before it asks, the write gate checks whether yolo is on for the session; if it is, the gate blocks the call itself instead of asking (section 5.6).
 
 Hermes's memory tool enforces the size limits of `MEMORY.md` and `USER.md` itself, so there is no memory-cap guard.[6]
 
@@ -433,7 +432,7 @@ Hermes's memory tool enforces the size limits of `MEMORY.md` and `USER.md` itsel
 
   - the ordinary load reports no error, every guard's hooks are registered, and the provider loads (`guard.not_loaded`);
   - the build's own settings, such as the store's address and the machine's name, are present and valid (`config.missing`);
-  - Hermes's own settings have the values the build depends on (`config.unsafe`): plugin isolation is `in_process`.
+  - Hermes's own settings have the values the build depends on (`config.unsafe`): plugin isolation is `in_process`; `approvals.mode` is not `off`; `approvals.cron_mode`, `approvals.single_query_mode` and `approvals.unattended_mode` are `deny`; and `HERMES_YOLO_MODE` is not set.
 
   It is a check before the start, not proof about the running process (section 5.6). How the service finds the Python that Hermes runs on is open (#29).
 - **A missing setting inside Hermes.** The plugin's `pre_llm_call` hook checks the build's settings on every turn. When one is missing or invalid, it blocks the turn with a notice that names the setting (`config.missing`), so the agent never runs a turn with the build half configured. The manifest declares no settings for Hermes to check: Hermes would only log a warning for a bad `config_schema` value, or disable a plugin whose `requires_env` variable is unset, and start anyway.[15]
@@ -460,14 +459,14 @@ Hermes's memory tool enforces the size limits of `MEMORY.md` and `USER.md` itsel
 - Any exemption, such as for subagents or system notifications, is written down. An exempt path produces unguarded claims.
 - A Hermes started by hand, outside the service, skips the startup check (section 5.5). Hermes logs a warning for a plugin that failed to load, but nothing in Hermes stops it or records `guard.not_loaded`.
 - The startup check runs in a process of its own before Hermes starts. It does not prove the load in the process that serves requests, where a plugin's load has its own deadline, plugins can be reloaded while Hermes runs, and Hermes's safe mode skips plugin discovery.[16]
-- Some of the build rests on Hermes behaviour that the developer guide does not describe: loading one directory both ways (section 1), `register()` telling the two loads apart by its context, and the startup check calling Hermes's plugin loader directly. Each is re-tested on every Hermes upgrade (OPERATIONS.md section 5).
+- Some of the build rests on Hermes behaviour that the developer guide does not describe: loading one directory both ways (section 1), `register()` telling the two loads apart by its context, the startup check calling Hermes's plugin loader directly, and the write gate's check for yolo. Each is re-tested on every Hermes upgrade (OPERATIONS.md section 5).
 - Hermes's approval gate approves without asking in four cases, and the write gate does not hold in them:[14]
   - yolo is on, by any route: the `--yolo` flag, the `HERMES_YOLO_MODE` variable, the `/yolo` command in a CLI or gateway session, or a one-shot run started with `hermes -z`;
   - `approvals.mode` is `off`;
   - the person earlier answered "for this session" or "always" for the same rule, which is the whole tool unless the guard names a narrower rule;
   - an unattended context has its mode set to `approve` (`approvals.cron_mode`, `approvals.single_query_mode`, `approvals.unattended_mode`; each defaults to `deny`).
 
-  OPERATIONS.md section 3 pins the settings. What the write gate does when the approval gate is bypassed is open (#21).
+  The build answers each. The startup check fails on `approvals.mode: off`, on an unattended mode set to `approve`, and on `HERMES_YOLO_MODE` (section 5.5). The write gate blocks outright when yolo is on for the session. An earlier answer covers only one action pattern, and every "always" answer is reported (section 5.3). Not covered: `approvals.mode` switched to `off` while Hermes runs, and a hosted-room policy that overrides it, because the startup check reads the configuration only before the start.[14]
 
 ## 6. Failure handling
 
@@ -547,6 +546,6 @@ The rules are L1–L5 in CONTRIBUTING.md.
 - [11] [Controlling text search (PostgreSQL documentation)](https://www.postgresql.org/docs/current/textsearch-controls.html)
 - [12] [Wu et al., LongMemEval, arXiv 2410.10813](https://arxiv.org/abs/2410.10813)
 - [13] [Row security policies (PostgreSQL documentation)](https://www.postgresql.org/docs/current/ddl-rowsecurity.html)
-- [14] Hermes v0.23.1 source: `hermes_logging.py`, `model_tools.py`, `agent/redact.py`, `agent/agent_init_memory_provider.py`, `agent/memory_provider.py`, `agent/memory_manager.py`, `agent/turn_context.py`, `gateway/session_finite.py`, `hermes_cli/cli_session_mixin.py`, `hermes_cli/config_defaults.py`, `hermes_cli/plugins.py`, `hermes_cli/plugins_context.py`, `hermes_cli/plugins_dispatch.py`, `plugins/memory/__init__.py`, `tools/approval.py`
+- [14] Hermes v0.23.1 source: `hermes_logging.py`, `model_tools.py`, `agent/redact.py`, `agent/agent_init_memory_provider.py`, `agent/memory_provider.py`, `agent/memory_manager.py`, `agent/turn_context.py`, `gateway/session_finite.py`, `hermes_cli/cli_session_mixin.py`, `hermes_cli/config_defaults.py`, `hermes_cli/plugins.py`, `hermes_cli/plugins_context.py`, `hermes_cli/plugins_dispatch.py`, `plugins/memory/__init__.py`, `tools/approval.py`, `tools/approval_context.py`
 - [15] [Build a Hermes plugin (Hermes Agent developer guide)](https://hermes-agent.nousresearch.com/docs/developer-guide/plugins)
 - [16] Hermes v0.23.1 source, plugin loading: `agent/prompt_builder.py`, `hermes_cli/plugin_isolation.py`, `hermes_cli/plugins.py`, `hermes_cli/plugins_cmd_install.py`, `hermes_cli/plugins_content.py`, `hermes_cli/plugins_discovery.py`, `hermes_cli/plugins_ledger.py`, `hermes_cli/plugins_loader.py`, `hermes_cli/plugins_manifest.py`, `plugins/memory/__init__.py`, `plugins/plugin_storage.py`
