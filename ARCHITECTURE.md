@@ -221,9 +221,8 @@ Still open, each tracked in its own issue:
 
 - Whether reference chunks move into the shared store, decided with eval-set numbers once the facts store exists (#3).
 - What identifies a session chunk's message, so that it never repeats after Hermes compacts a session or rewinds it with `/undo` or `/rollback`, and what happens to what was drawn from rewound messages or copied into a branch (#17).
-- Whether Hermes's safe-worker mode leaves the guards' hooks unfired, checked with the first code (#23).
 - Whether a search by the picked action finds what a search by a freely written one would, and whether a low-probability pick should count (#26).
-- How the service finds the Python that Hermes runs on, the install and update procedure with real packages, an absence check for an agent host, and a signal when the guards fail to load while Hermes runs (#29).
+- How the service finds the Python that Hermes runs on, and the install and update procedure with real packages, both proved in the plugin's first pull request (#29).
 
 ### 3.7 What leaves the host
 
@@ -458,7 +457,7 @@ Hermes's memory tool enforces the size limits of `MEMORY.md` and `USER.md` itsel
 - While a reply is held, tool progress and reasoning still show unless turned off, and commentary between tool calls is dropped.[4]
 - Any exemption, such as for subagents or system notifications, is written down. An exempt path produces unguarded claims.
 - A Hermes started by hand, outside the service, skips the startup check (section 5.5). Hermes logs a warning for a plugin that failed to load, but nothing in Hermes stops it or records `guard.not_loaded`.
-- The startup check runs in a process of its own before Hermes starts. It does not prove the load in the process that serves requests, where a plugin's load has its own deadline, plugins can be reloaded while Hermes runs, and Hermes's safe mode skips plugin discovery.[16] If the ordinary load fails there while the provider loads, the provider runs with no guards, and nothing reports it during the turn (#29).
+- The startup check runs in a process of its own before Hermes starts. It does not prove the load in the process that serves requests, where a plugin's load has its own deadline, plugins can be reloaded while Hermes runs, and Hermes's safe mode skips plugin discovery.[16] If the ordinary load fails there while the provider loads, the provider runs with no guards. The provider reports it: when it starts, it asks Hermes whether the guards' hooks are registered, and if they are not, it records `guard.not_loaded` and every recall it returns carries a notice that the guards are off. Hermes's safe-worker mode is one such case: a gateway session created in safe mode runs its turns in a worker process where no plugin hook runs (#23).
 - Some of the build rests on Hermes behaviour that the developer guide does not describe: `kind: standalone` on a memory provider's directory and the two imports it causes (section 1), `register()` telling the two loads apart by its context, the startup check calling Hermes's plugin loader and its approval-mode and isolation readers directly, from a process of its own, and the write gate's checks for an approval bypass. Each is re-tested on every Hermes upgrade (OPERATIONS.md section 5).
 - Hermes's approval gate approves without asking in four cases, and the write gate does not hold in them:[14]
   - yolo is on, by any route: the `--yolo` flag, the `HERMES_YOLO_MODE` variable, the `/yolo` command in a CLI or gateway session, or a one-shot run started with `hermes -z`;
