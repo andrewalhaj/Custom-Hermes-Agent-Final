@@ -34,9 +34,9 @@ Memory is shared. Several machines run the agent against one memory store, so ev
 - as an ordinary plugin, listed in `plugins.enabled`, which registers the guards' hooks and the skills when Hermes starts;
 - as the memory provider, selected by `memory.provider`.
 
-The manifest declares `kind: standalone`. Without it, Hermes treats a directory that defines a memory provider as a provider only and skips the ordinary load. With both loads, Hermes registers each hook once, provided the directory under `plugins/` carries the manifest's name, as it does when `hermes plugins install` puts it there.[16] The guards therefore do not wait for the memory provider to load, and no guard can be missing on its own. Hermes v0.23.1 lists a plugin's registered skills in the prompt with the others.[16]
+The manifest declares `kind: standalone`. Without it, Hermes treats a directory that defines a memory provider as a provider only and skips the ordinary load. With both loads, Hermes registers each hook once, provided the directory under `plugins/` carries the manifest's name, as it does when `hermes plugins install` puts it there.[16] Both were run with Hermes's default plugin isolation only; the host isolation mode is not covered (#29). The guards therefore do not wait for the memory provider to load, and no guard can be missing on its own. Hermes v0.23.1 lists a plugin's registered skills in the prompt with the others.[16]
 
-`register()` runs under both loads, and hooks are the only thing Hermes registers once.[16] What the plugin registers under each load, and how it tells the two apart, is decided with the first code (#29).
+`register()` runs under both loads, and hooks are the only registration the two loads share.[16] What the plugin registers under each load, and how it tells the two apart, is decided with the first code (#29).
 
 Hermes imports the directory once for each load, under two module names, so anything held at module level exists twice.[16] The guards and the provider share nothing in memory, and each copy opens its own connection to the store. What they share goes through the memory store or the plugin's storage (section 2).
 
@@ -46,7 +46,7 @@ Loading one directory both ways is not described in Hermes's developer guide. It
 
 - **Prefetch blocks the turn.** Hermes waits for `prefetch()` for up to 8 seconds, then treats a timeout or an error as "no notes" and carries on. The provider therefore enforces its own deadline below 8 seconds. On failure it returns a "recall failed" note with its failure code instead of raising, because that is the only way the failure reaches the turn.
 - **There is no input for a second query.** `prefetch()` receives only the user's message. The action query (section 3.5) therefore runs from a `pre_llm_call` plugin. Hermes runs `pre_llm_call` before prefetch, bounds it with its own callback timeout (`plugins.hook_callback_timeout`, 30 seconds by default), and skips prefetch entirely for a turn that `pre_llm_call` blocks.[4]
-- **The project key comes from `initialize()`.** Hermes passes `cwd`, the session's workspace. The provider resolves it to the repository and uses a key that is the same on every machine: the normalised URL of the repository's `origin` remote, or a project ID set in the repository's Hermes configuration when there is no remote. An absolute path is never used, because it differs between machines. A workspace that is not a repository has no project. The provider never calls `os.getcwd()`.
+- **The project key comes from `initialize()`.** Hermes passes `cwd`, the session's workspace. The provider resolves it to the repository and uses a key that is the same on every machine: the normalised URL of the repository's `origin` remote, or a project ID set in the repository's Hermes configuration when there is no remote. An absolute path is never used, because it differs between machines. A workspace that is not a repository has no project. The provider never calls `os.getcwd()`. How the action query, which runs in the other copy of the code (section 1), gets the same key is open (#29).
 - **Every entry point goes through one boundary wrapper.** Hermes contains errors from hooks and providers, often silently (section 5.5). Each function Hermes calls is wrapped by a single shared wrapper in the failure module. On an unexpected exception it records the failure with its traceback (section 6), then does what that entry point requires:
 
   | Entry point | Recorded as | Then |
@@ -437,7 +437,7 @@ Hermes's memory tool enforces the size limits of `MEMORY.md` and `USER.md` itsel
 - A lookup check proves that a lookup happened, not that it was the right one.
 - While a reply is held, tool progress and reasoning still show unless turned off, and commentary between tool calls is dropped.[4]
 - Any exemption, such as for subagents or system notifications, is written down. An exempt path produces unguarded claims.
-- A Hermes started by hand, outside the service, skips the startup check (section 5.5). Hermes logs a warning for a plugin that did not load, but nothing in Hermes stops it or records `guard.not_loaded`.
+- A Hermes started by hand, outside the service, skips the startup check (section 5.5). Hermes logs a warning for a plugin that failed to load, but nothing in Hermes stops it or records `guard.not_loaded`.
 - The startup check runs in a process of its own before Hermes starts. It does not prove the load in the process that serves requests, where a plugin's load has its own deadline, plugins can be reloaded while Hermes runs, and Hermes's safe mode skips plugin discovery (#29).[16]
 - The startup check calls Hermes's plugin loader directly. The developer guide does not document that loader, so the check is re-tested on every Hermes upgrade (OPERATIONS.md section 5).
 - Hermes's approval gate approves without asking in four cases, and the write gate does not hold in them:[14]
@@ -456,7 +456,7 @@ Every point of failure has a name, and a failure, an empty result and a fallback
 
 The catalog is one module in the package. It lists every failure code, its severity and whether it is shown in the turn. A test fails the build if any handler or fallback emits a code that is not in it, or emits none.
 
-Two wrappers in the same module record what no handler caught. The boundary wrapper covers every entry point Hermes calls (section 2). The job wrapper covers every scheduled job: on an unexpected exception it records `unhandled` and `job.failed` with the traceback, then exits non-zero, so Hermes cron also sends its own error alert (OPERATIONS.md section 4). These two wrappers are the only code allowed to catch everything.
+Two wrappers in the same module record what no handler caught. The boundary wrapper covers every entry point Hermes calls (section 2). The job wrapper covers every scheduled job: on an unexpected exception it records `unhandled` and `job.failed` with the traceback, then exits non-zero, so Hermes cron also sends its own error alert (OPERATIONS.md section 4). These two wrappers are the only code allowed to catch everything. The startup check (section 5.5) runs outside Hermes and is covered by neither; how a crash in it is recorded is open (#29).
 
 Initial codes:
 
@@ -489,7 +489,7 @@ A retry that succeeds is recorded as `degraded` with its retry count, so a flaky
 
 ### 6.3 Absence checks
 
-Some failures raise nothing. A daily check flags any scheduled job with no fresh success (`job.missed`), and any job that processed input but produced no output for more than one run (`job.no_output`). The daily report is itself checked by its absence: a day with no report is treated as a failure (OPERATIONS.md section 4).
+Some failures raise nothing. A daily check flags any scheduled job with no fresh success (`job.missed`), and any job that processed input but produced no output for more than one run (`job.no_output`). The daily report is itself checked by its absence: a day with no report is treated as a failure (OPERATIONS.md section 4). An agent host whose service refused to start after a failed startup check has no absence check yet (#29).
 
 ## 7. Logging
 
@@ -526,4 +526,4 @@ The rules are L1–L5 in CONTRIBUTING.md.
 - [13] [Row security policies (PostgreSQL documentation)](https://www.postgresql.org/docs/current/ddl-rowsecurity.html)
 - [14] Hermes v0.23.1 source: `hermes_logging.py`, `model_tools.py`, `agent/redact.py`, `agent/memory_provider.py`, `agent/memory_manager.py`, `gateway/session_finite.py`, `hermes_cli/cli_session_mixin.py`, `hermes_cli/config_defaults.py`, `hermes_cli/plugins.py`, `hermes_cli/plugins_context.py`, `hermes_cli/plugins_dispatch.py`, `plugins/memory/__init__.py`, `tools/approval.py`
 - [15] [Build a Hermes plugin (Hermes Agent developer guide)](https://hermes-agent.nousresearch.com/docs/developer-guide/plugins)
-- [16] Hermes v0.23.1 source, plugin loading: `agent/prompt_builder.py`, `hermes_cli/plugins.py`, `hermes_cli/plugins_content.py`, `hermes_cli/plugins_discovery.py`, `hermes_cli/plugins_ledger.py`, `hermes_cli/plugins_loader.py`, `hermes_cli/plugins_manifest.py`, `plugins/memory/__init__.py`, `plugins/plugin_storage.py`
+- [16] Hermes v0.23.1 source, plugin loading: `agent/prompt_builder.py`, `hermes_cli/plugins.py`, `hermes_cli/plugins_cmd_install.py`, `hermes_cli/plugins_content.py`, `hermes_cli/plugins_discovery.py`, `hermes_cli/plugins_ledger.py`, `hermes_cli/plugins_loader.py`, `hermes_cli/plugins_manifest.py`, `plugins/memory/__init__.py`, `plugins/plugin_storage.py`
