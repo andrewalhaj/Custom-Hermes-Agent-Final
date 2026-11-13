@@ -257,7 +257,7 @@ gh api repos/<owner>/<repo>/pulls/<n>/comments      # comments on lines
 ### 5.1 Rules
 
 - **C1. Catch the error you expect, by name.** Before writing a handler, look up what the call raises, in the library's documentation or its source, and name that type. The `try` covers only the lines that can raise it. Imports, formatting and plain data handling stay outside.
-- **C2. No catch-everything blocks.** Never write `except Exception`, `except BaseException` or a bare `except:`. Catch by name, or let it crash. For cleanup, use `try`/`finally`. Never silence the lint for this rule, by `noqa` comment or by configuration; CI fails on either (section 8). The one exception is the shared boundary wrapper that every Hermes entry point goes through (ARCHITECTURE.md section 2): it catches everything, records the failure with its traceback, and then re-raises, blocks or returns a failure note as its entry point requires. It logs with `logger.exception`, which ruff accepts without a `noqa`.[11] No other code catches everything.
+- **C2. No catch-everything blocks.** Never write `except Exception`, `except BaseException` or a bare `except:`. Catch by name, or let it crash. For cleanup, use `try`/`finally`. Never silence the lint for this rule, by `noqa` comment or by configuration; CI fails on either (section 8). The only exceptions are the two shared wrappers in the failure module (ARCHITECTURE.md sections 2 and 6.1): the boundary wrapper that every Hermes entry point goes through, and the job wrapper that every scheduled job goes through. Each catches everything, records the failure with its traceback, and then re-raises, blocks, returns a failure note or exits non-zero, as its entry point requires. They log with `logger.exception`, which ruff accepts without a `noqa`.[11] No other code catches everything.
 - **C3. A failure never looks like an empty result.** Do not return `[]`, `None`, `0` or "skipped" for a failure when the same value also means "nothing found". Raise, or return a failure the caller has to check. A missing setting is a startup error, never a silent default.
 - **C4. Let it crash.** Code fails loudly by default. Add handling that keeps code running only when the issue asks for it and gives the reason, and record the failure even then (section 6). "Must not crash" never means "must not show the failure".
 - **C5. No bare "never raises", "fail open" or "best-effort".** In an issue, a brief, a docstring or a comment, follow each of those phrases with which failures it covers, the failure code that records them, and how the caller tells a failure from an empty result. A spec that says only "must never raise" invites a silent catch-everything handler.
@@ -321,11 +321,11 @@ The lint fails a pull request on:
 - `except Exception` or `except BaseException` (`BLE001`).[11]
 - `try`-`except`-`pass` on a catch-everything block (`S110`). By default it flags only `Exception`, `BaseException` and a bare `except:`.[13][14]
 - A bare `except:` (`E722`).
-- Any suppression of `BLE001`, `S110` or `E722`: a `noqa` comment, a file-level `ruff: noqa` or `flake8: noqa`, or an ignore entry in `pyproject.toml` (separate CI steps, section 8.2).
+- Any suppression of `BLE001`, `S110` or `E722`: a `noqa` comment, a file-level `ruff: noqa` or `flake8: noqa`, or ruff configuration that turns a rule off, globally or per file (separate CI steps, section 8.2).
 
 The reviewer checks what the lint cannot:
 
-- A catch-everything block that re-raises, or that logs with the traceback. The lint does not flag either one.[11] Rule C2 forbids both, apart from its one exception for `pre_llm_call` guards.
+- A catch-everything block that re-raises, or that logs with the traceback. The lint does not flag either one.[11] Rule C2 forbids both, apart from its two shared wrappers.
 - A failure returned as an empty value (C3).
 - A `try` that covers more lines than it needs (C1).
 - A handler or fallback with no failure code (F1).
@@ -337,10 +337,10 @@ Every point of failure is loud and distinguishable. The mechanism, including the
 
 - **F1. Every failure has a named code from the catalog.** A handler or fallback emits one. There is no bare "error".
 - **F2. Failed, empty and degraded are different results.** A failure is never returned as an empty result, and a fallback or a retry that succeeded is recorded as degraded, never as plain success.
-- **F3. Every occurrence is logged and recorded.** Each one is logged at WARNING or above and written to the `events` table, through the one recording helper in the failure module. Errors that reach a Hermes entry point are recorded by the boundary wrapper (ARCHITECTURE.md section 2), so code never relies on Hermes, which logs a repeated error only once.
+- **F3. Every occurrence is logged and recorded.** Each one is logged at WARNING or above and written to the `events` table, through the one recording helper in the failure module. Errors that reach a Hermes entry point or a scheduled job are recorded by the boundary wrapper or the job wrapper (ARCHITECTURE.md sections 2 and 6.1), so code never relies on Hermes, which logs a repeated error only once.
 - **F4. A failure that changed the answer is shown in the turn.** Every failure, shown or not, appears in the daily failure report.
 - **F5. Recording a failure must not lose it.** If the `events` row cannot be written, the failure is logged locally at ERROR with `events.write_failed`.
-- **F6. The catalog is enforced.** A test fails the build if a handler or fallback emits no code or a code not in the catalog. A failure that is not in the catalog is a bug. Inside Hermes, the boundary wrapper records it as `unhandled` with its traceback; a standalone script or job crashes and its runner records it.
+- **F6. The catalog is enforced.** A test fails the build if a handler or fallback emits no code or a code not in the catalog. A failure that is not in the catalog is a bug, recorded with its traceback: inside Hermes by the boundary wrapper, and in a scheduled job by the job wrapper, which records it and then exits non-zero (ARCHITECTURE.md section 6.1).
 
 ## 7. Logging rules
 
@@ -359,7 +359,7 @@ A rule in this file does not block anything. These guards do. Each is proven wit
 | Guard | Rules | Where it lives | The failing case that proves it |
 |---|---|---|---|
 | Lint over the whole repository: ruff's default rules plus `BLE001` and `S110` | C1, C2 | `pyproject.toml`, the CI workflow | A pull request that adds `except Exception: pass` anywhere fails |
-| Suppression ban for `BLE001`, `S110`, `E722` | C2 | The CI workflow | A pull request that adds `# noqa: BLE001`, a bare `# noqa`, a file-level `# ruff: noqa`, or an ignore entry for these rules in `pyproject.toml` fails |
+| Suppression ban for `BLE001`, `S110`, `E722` | C2 | The CI workflow | A pull request that adds `# noqa: BLE001`, a bare `# noqa`, a file-level `# ruff: noqa`, or ruff configuration that turns one of these rules off, globally or per file, fails |
 | Tests in CI | W3 | The CI workflow | A pull request with a failing test fails |
 | Failure-catalog test | F1, F6 | The test suite | A handler that emits no code, or an unknown one, fails the build |
 | Secret-leak test | L4, W13 | The test suite | A fake key that reaches a log line, a stored row or an outgoing request fails the build |
@@ -415,18 +415,38 @@ jobs:
           rc=$?
           set -e
           [ "$rc" -eq 1 ]   # 1 = no match (pass); 0 = a match was found; anything else = git failed
-      - name: no configuration that ignores the error-handling rules
+      - name: the error-handling rules are switched on
+        shell: bash
+        run: |
+          # Lint a probe that breaks all three rules, with the repository's own ruff configuration.
+          # Any configuration that turns a rule off (ignore, select, ruff.toml) makes its code disappear.
+          set +e
+          out=$(printf 'try:\n    pass\nexcept Exception:\n    pass\ntry:\n    pass\nexcept:\n    pass\n' \
+            | ruff check --no-cache --output-format concise --stdin-filename ci_probe.py -)
+          rc=$?
+          set -e
+          echo "$out"
+          [ "$rc" -eq 1 ]   # 1 = findings reported; 0 = rules are off; 2 = ruff failed
+          for code in BLE001 S110 E722; do grep -q "$code" <<< "$out" || { echo "ruff no longer reports $code"; exit 1; }; done
+      - name: no per-file ignores for the error-handling rules
         shell: bash
         run: |
           python - <<'PY'
-          import sys, tomllib
-          lint = tomllib.load(open("pyproject.toml", "rb")).get("tool", {}).get("ruff", {}).get("lint", {})
+          import pathlib, sys, tomllib
           rules = ("BLE001", "S110", "E722")
-          def hits(codes):   # a code or prefix that covers one of the rules, such as "E", "BLE" or "ALL"
-              return [c for c in codes if c == "ALL" or any(r.startswith(c) for r in rules)]
-          bad = hits(lint.get("ignore", []) + lint.get("extend-ignore", []))
-          bad += [f"{path}: {c}" for path, codes in lint.get("per-file-ignores", {}).items() for c in hits(codes)]
-          sys.exit(f"ruff is told to ignore the error-handling rules: {bad}" if bad else 0)
+          def covers(code):   # a code or prefix that covers one of the rules, such as "E", "BLE" or "ALL"
+              return code == "ALL" or any(r.startswith(code) for r in rules)
+          bad = []
+          for name in ("pyproject.toml", "ruff.toml", ".ruff.toml"):
+              path = pathlib.Path(name)
+              if not path.exists():
+                  continue
+              conf = tomllib.loads(path.read_text())
+              ruff = conf.get("tool", {}).get("ruff", {}) if name == "pyproject.toml" else conf
+              for section in (ruff, ruff.get("lint", {})):
+                  for key in ("per-file-ignores", "extend-per-file-ignores"):
+                      bad += [f"{name}: {glob}: {c}" for glob, codes in section.get(key, {}).items() for c in codes if covers(c)]
+          sys.exit(f"per-file ignores switch off the error-handling rules: {bad}" if bad else 0)
           PY
       - run: python -m pytest -q
 ```
