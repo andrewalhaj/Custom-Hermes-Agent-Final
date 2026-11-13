@@ -414,7 +414,8 @@ jobs:
           git grep -n -i -E '#[[:space:]]*noqa([[:space:]]*$|[[:space:]]*[^:[:space:]]|:[^#]*(BLE001|S110|E722))|(ruff|flake8):[[:space:]]*noqa' -- '*.py'
           rc=$?
           set -e
-          [ "$rc" -eq 1 ]   # 1 = no match (pass); 0 = a match was found; anything else = git failed
+          # 1 = no match (pass); 0 = the matches printed above; anything else = git failed
+          [ "$rc" -eq 1 ] || { echo "noqa ban: git grep exited $rc (0 = the matches above, other = git failed)"; exit 1; }
       - name: the error-handling rules are switched on
         shell: bash
         run: |
@@ -426,7 +427,8 @@ jobs:
           rc=$?
           set -e
           echo "$out"
-          [ "$rc" -eq 1 ]   # 1 = findings reported; 0 = rules are off; 2 = ruff failed
+          # 1 = findings reported (expected); 0 = the rules are off; anything else = ruff failed or is missing
+          [ "$rc" -eq 1 ] || { echo "probe: ruff exited $rc, expected 1 (findings reported)"; exit 1; }
           for code in BLE001 S110 E722; do grep -q "$code" <<< "$out" || { echo "ruff no longer reports $code"; exit 1; }; done
       - name: ruff lints every tracked Python file
         shell: bash
@@ -444,7 +446,9 @@ jobs:
         shell: bash
         run: |
           python - <<'PY'
-          import subprocess, sys, tomllib
+          import os, subprocess, sys, tomllib
+          if not os.path.exists("pyproject.toml"):
+              sys.exit("no pyproject.toml at the repository root")
           rules = ("BLE001", "S110", "E722")
           def covers(code):   # a code or prefix that covers one of the rules, such as "E", "BLE" or "ALL"
               return code == "ALL" or any(r.startswith(code) for r in rules)
