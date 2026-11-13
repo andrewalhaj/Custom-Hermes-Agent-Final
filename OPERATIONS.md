@@ -16,6 +16,7 @@ These placeholders appear in the documentation. Each deployment sets them in its
 | `<project-ref>` | The Supabase project that holds the memory store |
 | `<model-digest>` | The pinned build digest of the embedding model |
 | `<judge-model>` | The hosted model used as judge and first-choice reranker |
+| `<extraction-model>` | The model that proposes facts from user messages and tool results |
 | `<digest-model>` | The model that writes session digests |
 | `<maintenance-role>` | The database role that runs retention and migrations |
 | `<operators-channel>` | Where the daily failure report is sent |
@@ -27,11 +28,12 @@ These placeholders appear in the documentation. Each deployment sets them in its
 | Hermes, its plugins, the guards and the memory provider | Every machine in `<agent-hosts>` |
 | Embedding (`qwen3-embedding:4b`), action naming (`qwen2.5:14b`) and the fallback reranker (`bge-reranker-v2-m3`) | Locally, on every machine in `<agent-hosts>` |
 | Judge and first-choice reranker | `<judge-model>`, hosted |
+| Fact extraction | `<extraction-model>`, local or hosted |
 | Session digests | `<digest-model>`, hosted |
 | The memory store | One Supabase project, `<project-ref>`, shared by every machine in `<agent-hosts>` |
 | Scheduled jobs | Hermes cron on `<job-host>`. A machine that sleeps cannot be the only job host: a job that does not run is reported as `job.missed`, but nothing runs it. |
 
-The memory store outlives any one machine and is shared by all of them. What each hosted part receives is listed in ARCHITECTURE.md section 3.7; each deployment confirms that list against its own `<judge-model>` and `<digest-model>`.
+The memory store outlives any one machine and is shared by all of them. What each hosted part receives is listed in ARCHITECTURE.md section 3.7; each deployment confirms that list against its own `<judge-model>`, `<extraction-model>` and `<digest-model>`.
 
 ## 3. Machine setup
 
@@ -56,6 +58,8 @@ Every machine that runs the agent:
 | Event retention | Daily | Deletes `events` rows older than 90 days. Misses worth keeping are copied into the eval set before then (ARCHITECTURE.md section 3.8). Runs as `<maintenance-role>`, not a machine's agent role. | `job.failed` |
 | Job-health check | Daily, before the report | Flags any job with no fresh success (`job.missed`) and any job that took input but produced nothing for more than one run (`job.no_output`) | Reported by the report's absence |
 | Daily failure report | Daily, at a fixed time | Sends the day's failures from `events`, grouped by code and machine, as a dated Markdown file to `<operators-channel>`. With nothing to report it sends a one-line all-clear that names the jobs that ran. | A missing report |
+
+Every job runs through the job wrapper (ARCHITECTURE.md section 6.1), so a crash is recorded in `events` as `unhandled` and `job.failed` before the job exits non-zero.
 
 **A missing report is an alarm.** The report always sends something, so silence never means "all clear". If no report arrives by its expected time, the job host, the report job or the channel has failed, and an operator investigates.
 
