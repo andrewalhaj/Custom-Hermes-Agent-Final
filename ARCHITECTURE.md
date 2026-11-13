@@ -219,7 +219,6 @@ Still open, each tracked in its own issue:
 
 - Whether reference chunks move into the shared store (#3).
 - How the service finds the Python that Hermes runs on, the install and update procedure with real packages, and an absence check for an agent host (#29).
-- Which hook the fact gate and the recall gate count a lookup from (#22).
 - Whether Hermes's safe-worker mode leaves the guards' hooks unfired (#23).
 - How questions about past work and about open work are recognised (#25).
 - Whether a search by the picked action finds what a search by a freely written one would, and whether a low-probability pick should count (#26).
@@ -367,7 +366,7 @@ A rule in a prompt only asks. The model can skip a lookup that a prompt requests
 | Hook | When it runs | What a guard does there |
 |---|---|---|
 | `pre_llm_call` | Once per turn, before the model is first called | Classifies the message and adds a reminder to it. It can also end the turn. |
-| `pre_tool_call` | Before each tool call | Records the call. It can block it, by returning `{"action": "block", "message": ...}`, or send it to Hermes's approval gate, by returning `{"action": "approve", "message": ...}`.[15] |
+| `pre_tool_call` | Before each tool call | Checks the call. It can block it, by returning `{"action": "block", "message": ...}`, or send it to Hermes's approval gate, by returning `{"action": "approve", "message": ...}`.[15] |
 | `post_tool_call` | After a tool call ends | Records what happened. Hermes also calls it for a call that was blocked or that raised, with a `status` that says so, and ignores its return value, so it can record but not enforce.[14][15] |
 | `transform_tool_result` | After a tool returns | Replaces the result. To add a note, the guard returns the original result with the note appended. |
 | `transform_llm_output` | On the final reply | Replaces the reply with a notice. Registered with `hold_stream=True`, so the reply is held until the guard has run. |
@@ -383,8 +382,9 @@ sequenceDiagram
     G->>M: message with a reminder, if a lookup is required
     loop until the model answers
         M->>G: tool call
-        G->>G: record the tool, or block, or ask for approval
+        G->>G: allow, block, or ask for approval
         G->>T: allowed call
+        T-->>G: status, counted when ok
         T-->>M: result
     end
     M->>G: final reply
@@ -408,9 +408,9 @@ The reminder alone is not enough, because the model can ignore it as it ignores 
 
 What counts as a checkable question, a question about past work, a managed file or setting, and a sensitive action is defined in each guard's configuration file in this repository, as patterns and lists. Changing one is a pull request like any code change, with the guard's tests updated.
 
-Two of the guards rest on Hermes mechanisms that the table does not name:
+The guards rest on Hermes mechanisms that the table does not name:
 
-- **The verify gate records a read from `post_tool_call`**, and only when the call's `status` is `ok`. It keeps the record in the plugin's local state (section 2).
+- **The fact gate, the recall gate and the verify gate count a tool from `post_tool_call`**, and only when its `status` is `ok`. A lookup that was blocked, or that did not finish, does not count. The verify gate keeps its record of what a session has read in the plugin's local state (section 2).
 - **The write gate asks through Hermes's own approval gate**, by returning the `approve` directive from `pre_tool_call`. The request goes to a person; Hermes's model-based approval is not on this path. Hermes blocks the call when the person denies it, when the gate errors or times out, and when nobody can answer: in a scheduled run under the default `approvals.cron_mode: deny`, and in any other non-interactive context apart from the bypasses in section 5.6.[14] Each request carries a rule key for the one action pattern it matched, so a person's "always" answer covers that pattern and not the whole tool; without a key, Hermes keys the answer on the tool.[4][14] The write gate records each request it sends in `events`. A person's answer arrives after the guard has returned, so it is recorded from Hermes's `post_approval_response` hook, and every "always" answer is listed in the daily report (OPERATIONS.md section 4). When the gate decides without asking, no approval hook fires, and a block shows only as `post_tool_call` with the status `blocked`. Before it asks, the write gate checks whether yolo is on for the session; if it is, the gate blocks the call itself instead of asking (section 5.6).
 
 Hermes's memory tool enforces the size limits of `MEMORY.md` and `USER.md` itself, so there is no memory-cap guard.[6]
@@ -419,7 +419,7 @@ Hermes's memory tool enforces the size limits of `MEMORY.md` and `USER.md` itsel
 
 1. **Detect from the input, cheaply.** A pattern match on the message decides before the model answers. No model judgment is involved.
 2. **Remind in the turn**, and keep the requirement in front of the model until it is met.
-3. **Count the tool by name**, including tools called inside a batch.
+3. **Count the tool by name once it has run**, from `post_tool_call` with the status `ok`, including tools called inside a batch.
 4. **Enforce at the output.** Block the call or withhold the reply.
 5. **Record every decision.** Each arm, block, withhold and approval is logged and written to `events`.
 6. **Ship in log mode first.** Each guard has three modes: `on`, `log` (detect and record only) and `off`. Read the records for false triggers, then enforce.
