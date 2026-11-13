@@ -518,7 +518,7 @@ AI coding agents are welcome contributors, under the same rules as everyone else
 
   The line restates C1–C4 and F1–F2. It is a request, not a guard: the lint and the tests in section 8 are what enforce the rules.
 - **`SOUL.md` is never read from a repository.** Hermes reads it only from its home directory.[23] The agent's identity is installed there, not committed here.
-- **Configure the agent so it cannot do what rules W8 and W9 forbid.** Deny it the commands that merge a pull request, push to `main`, force-push, reset hard, skip hooks, or delete a branch. A rule the agent can break is a request (ARCHITECTURE.md section 5.1). While branch protection is unavailable (section 8.1), this configuration is the only thing that enforces W8 and W9.
+- **Configure the agent so it cannot do what rules W8, W9 and W10 forbid.** Deny it the commands that merge a pull request, push to `main`, force-push, reset hard, skip hooks, delete a branch, or change the repository's settings or rulesets. A rule the agent can break is a request (ARCHITECTURE.md section 5.1). The ruleset in section 8.1 enforces only part of W8 and W9, and an account with admin rights can edit it, so this configuration carries the rest.
 - **A person is accountable for every pull request**, whoever wrote the code.
 
 ## Sources
