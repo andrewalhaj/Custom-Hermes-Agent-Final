@@ -257,7 +257,7 @@ gh api repos/<owner>/<repo>/pulls/<n>/comments      # comments on lines
 ### 5.1 Rules
 
 - **C1. Catch the error you expect, by name.** Before writing a handler, look up what the call raises, in the library's documentation or its source, and name that type. The `try` covers only the lines that can raise it. Imports, formatting and plain data handling stay outside.
-- **C2. No catch-everything blocks.** Never write `except Exception`, `except BaseException` or a bare `except:`. Catch by name, or let it crash. For cleanup, use `try`/`finally`. Never silence the lint for this rule, by `noqa` comment or by configuration; CI fails on either (section 8). The only exceptions are the two shared wrappers in the failure module (ARCHITECTURE.md sections 2 and 6.1): the boundary wrapper that every Hermes entry point goes through, and the job wrapper that every scheduled job goes through. Each catches everything, records the failure with its traceback, and then re-raises, blocks, returns a failure note or exits non-zero, as its entry point requires. They log with `logger.exception`, which ruff accepts without a `noqa`.[11] No other code catches everything.
+- **C2. No catch-everything blocks.** Never write `except Exception`, `except BaseException` or a bare `except:`. Catch by name, or let it crash. For cleanup, use `try`/`finally`. Never silence the lint for this rule, by `noqa` comment, by configuration, or by excluding files; CI fails on each (section 8.2). The only exceptions are the two shared wrappers in the failure module (ARCHITECTURE.md sections 2 and 6.1): the boundary wrapper that every Hermes entry point goes through, and the job wrapper that every scheduled job goes through. Each catches everything, records the failure with its traceback, and then re-raises, blocks, returns a failure note or exits non-zero, as its entry point requires. They log with `logger.exception`, which ruff accepts without a `noqa`.[11] No other code catches everything.
 - **C3. A failure never looks like an empty result.** Do not return `[]`, `None`, `0` or "skipped" for a failure when the same value also means "nothing found". Raise, or return a failure the caller has to check. A missing setting is a startup error, never a silent default.
 - **C4. Let it crash.** Code fails loudly by default. Add handling that keeps code running only when the issue asks for it and gives the reason, and record the failure even then (section 6). "Must not crash" never means "must not show the failure".
 - **C5. No bare "never raises", "fail open" or "best-effort".** In an issue, a brief, a docstring or a comment, follow each of those phrases with which failures it covers, the failure code that records them, and how the caller tells a failure from an empty result. A spec that says only "must never raise" invites a silent catch-everything handler.
@@ -321,7 +321,7 @@ The lint fails a pull request on:
 - `except Exception` or `except BaseException` (`BLE001`).[11]
 - `try`-`except`-`pass` on a catch-everything block (`S110`). By default it flags only `Exception`, `BaseException` and a bare `except:`.[13][14]
 - A bare `except:` (`E722`).
-- Any suppression of `BLE001`, `S110` or `E722`: a `noqa` comment, a file-level `ruff: noqa` or `flake8: noqa`, or ruff configuration that turns a rule off, globally or per file (separate CI steps, section 8.2).
+- Any suppression of `BLE001`, `S110` or `E722`: a `noqa` comment, a file-level `ruff: noqa` or `flake8: noqa`, ruff configuration that turns a rule off, globally or per file, or that excludes files or lives outside the root `pyproject.toml` (separate CI steps, section 8.2).
 
 The reviewer checks what the lint cannot:
 
@@ -359,7 +359,7 @@ A rule in this file does not block anything. These guards do. Each is proven wit
 | Guard | Rules | Where it lives | The failing case that proves it |
 |---|---|---|---|
 | Lint over the whole repository: ruff's default rules plus `BLE001` and `S110` | C1, C2 | `pyproject.toml`, the CI workflow | A pull request that adds `except Exception: pass` anywhere fails |
-| Suppression ban for `BLE001`, `S110`, `E722` | C2 | The CI workflow | A pull request that adds `# noqa: BLE001`, a bare `# noqa`, a file-level `# ruff: noqa`, or ruff configuration that turns one of these rules off, globally or per file, fails |
+| Suppression ban for `BLE001`, `S110`, `E722` | C2 | The CI workflow | A pull request that adds `# noqa: BLE001`, a bare `# noqa`, a file-level `# ruff: noqa`, ruff configuration that turns one of these rules off, an `exclude`, or a ruff configuration file outside the root `pyproject.toml`, fails |
 | Tests in CI | W3 | The CI workflow | A pull request with a failing test fails |
 | Failure-catalog test | F1, F6 | The test suite | A handler that emits no code, or an unknown one, fails the build |
 | Secret-leak test | L4, W13 | The test suite | A fake key that reaches a log line, a stored row or an outgoing request fails the build |
@@ -428,25 +428,24 @@ jobs:
           echo "$out"
           [ "$rc" -eq 1 ]   # 1 = findings reported; 0 = rules are off; 2 = ruff failed
           for code in BLE001 S110 E722; do grep -q "$code" <<< "$out" || { echo "ruff no longer reports $code"; exit 1; }; done
-      - name: no per-file ignores for the error-handling rules
+      - name: ruff configuration lives in the root pyproject.toml and narrows nothing
         shell: bash
         run: |
           python - <<'PY'
-          import pathlib, sys, tomllib
+          import subprocess, sys, tomllib
           rules = ("BLE001", "S110", "E722")
           def covers(code):   # a code or prefix that covers one of the rules, such as "E", "BLE" or "ALL"
               return code == "ALL" or any(r.startswith(code) for r in rules)
-          bad = []
-          for name in ("pyproject.toml", "ruff.toml", ".ruff.toml"):
-              path = pathlib.Path(name)
-              if not path.exists():
-                  continue
-              conf = tomllib.loads(path.read_text())
-              ruff = conf.get("tool", {}).get("ruff", {}) if name == "pyproject.toml" else conf
-              for section in (ruff, ruff.get("lint", {})):
-                  for key in ("per-file-ignores", "extend-per-file-ignores"):
-                      bad += [f"{name}: {glob}: {c}" for glob, codes in section.get(key, {}).items() for c in codes if covers(c)]
-          sys.exit(f"per-file ignores switch off the error-handling rules: {bad}" if bad else 0)
+          tracked = subprocess.run(["git", "ls-files", "*ruff.toml", "*pyproject.toml"],
+                                   check=True, capture_output=True, text=True).stdout.split()
+          bad = [f"ruff configuration outside the root pyproject.toml: {f}" for f in tracked if f != "pyproject.toml"]
+          ruff = tomllib.load(open("pyproject.toml", "rb")).get("tool", {}).get("ruff", {})
+          for section in (ruff, ruff.get("lint", {})):
+              for key in ("exclude", "extend-exclude"):
+                  bad += [f"{key}: {pattern}" for pattern in section.get(key, [])]
+              for key in ("per-file-ignores", "extend-per-file-ignores"):
+                  bad += [f"{key}: {glob}: {c}" for glob, codes in section.get(key, {}).items() for c in codes if covers(c)]
+          sys.exit("\n".join(bad) if bad else 0)
           PY
       - run: python -m pytest -q
 ```
@@ -458,7 +457,7 @@ Lint selection in `pyproject.toml`. Use `extend-select`, which adds to ruff's de
 extend-select = ["BLE001", "S110"]
 ```
 
-- `ruff check .` covers every Python file in the repository, tests included.
+- `ruff check .` covers every Python file in the repository, tests included. All ruff configuration lives in the root `pyproject.toml`: no `ruff.toml`, `.ruff.toml` or nested `pyproject.toml`, no `exclude` or `extend-exclude`, and no per-file ignores for these rules. With one configuration file, the probe step proves the rules are on for every file.
 - Pin ruff to one version in the project's dev dependencies, so local runs and CI agree.
 - The job name is what appears as the status check to require.
 - Give any step that pipes a tool into a count or a test `shell: bash`, and never end it with `|| true`. Without `shell: bash` a failed command in the middle of a pipe does not stop the step, so a tool that did not start reads as a count of 0 and the check passes.[21] A check must tell "found nothing" from "the tool failed", as the `noqa` step above does. Prove each step with its failing case before relying on it (C6).
