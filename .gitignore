@@ -10,6 +10,8 @@
 !/OPERATIONS.md
 !/pyproject.toml
 !/tests/
+!/migrations/
+!/custom_build/
 
 /.github/*
 !/.github/workflows/
@@ -18,3 +20,9 @@
 
 /tests/*
 !/tests/*.py
+
+/migrations/*
+!/migrations/*.sql
+
+/custom_build/*
+!/custom_build/*.py

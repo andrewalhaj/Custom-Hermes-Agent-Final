@@ -24,8 +24,17 @@ HIDDEN = [
     "tests/__pycache__/test_gitignore.cpython-312.pyc",
     "custom_hermes_agent.egg-info/PKG-INFO",
     ".venv/bin/python",
+    "migrations/.env",
+    "migrations/notes.md",
+    "custom_build/.env",
+    "custom_build/__pycache__/failures.cpython-312.pyc",
 ]
-VISIBLE = ["tests/test_new.py", ".github/workflows/new.yml"]
+VISIBLE = [
+    "tests/test_new.py",
+    ".github/workflows/new.yml",
+    "migrations/0002_next.sql",
+    "custom_build/new_module.py",
+]
 
 
 def git(*args):

@@ -168,3 +168,12 @@ def test_workflow_runs_on_pull_requests_and_main():
     commands = [s.get("run", "") for s in workflow["jobs"]["tests"]["steps"]]
     assert "ruff check ." in commands
     assert "python -m pytest -q" in commands
+
+
+def test_tests_get_a_postgres_17_to_apply_migrations_to():
+    job = yaml.safe_load(WORKFLOW.read_text())["jobs"]["tests"]
+    service = job["services"]["postgres"]
+    assert service["image"].startswith("postgres:17")
+    assert "5432:5432" in service["ports"]
+    assert job["env"]["TEST_DATABASE_URL"].startswith("postgresql://postgres:")
+    assert job["env"]["TEST_DATABASE_URL"].endswith("@localhost:5432/postgres")
