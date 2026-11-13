@@ -18,7 +18,7 @@ These placeholders appear in the documentation. Each deployment sets them in its
 | `<judge-model>` | The hosted model used as judge, as reranker and to route each message. It answers typed questions (a pick from a list, a yes or no) with probabilities and does not need to generate text. It is set by version, never by an alias that can move to a newer model, because the thresholds depend on its answers. |
 | `<extraction-model>` | The model that proposes facts from user messages and tool results |
 | `<digest-model>` | The model that writes session digests |
-| `<maintenance-role>` | The login role the retention job runs as. It is created like a machine's role (section 3), but joins the group role `memory_maintenance`: `create role <maintenance-role> login password '<password>' in role memory_maintenance;`. |
+| `<maintenance-role>` | The login role the retention job runs as. It is created like a machine's role (section 3), but joins the group role `memory_maintenance`: `create role <maintenance-role> login in role memory_maintenance;`, then `\password <maintenance-role>`. |
 | `<operators-channel>` | Where the daily failure report is sent |
 
 ## 2. Where it runs
@@ -41,7 +41,7 @@ The memory store outlives any one machine and is shared by all of them. What eac
 Every machine that runs the agent:
 
 1. **Runs the pinned embedding build.** Its Ollama model digest must equal `<model-digest>`. At startup the provider compares its digest with the one recorded in the store and refuses to run recall if they differ (`embed.model_mismatch`). Upgrading the model is a migration: every vector is re-embedded and the recorded digest changes.
-2. **Has its own database role.** The role can read, insert and update the memory tables, and cannot delete rows or change the schema (ARCHITECTURE.md section 4.3). It is a login role that joins the group role `memory_agent`, which the migrations create and grant; it carries no privileges of its own. A maintainer creates it once, outside the repository, with a generated password: `create role <machine-name> login password '<password>' in role memory_agent;`. Its credentials live in the profile's `.env`. The build reads them through Hermes's secret helper (`get_secret`) and never opens `.env` itself.[2]
+2. **Has its own database role.** The role can read, insert and update the memory tables, and cannot delete rows or change the schema (ARCHITECTURE.md section 4.3). It is a login role that joins the group role `memory_agent`, which the migrations create and grant; it carries no privileges of its own. A maintainer creates it once, outside the repository: `create role <machine-name> login in role memory_agent;`, then sets its password with psql's `\password <machine-name>`, which computes the SCRAM hash on the maintainer's machine and sends only that, so the password never appears in a statement or a log.[5] Its credentials live in the profile's `.env`. The build reads them through Hermes's secret helper (`get_secret`) and never opens `.env` itself.[2]
 3. **Sets its `<machine-name>`**, used in the `source` column of every row it writes. Names are unique across `<agent-hosts>`.
 4. **Uses these Hermes settings:**
 
@@ -111,3 +111,4 @@ The files in `migrations/` are applied to `<project-ref>` in file-name order, ea
 - [2] [Build a Hermes plugin (Hermes Agent developer guide)](https://hermes-agent.nousresearch.com/docs/developer-guide/plugins)
 - [3] Hermes v0.23.1 source: `plugins/security-guidance/`, `tools/approval.py`, `tools/approval_context.py`, `gateway/session_finite.py`, `hermes_cli/cli_session_mixin.py`, `hermes_cli/config_defaults.py`, `hermes_cli/git_credentials.py`, `hermes_cli/main.py`, `hermes_cli/plugin_isolation.py`, `hermes_cli/plugins.py`, `hermes_cli/plugins_cmd.py`, `hermes_cli/plugins_cmd_install.py`, `hermes_cli/plugins_cmd_update.py`, `hermes_cli/plugins_discovery.py`, `hermes_cli/plugins_ledger.py`, `hermes_cli/plugins_loader.py`, `plugins/memory/__init__.py`, `pm/plugin_declarations.py`
 - [4] [Supabase for Platforms: make database changes (Supabase documentation)](https://supabase.com/docs/guides/integrations/supabase-for-platforms#make-database-changes)
+- [5] [psql: `\password` (PostgreSQL 17 documentation)](https://www.postgresql.org/docs/17/app-psql.html)
