@@ -47,7 +47,7 @@ Memory is shared. Several machines run the agent against one memory store, so ev
   This wrapper, and the job wrapper (section 6.1), are the only code allowed to catch everything (CONTRIBUTING.md rule C2).
 - **A provider tool that raises reaches the agent as a tool error.** Hermes catches an exception from a provider's tool and returns an error result that names the tool and carries the exception's message, so the agent never sees it as an empty result.[14] The memory search tool is a provider tool and goes through the boundary wrapper like any other provider method: an unexpected exception is recorded as `unhandled` and re-raised. A failure the tool expects, such as a missed deadline or an unreachable store, is returned as a failure result that carries its code (CONTRIBUTING.md rule C3).
 - **Threads.** Background work uses Hermes's `spawn_context_thread`, never a bare `threading.Thread`, which would write into the wrong profile's store. `register(ctx)` builds a new provider instance on each load.
-- **Local state.** What a guard keeps on a machine between calls, such as its record of what a session has read, goes through Hermes's per-plugin storage: `ctx.state`, which is scoped to the profile and limited to 10 MiB for each plugin, or the plugin's data directory. Nothing is written into the plugin's own directory, which `hermes plugins update` replaces, or into `config.yaml`.[15] The guards load as ordinary plugins and get that storage. The memory provider is loaded through a narrower context that offers only registration calls, so it has no `ctx.state`;[14] where it keeps local state is part of the layout decision (#20).
+- **Local state.** What a guard keeps on a machine between calls, such as its record of what a session has read, goes through Hermes's per-plugin storage: `ctx.state`, which is scoped to the profile and limited to 10 MiB for each plugin, or the plugin's data directory. Nothing is written into the plugin's own directory, which `hermes plugins update` replaces, or into `config.yaml`.[15] A guard that loads as an ordinary plugin gets that storage. The memory provider is loaded through a narrower context that offers only registration calls, so it has no `ctx.state`.[14] How the guards are packaged, and where the provider keeps local state, are part of the layout decision (#20).
 - **Built-in memory writes are mirrored.** `on_memory_write` reports every committed write to `MEMORY.md` or `USER.md`. The provider stores them as deliberate facts.
 - **Session end.** The provider's own `on_session_end` method fires at real session boundaries only, never per turn, and the digest is written there. The plugin hook with the same name is a different call: it fires at the end of every turn's run, so no session-end work is attached to it.[14][15]
 - **Subagents get no automatic recall or writes.** Hermes suppresses prefetch, sync and session-end calls for subagents.[3]
@@ -199,6 +199,8 @@ Still open, each tracked in its own issue:
 - How the build validates its settings so that a missing one stops startup (#19).
 - How the build's plugins are laid out and installed on an agent host (#20).
 - What the write gate does when Hermes's approval gate is bypassed (#21).
+- Which hook the fact gate and the recall gate count a lookup from (#22).
+- Whether Hermes's safe-worker mode leaves the guards' hooks unfired (#23).
 
 ### 3.7 What leaves the host
 
@@ -384,8 +386,8 @@ What counts as a checkable question, a question about past work, a managed file 
 
 Two of the guards rest on Hermes mechanisms that the table does not name:
 
-- **The verify gate records a read from `post_tool_call`**, and only when the call's `status` shows that it ran. It keeps the record in the plugin's local state (section 2).
-- **The write gate asks through Hermes's own approval gate**, by returning the `approve` directive from `pre_tool_call`. The request goes to a person; Hermes's model-based approval is not on this path. Hermes blocks the call when the person denies it, when the gate errors or times out, and when nobody can answer: in a scheduled run under the default `approvals.cron_mode: deny`, and in any other non-interactive context apart from the bypasses in section 5.6.[14] The answer arrives after the guard has returned, so it is recorded from Hermes's `post_approval_response` hook.
+- **The verify gate records a read from `post_tool_call`**, and only when the call's `status` is `ok`. It keeps the record in the plugin's local state (section 2).
+- **The write gate asks through Hermes's own approval gate**, by returning the `approve` directive from `pre_tool_call`. The request goes to a person; Hermes's model-based approval is not on this path. Hermes blocks the call when the person denies it, when the gate errors or times out, and when nobody can answer: in a scheduled run under the default `approvals.cron_mode: deny`, and in any other non-interactive context apart from the bypasses in section 5.6.[14] When a person is asked, the answer arrives after the guard has returned, so it is recorded from Hermes's `post_approval_response` hook. When the gate decides without asking, no approval hook fires, and a block shows only as `post_tool_call` with the status `blocked`. How each outcome is recorded, and under which code, is part of #21.
 
 Hermes's memory tool enforces the size limits of `MEMORY.md` and `USER.md` itself, so there is no memory-cap guard.[6]
 
@@ -423,9 +425,9 @@ Hermes's memory tool enforces the size limits of `MEMORY.md` and `USER.md` itsel
 - While a reply is held, tool progress and reasoning still show unless turned off, and commentary between tool calls is dropped.[4]
 - Any exemption, such as for subagents or system notifications, is written down. An exempt path produces unguarded claims.
 - Hermes's approval gate approves without asking in four cases, and the write gate does not hold in them:[14]
-  - yolo is on: the `--yolo` flag, the gateway's `/yolo` command, or a one-shot run started with `hermes -z`;
+  - yolo is on, by any route: the `--yolo` flag, the `HERMES_YOLO_MODE` variable, the `/yolo` command in a CLI or gateway session, or a one-shot run started with `hermes -z`;
   - `approvals.mode` is `off`;
-  - the person earlier answered "for this session" or "always" for the same rule;
+  - the person earlier answered "for this session" or "always" for the same rule, which is the whole tool unless the guard names a narrower rule;
   - an unattended context has its mode set to `approve` (`approvals.cron_mode`, `approvals.single_query_mode`, `approvals.unattended_mode`; each defaults to `deny`).
 
   OPERATIONS.md section 3 pins the settings. What the write gate does when the approval gate is bypassed is open (#21).
@@ -506,5 +508,5 @@ The rules are L1–L5 in CONTRIBUTING.md.
 - [11] [Controlling text search (PostgreSQL documentation)](https://www.postgresql.org/docs/current/textsearch-controls.html)
 - [12] [Wu et al., LongMemEval, arXiv 2410.10813](https://arxiv.org/abs/2410.10813)
 - [13] [Row security policies (PostgreSQL documentation)](https://www.postgresql.org/docs/current/ddl-rowsecurity.html)
-- [14] Hermes v0.23.1 source: `hermes_logging.py`, `model_tools.py`, `agent/redact.py`, `agent/memory_provider.py`, `agent/memory_manager.py`, `gateway/session_finite.py`, `hermes_cli/config_defaults.py`, `hermes_cli/plugins.py`, `hermes_cli/plugins_context.py`, `hermes_cli/plugins_dispatch.py`, `plugins/memory/__init__.py`, `tools/approval.py`
+- [14] Hermes v0.23.1 source: `hermes_logging.py`, `model_tools.py`, `agent/redact.py`, `agent/memory_provider.py`, `agent/memory_manager.py`, `gateway/session_finite.py`, `hermes_cli/cli_session_mixin.py`, `hermes_cli/config_defaults.py`, `hermes_cli/plugins.py`, `hermes_cli/plugins_context.py`, `hermes_cli/plugins_dispatch.py`, `plugins/memory/__init__.py`, `tools/approval.py`
 - [15] [Build a Hermes plugin (Hermes Agent developer guide)](https://hermes-agent.nousresearch.com/docs/developer-guide/plugins)

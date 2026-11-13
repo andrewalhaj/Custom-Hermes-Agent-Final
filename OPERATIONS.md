@@ -53,7 +53,7 @@ Every machine that runs the agent:
    | `security.redact_secrets` | Left on (default) | Turning it off disables every redaction pattern, including the build's own |
    | `approvals.mode` | Never `off` | With it off, Hermes's approval gate approves every request without asking, the write gate's included (ARCHITECTURE.md section 5.6).[3] |
    | `approvals.cron_mode`, `approvals.single_query_mode`, `approvals.unattended_mode` | `deny` (default) | Nobody can answer in these contexts. `approve` lets the write gate's requests through unasked.[3] |
-5. **Never runs the agent with yolo on.** The `--yolo` flag, the gateway's `/yolo` command and a one-shot run started with `hermes -z` all make Hermes's approval gate approve without asking.[3]
+5. **Never runs the agent with yolo on, by any route.** The `--yolo` flag, the `HERMES_YOLO_MODE` variable, the `/yolo` command in a CLI or gateway session, and a one-shot run started with `hermes -z` all make Hermes's approval gate approve without asking.[3]
 6. **Has the build installed as Hermes plugins.** A plugin installed by the user lives in the `plugins/` directory of the Hermes home, which `hermes update` leaves in place, and runs only after `hermes plugins enable`. The memory provider is selected by `memory.provider` instead. Python packages the build needs are declared with its plugins: the guide says packages installed by hand with pip are not durable, and a later replacement of Hermes's environment need not keep them.[2] How the build's plugins are laid out and installed is open (#20).
 
 ## 4. Scheduled jobs
@@ -95,4 +95,4 @@ Before upgrading:
 
 - [1] [Scheduled tasks: no-agent mode (Hermes Agent documentation)](https://hermes-agent.nousresearch.com/docs/user-guide/features/cron)
 - [2] [Build a Hermes plugin (Hermes Agent developer guide)](https://hermes-agent.nousresearch.com/docs/developer-guide/plugins)
-- [3] Hermes v0.23.1 source: `plugins/security-guidance/`, `tools/approval.py`, `gateway/session_finite.py`, `hermes_cli/config_defaults.py`, `hermes_cli/plugins_discovery.py`
+- [3] Hermes v0.23.1 source: `plugins/security-guidance/`, `tools/approval.py`, `gateway/session_finite.py`, `hermes_cli/cli_session_mixin.py`, `hermes_cli/config_defaults.py`, `hermes_cli/plugins_discovery.py`
