@@ -221,7 +221,6 @@ Still open, each tracked in its own issue:
 - Whether reference chunks move into the shared store (#3).
 - How the score floor applies when stores' scores are not on one scale (#4).
 - Whether stored rows are keyed by session id or conversation id (#17).
-- How the build validates its settings so that a missing one stops startup (#19).
 - How the service finds the Python that Hermes runs on, the install and update procedure with real packages, and an absence check for an agent host (#29).
 - What the write gate does when Hermes's approval gate is bypassed (#21).
 - Which hook the fact gate and the recall gate count a lookup from (#22).
@@ -433,9 +432,11 @@ Hermes's memory tool enforces the size limits of `MEMORY.md` and `USER.md` itsel
 - **At startup.** Hermes does not stop for a plugin that fails to load: it is skipped with a startup warning, and the others keep loading.[1] A plugin cannot make Hermes refuse to start, because the loader catches an error raised while a plugin loads, and no plugin hook fires at startup.[16] The check therefore runs outside Hermes. The service that keeps the Hermes gateway running on an agent host runs the build's startup check first, and does not start Hermes when the check fails. The check loads the plugin in a process of its own, the way a host does: through Hermes's plugin discovery with the plugin enabled, and through its memory-provider loader. It is a script in the plugin's directory, so it is installed and updated with the plugin, and it runs through the job wrapper (section 6.1), which records a failure as it does for a scheduled job. It passes only when:
 
   - the ordinary load reports no error, every guard's hooks are registered, and the provider loads (`guard.not_loaded`);
+  - the build's own settings, such as the store's address and the machine's name, are present and valid (`config.missing`);
   - Hermes's own settings have the values the build depends on (`config.unsafe`): plugin isolation is `in_process`.
 
   It is a check before the start, not proof about the running process (section 5.6). How the service finds the Python that Hermes runs on is open (#29).
+- **A missing setting inside Hermes.** The plugin's `pre_llm_call` hook checks the build's settings on every turn. When one is missing or invalid, it blocks the turn with a notice that names the setting (`config.missing`), so the agent never runs a turn with the build half configured. The manifest declares no settings for Hermes to check: Hermes would only log a warning for a bad `config_schema` value, or disable a plugin whose `requires_env` variable is unset, and start anyway.[15]
 - **During a turn**, Hermes isolates hook errors, and the direction depends on the hook:[4]
 
   | Hook | When the callback raises or times out |
@@ -491,6 +492,7 @@ Initial codes:
 | `store.gate_error` | The judge failed during a write; the fact is queued |
 | `guard.crash`, `guard.not_loaded` | A guard raised during a turn (recorded instead of `unhandled`), or the startup check found the plugin, a guard's hooks or the provider not loaded |
 | `config.unsafe` | The startup check found a Hermes setting with a value the build does not support (section 5.5) |
+| `config.missing` | A setting the build needs is missing or invalid: the startup check fails, and inside Hermes every turn is blocked (section 5.5) |
 | `redact.failed` | The redactor raised; the text is not stored or sent |
 | `memory.write_rejected` | Hermes refused a built-in memory write |
 | `events.write_failed` | An `events` row could not be written; logged locally at ERROR |
