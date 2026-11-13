@@ -34,7 +34,7 @@ Memory is shared. Several machines run the agent against one memory store, so ev
 - as an ordinary plugin, listed in `plugins.enabled`, which registers the guards' hooks and the skills when Hermes starts;
 - as the memory provider, selected by `memory.provider`.
 
-The manifest declares `kind: standalone`. Without it, Hermes treats a directory that defines a memory provider as a provider only and skips the ordinary load. With both loads, Hermes registers each hook once, provided the directory under `plugins/` carries the manifest's name, as it does when `hermes plugins install` puts it there.[16] Both were run with Hermes's default plugin isolation only; the host isolation mode is not covered (#29). The guards therefore do not wait for the memory provider to load, and no guard can be missing on its own. Hermes v0.23.1 lists a plugin's registered skills in the prompt with the others.[16]
+The manifest declares `kind: standalone`. Without it, Hermes treats a directory that defines a memory provider as a provider only and skips the ordinary load. With both loads, Hermes registers each hook once, provided the directory under `plugins/` carries the manifest's name, as it does when `hermes plugins install` puts it there.[16] The two loads were run with Hermes's default plugin isolation only; the host isolation mode is not covered (#29). The guards therefore do not wait for the memory provider to load, and no guard can be missing on its own. Hermes v0.23.1 lists a plugin's registered skills in the prompt with the others.[16]
 
 `register()` runs under both loads, and hooks are the only registration the two loads share.[16] What the plugin registers under each load, and how it tells the two apart, is decided with the first code (#29).
 
