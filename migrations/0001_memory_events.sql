@@ -2,7 +2,6 @@
 -- ARCHITECTURE.md sections 4.2 and 4.3. Applied migrations are never edited; a change is a new file.
 
 create schema memory;   -- not exposed through the Supabase Data API
-revoke all on schema memory from public;
 
 create table memory.events (
   id          bigint generated always as identity primary key,
