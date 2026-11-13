@@ -1,0 +1,71 @@
+name: CI
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with: { python-version: "3.12", cache: pip }
+      - run: pip install -e ".[dev]"
+      - run: ruff check .
+      - name: no noqa that can silence the error-handling rules
+        shell: bash
+        run: |
+          # Matches a bare noqa, a noqa naming one of these rules, and file-level ruff/flake8 noqa, in any case.
+          set +e
+          git grep -n -i -E '#[[:space:]]*noqa([[:space:]]*$|[[:space:]]*[^:[:space:]]|:[^#]*(BLE001|S110|E722))|(ruff|flake8):[[:space:]]*noqa' -- '*.py'
+          rc=$?
+          set -e
+          [ "$rc" -eq 1 ]   # 1 = no match (pass); 0 = a match was found; anything else = git failed
+      - name: the error-handling rules are switched on
+        shell: bash
+        run: |
+          # Lint a probe that breaks all three rules, with the repository's own ruff configuration.
+          # Any configuration that turns a rule off (ignore, select, ruff.toml) makes its code disappear.
+          set +e
+          out=$(printf 'try:\n    pass\nexcept Exception:\n    pass\ntry:\n    pass\nexcept:\n    pass\n' \
+            | ruff check --no-cache --output-format concise --stdin-filename ci_probe.py -)
+          rc=$?
+          set -e
+          echo "$out"
+          [ "$rc" -eq 1 ]   # 1 = findings reported; 0 = rules are off; 2 = ruff failed
+          for code in BLE001 S110 E722; do grep -q "$code" <<< "$out" || { echo "ruff no longer reports $code"; exit 1; }; done
+      - name: ruff lints every tracked Python file
+        shell: bash
+        run: |
+          # Catches anything that drops files from linting: include, exclude, .gitignore, ruff's default excludes.
+          python - <<'PY'
+          import pathlib, subprocess, sys
+          root = pathlib.Path.cwd().resolve()
+          run = lambda *cmd: subprocess.run(cmd, check=True, capture_output=True, text=True).stdout.splitlines()
+          linted = {pathlib.Path(p).resolve().relative_to(root).as_posix() for p in run("ruff", "check", "--show-files", ".") if p.strip()}
+          missing = sorted(set(run("git", "ls-files", "*.py")) - linted)
+          sys.exit("tracked Python files that ruff does not lint:\n" + "\n".join(missing) if missing else 0)
+          PY
+      - name: ruff configuration lives in the root pyproject.toml and narrows nothing
+        shell: bash
+        run: |
+          python - <<'PY'
+          import subprocess, sys, tomllib
+          rules = ("BLE001", "S110", "E722")
+          def covers(code):   # a code or prefix that covers one of the rules, such as "E", "BLE" or "ALL"
+              return code == "ALL" or any(r.startswith(code) for r in rules)
+          tracked = subprocess.run(["git", "ls-files", "*ruff.toml", "*pyproject.toml"],
+                                   check=True, capture_output=True, text=True).stdout.split()
+          bad = [f"ruff configuration outside the root pyproject.toml: {f}" for f in tracked if f != "pyproject.toml"]
+          ruff = tomllib.load(open("pyproject.toml", "rb")).get("tool", {}).get("ruff", {})
+          for section in (ruff, ruff.get("lint", {})):
+              for key in ("exclude", "extend-exclude"):
+                  bad += [f"{key}: {pattern}" for pattern in section.get(key, [])]
+              for key in ("per-file-ignores", "extend-per-file-ignores"):
+                  bad += [f"{key}: {glob}: {c}" for glob, codes in section.get(key, {}).items() for c in codes if covers(c)]
+          sys.exit("\n".join(bad) if bad else 0)
+          PY
+      - run: python -m pytest -q
