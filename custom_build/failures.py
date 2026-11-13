@@ -90,6 +90,7 @@ def run_job(name, job, *, connect, source):
             job(conn)
         except Exception as exc:
             logger.exception("job %s crashed", name)
+            conn.rollback()   # leave the job's open or aborted transaction, so the records below commit
             reason = "".join(traceback.format_exception_only(exc)).strip()
             record(conn, "unhandled", "failed", source=source, reason=reason)
             record(conn, "job.failed", "failed", source=source, reason=reason, detail={"job": name})
