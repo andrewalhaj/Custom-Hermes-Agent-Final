@@ -32,7 +32,7 @@ These placeholders appear in the documentation. Each deployment sets them in its
 | Fact extraction | `<extraction-model>`, hosted. The first deployment uses Claude Haiku 5.5 (`claude-haiku-5-5`) through the Anthropic API. |
 | Session digests | `<digest-model>`, hosted. The first deployment uses the same model as fact extraction. |
 | The memory store | One Supabase project, `<project-ref>`, shared by every machine in `<agent-hosts>` |
-| Scheduled jobs | Hermes cron on `<job-host>`. A machine that sleeps cannot be the only job host: a job that does not run is reported as `job.missed`, but nothing runs it. |
+| Scheduled jobs | Hermes cron on `<job-host>`, and the heartbeat job on every machine in `<agent-hosts>`. A machine that sleeps cannot be the only job host: a job that does not run is reported as `job.missed`, but nothing runs it. |
 
 The memory store outlives any one machine and is shared by all of them. What each hosted part receives is listed in ARCHITECTURE.md section 3.7; each deployment confirms that list against its own `<judge-model>`, `<extraction-model>` and `<digest-model>`. Extraction is hosted because a local model on an agent host with no GPU took 4.5 to 8 seconds for each message (#15), and Jev cannot write text.
 
@@ -71,7 +71,8 @@ Every machine that runs the agent:
 | Job | Runs | What it does | Its own failure |
 |---|---|---|---|
 | Retention | Daily | Deletes `events` rows and session chunks older than 90 days. Misses worth keeping are copied into the eval set before then (ARCHITECTURE.md section 3.8). Runs as `<maintenance-role>`, not a machine's agent role. | `job.failed` |
-| Job-health check | Daily, before the report | Flags any job with no fresh success (`job.missed`), any job that took input but produced nothing for more than one run (`job.no_output`), and any agent host with no heartbeat event in the last 24 hours (ARCHITECTURE.md section 6.3) | Reported by the report's absence |
+| Heartbeat | Daily, on every agent host | Writes one `host.heartbeat` event | `job.failed`; a heartbeat that never runs is caught by the job-health check |
+| Job-health check | Daily, before the report | Flags any job with no fresh success (`job.missed`) and any job that took input but produced nothing for more than one run (`job.no_output`), and records `host.missing` for any machine in `<agent-hosts>` with no heartbeat in the last 36 hours (ARCHITECTURE.md section 6.3) | Reported by the report's absence |
 | Daily failure report | Daily, at a fixed time | Sends the day's failures from `events`, grouped by code and machine, and every "always" answer given to the write gate that day, as a dated Markdown file to `<operators-channel>`. With nothing to report it sends a one-line all-clear that names the jobs that ran. | A missing report |
 
 Every job runs through the job wrapper (ARCHITECTURE.md section 6.1), so a crash is recorded in `events` as `unhandled` and `job.failed` before the job exits non-zero.
