@@ -47,30 +47,32 @@ Every machine that runs the agent:
 
    | Setting | Value | Why |
    |---|---|---|
-   | `memory.provider` | This build's provider | Hermes runs one external memory provider, and this setting selects it.[2] |
+   | `memory.provider` | `custom_build` | Hermes runs one external memory provider, and this setting selects it.[2] The startup check fails otherwise. |
    | `memory.write_approval` | `true` | Every write to `MEMORY.md` and `USER.md` waits for a person's approval, so a wrong assumption is never saved unchecked. |
+   | `compression.in_place` | `true` (default) | With `false`, compressing a transcript gives the conversation a new session id, and rows written before and after it no longer match (ARCHITECTURE.md section 4.1).[3] The startup check fails otherwise. |
    | `logging.max_size_mb`, `logging.backup_count` | Defaults (5, 3) or larger | Long enough to cover the period between daily reports |
    | `HERMES_PLUGINS_DEBUG` | Never set | Its console copy of plugin logs is not redacted |
-   | `HERMES_SAFE_MODE`, or the `--safe-mode` flag that sets it | Never used | It makes Hermes skip plugin discovery. The ordinary load then never happens, and the guards' hooks are registered only when the memory provider loads.[3] |
+   | `HERMES_SAFE_MODE`, or the `--safe-mode` flag that sets it | Never used | It makes Hermes skip plugin discovery, so the ordinary load never happens and the guards' hooks are not registered at all (ARCHITECTURE.md section 1).[3] |
    | `security.redact_secrets` | Left on (default) | Turning it off disables every redaction pattern, including the build's own |
-   | `approvals.mode` | Never `off` | With it off, Hermes's approval gate approves every request without asking, the write gate's included (ARCHITECTURE.md section 5.6).[3] |
-   | `approvals.cron_mode`, `approvals.single_query_mode`, `approvals.unattended_mode` | `deny` (default) | Nobody can answer in these contexts. `approve` lets the write gate's requests through unasked.[3] |
-5. **Never runs the agent with yolo on, by any route.** The `--yolo` flag, the `HERMES_YOLO_MODE` variable, the `/yolo` command in a CLI or gateway session, and a one-shot run started with `hermes -z` all make Hermes's approval gate approve without asking.[3]
-6. **Has the build installed as one Hermes plugin**, which carries the memory provider, the guards and the skills, from its directory in this repository (ARCHITECTURE.md section 1), with Hermes's own commands. Placeholders: `<owner>/<repo>` is this repository on GitHub, `<directory>` is the plugin's directory in it, `<name>` is the name in its manifest, which is also the directory's name, and `<commit>` is the full hash of a commit on `main`.
-   - **Install:** `hermes plugins install <owner>/<repo>#<directory> --ref <commit> --enable --yes-deps`. Hermes copies only that directory into `plugins/<name>` in the Hermes home, which `hermes update` leaves in place.[2] For a plugin that is also a memory provider, `--enable` selects it as `memory.provider` and does not add it to `plugins.enabled`.[3]
-   - **Enable:** `hermes plugins enable <name>`, which adds it to `plugins.enabled`. Without this step the guards' hooks are registered only when the memory provider loads, from the provider's copy of the code and without `ctx.state`, which the guards need, and the startup check fails.[3]
+   | `plugins.isolation` | `in_process` (default) | The build's layout is supported only in this mode; `host` runs user plugin code in a separate process (ARCHITECTURE.md section 1).[3] The startup check fails otherwise. |
+   | `approvals.mode` | Never `off` | With it off, Hermes's approval gate approves every request without asking, the write gate's included (ARCHITECTURE.md section 5.6).[3] The startup check fails otherwise. |
+   | `approvals.cron_mode`, `approvals.single_query_mode`, `approvals.unattended_mode` | `deny` (default) | Nobody can answer in these contexts. Hermes treats several spellings besides `approve` as approve, which lets the write gate's requests through unasked.[3] The startup check fails unless Hermes's own reader reports `deny`. |
+5. **Never runs the agent with yolo on, by any route.** The `--yolo` flag, the `HERMES_YOLO_MODE` variable, the `/yolo` command in a CLI or gateway session, and a one-shot run started with `hermes -z` all make Hermes's approval gate approve without asking.[3] The startup check fails when it sees `HERMES_YOLO_MODE` set, and the write gate blocks outright when Hermes reports yolo for a session, however it was turned on (ARCHITECTURE.md section 5.3).
+6. **Has the build installed as one Hermes plugin**, which carries the memory provider, the guards and the skills, from its directory in this repository (ARCHITECTURE.md section 1), with Hermes's own commands. Placeholders: `<owner>/<repo>` is this repository on GitHub, and `<commit>` is the full hash of a commit on `main`. The plugin, its directory and its manifest are all named `custom_build`.
+   - **Install:** `hermes plugins install <owner>/<repo>#custom_build --ref <commit> --enable --yes-deps`. Hermes copies only that directory into `plugins/custom_build` in the Hermes home, which `hermes update` leaves in place.[2] For a plugin that is also a memory provider, `--enable` selects it as `memory.provider` and does not add it to `plugins.enabled`.[3]
+   - **Enable:** `hermes plugins enable custom_build`, which adds it to `plugins.enabled`. Without this step the ordinary load never happens, so the guards' hooks are not registered at all (ARCHITECTURE.md section 1), and the startup check fails.[3]
    - **Update:** install again with `--force --ref <commit> --yes-deps`, then restart Hermes, because a running Hermes keeps the environment it started with. An install pinned with `--ref` refuses `hermes plugins update`, so a host only changes when a new commit is named. `--force` also accepts a caution from Hermes's install scan without asking and without showing what the scan found.[3] This procedure has been run only against a throwaway plugin that declares no packages (#29).
    - **Python packages** are declared in the plugin's manifest. Hermes resolves them when the plugin is selected or enabled, and `--yes-deps` gives the consent it otherwise asks for; this has not yet been run with real packages. Each one comes from a package index: Hermes drops a requirement given as a direct URL without an error.[3] Packages installed by hand with pip are not durable, and a later replacement of Hermes's environment need not keep them.[2]
    - **Private repository:** when an anonymous clone is refused, Hermes tries `GITHUB_TOKEN` or `GH_TOKEN`, then `gh auth token`, then the git credential helper.[3] This has not yet been run against a private repository.
-7. **Starts the Hermes gateway through a service that runs the build's startup check first** (ARCHITECTURE.md section 5.5). When the check fails, the service does not start Hermes. A session started by hand skips the check. How the check is installed, how the service calls it and where its failure is recorded are open (#29).
+7. **Starts the Hermes gateway through a service that runs the build's startup check first** (ARCHITECTURE.md section 5.5). When the check fails, the service does not start Hermes. A session started by hand skips the check. The check is a script in the plugin's directory and runs through the job wrapper, so a crash in it is recorded as a scheduled job's is, and a failed check records its own code (ARCHITECTURE.md section 5.5). How the service finds the Python that Hermes runs on is open (#29).
 
 ## 4. Scheduled jobs
 
 | Job | Runs | What it does | Its own failure |
 |---|---|---|---|
-| Event retention | Daily | Deletes `events` rows older than 90 days. Misses worth keeping are copied into the eval set before then (ARCHITECTURE.md section 3.8). Runs as `<maintenance-role>`, not a machine's agent role. | `job.failed` |
+| Retention | Daily | Deletes `events` rows and session chunks older than 90 days. Misses worth keeping are copied into the eval set before then (ARCHITECTURE.md section 3.8). Runs as `<maintenance-role>`, not a machine's agent role. | `job.failed` |
 | Job-health check | Daily, before the report | Flags any job with no fresh success (`job.missed`) and any job that took input but produced nothing for more than one run (`job.no_output`) | Reported by the report's absence |
-| Daily failure report | Daily, at a fixed time | Sends the day's failures from `events`, grouped by code and machine, as a dated Markdown file to `<operators-channel>`. With nothing to report it sends a one-line all-clear that names the jobs that ran. | A missing report |
+| Daily failure report | Daily, at a fixed time | Sends the day's failures from `events`, grouped by code and machine, and every "always" answer given to the write gate that day, as a dated Markdown file to `<operators-channel>`. With nothing to report it sends a one-line all-clear that names the jobs that ran. | A missing report |
 
 Every job runs through the job wrapper (ARCHITECTURE.md section 6.1), so a crash is recorded in `events` as `unhandled` and `job.failed` before the job exits non-zero.
 
@@ -84,7 +86,7 @@ Before upgrading:
 
 1. Read the release notes for changes to hooks, plugin loading, the memory-provider contract, logging and redaction.
 2. Re-check every Hermes fact that ARCHITECTURE.md and this document state for the current version, and update them in the same pull request as the upgrade.
-3. Run the full test suite and the eval set on the new version before switching machines over. That includes the startup check, which calls a part of Hermes the developer guide does not document (ARCHITECTURE.md section 5.6).
+3. Run the full test suite and the eval set on the new version before switching machines over. That includes the parts of the build that rest on Hermes behaviour the developer guide does not describe (ARCHITECTURE.md section 5.6).
 
 ## 6. Plugins from outside this repository
 
@@ -103,4 +105,4 @@ Before upgrading:
 
 - [1] [Scheduled tasks: no-agent mode (Hermes Agent documentation)](https://hermes-agent.nousresearch.com/docs/user-guide/features/cron)
 - [2] [Build a Hermes plugin (Hermes Agent developer guide)](https://hermes-agent.nousresearch.com/docs/developer-guide/plugins)
-- [3] Hermes v0.23.1 source: `plugins/security-guidance/`, `tools/approval.py`, `gateway/session_finite.py`, `hermes_cli/cli_session_mixin.py`, `hermes_cli/config_defaults.py`, `hermes_cli/git_credentials.py`, `hermes_cli/main.py`, `hermes_cli/plugins.py`, `hermes_cli/plugins_cmd.py`, `hermes_cli/plugins_cmd_install.py`, `hermes_cli/plugins_cmd_update.py`, `hermes_cli/plugins_discovery.py`, `hermes_cli/plugins_ledger.py`, `hermes_cli/plugins_loader.py`, `plugins/memory/__init__.py`, `pm/plugin_declarations.py`
+- [3] Hermes v0.23.1 source: `plugins/security-guidance/`, `tools/approval.py`, `tools/approval_context.py`, `gateway/session_finite.py`, `hermes_cli/cli_session_mixin.py`, `hermes_cli/config_defaults.py`, `hermes_cli/git_credentials.py`, `hermes_cli/main.py`, `hermes_cli/plugin_isolation.py`, `hermes_cli/plugins.py`, `hermes_cli/plugins_cmd.py`, `hermes_cli/plugins_cmd_install.py`, `hermes_cli/plugins_cmd_update.py`, `hermes_cli/plugins_discovery.py`, `hermes_cli/plugins_ledger.py`, `hermes_cli/plugins_loader.py`, `plugins/memory/__init__.py`, `pm/plugin_declarations.py`
