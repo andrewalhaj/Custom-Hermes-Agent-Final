@@ -96,8 +96,24 @@ def test_maintenance_can_delete_an_event(db):
         assert conn.execute("delete from memory.events where id = %s", (row_id,)).rowcount == 1
 
 
+def test_the_policies_are_exactly_these(db):
+    with psycopg.connect(db["owner"]) as conn:
+        rows = conn.execute(
+            "select policyname, cmd, roles::text[] from pg_policies where schemaname = 'memory' order by policyname"
+        ).fetchall()
+    assert rows == [
+        ("events_agent_insert", "INSERT", ["memory_agent"]),
+        ("events_agent_select", "SELECT", ["memory_agent"]),
+        ("events_maintenance_delete", "DELETE", ["memory_maintenance"]),
+        ("events_maintenance_select", "SELECT", ["memory_maintenance"]),
+    ]
+
+
 @pytest.mark.parametrize("statement", [
     "insert into memory.events (source, code, result) values ('test-host', 'job.failed', 'ok')",
+    "update memory.events set reason = 'x'",
+    "alter table memory.events add column extra text",
+    "truncate memory.events",
     "drop table memory.events",
     "create table memory.extra (id int)",
 ])

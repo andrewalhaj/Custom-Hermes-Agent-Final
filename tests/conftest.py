@@ -3,7 +3,9 @@
 `db` gives each test an empty database with every migration applied in order, and two login roles
 that join the migration's group roles, the way a maintainer adds a machine. The tests need a
 Postgres 17 server named by TEST_DATABASE_URL, a superuser connection; they fail, never skip,
-without it.
+without it. The group roles are server-wide, and each test drops them when it ends, so the server
+must be a throwaway one used by one test run at a time. A role left over from an interrupted run
+makes the migration fail loudly instead of being dropped silently.
 """
 
 import os
@@ -39,7 +41,6 @@ def db():
         return psycopg.conninfo.make_conninfo(**{**info, "dbname": name, **kw})
 
     with psycopg.connect(url, autocommit=True) as admin:
-        _drop_roles(admin, GROUP_ROLES)   # left over from an interrupted run; group roles are server-wide
         admin.execute(sql.SQL("create database {}").format(sql.Identifier(name)))
         try:
             with psycopg.connect(dsn(), autocommit=True) as owner:
