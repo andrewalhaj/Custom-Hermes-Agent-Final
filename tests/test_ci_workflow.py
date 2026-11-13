@@ -70,7 +70,7 @@ def test_noqa_ban(tmp_path, label, files, expect):
 
 
 def test_noqa_ban_fails_when_git_fails(tmp_path):
-    script = step_script(NOQA_STEP).replace("git grep", "git --not-a-real-option grep")
+    script = step_script(NOQA_STEP).replace("git grep -n", "git --not-a-real-option grep -n")
     check(tmp_path, script, {"a.py": CODE}, "git grep exited 129")
 
 
