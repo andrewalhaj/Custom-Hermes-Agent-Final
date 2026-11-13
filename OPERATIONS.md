@@ -51,11 +51,18 @@ Every machine that runs the agent:
    | `memory.write_approval` | `true` | Every write to `MEMORY.md` and `USER.md` waits for a person's approval, so a wrong assumption is never saved unchecked. |
    | `logging.max_size_mb`, `logging.backup_count` | Defaults (5, 3) or larger | Long enough to cover the period between daily reports |
    | `HERMES_PLUGINS_DEBUG` | Never set | Its console copy of plugin logs is not redacted |
+   | `HERMES_SAFE_MODE`, or the `--safe-mode` flag that sets it | Never used | It makes Hermes skip plugin discovery. The ordinary load then never happens, and the guards' hooks are registered only when the memory provider loads.[3] |
    | `security.redact_secrets` | Left on (default) | Turning it off disables every redaction pattern, including the build's own |
    | `approvals.mode` | Never `off` | With it off, Hermes's approval gate approves every request without asking, the write gate's included (ARCHITECTURE.md section 5.6).[3] |
    | `approvals.cron_mode`, `approvals.single_query_mode`, `approvals.unattended_mode` | `deny` (default) | Nobody can answer in these contexts. `approve` lets the write gate's requests through unasked.[3] |
 5. **Never runs the agent with yolo on, by any route.** The `--yolo` flag, the `HERMES_YOLO_MODE` variable, the `/yolo` command in a CLI or gateway session, and a one-shot run started with `hermes -z` all make Hermes's approval gate approve without asking.[3]
-6. **Has the build installed as Hermes plugins.** A plugin installed by the user lives in the `plugins/` directory of the Hermes home, which `hermes update` leaves in place, and runs only after `hermes plugins enable`. The memory provider is selected by `memory.provider` instead. Python packages the build needs are declared with its plugins: the guide says packages installed by hand with pip are not durable, and a later replacement of Hermes's environment need not keep them.[2] How the build's plugins are laid out and installed is open (#20).
+6. **Has the build installed as one Hermes plugin**, which carries the memory provider, the guards and the skills, from its directory in this repository (ARCHITECTURE.md section 1), with Hermes's own commands. Placeholders: `<owner>/<repo>` is this repository on GitHub, `<directory>` is the plugin's directory in it, `<name>` is the name in its manifest, which is also the directory's name, and `<commit>` is the full hash of a commit on `main`.
+   - **Install:** `hermes plugins install <owner>/<repo>#<directory> --ref <commit> --enable --yes-deps`. Hermes copies only that directory into `plugins/<name>` in the Hermes home, which `hermes update` leaves in place.[2] For a plugin that is also a memory provider, `--enable` selects it as `memory.provider` and does not add it to `plugins.enabled`.[3]
+   - **Enable:** `hermes plugins enable <name>`, which adds it to `plugins.enabled`. Without this step the guards' hooks are registered only when the memory provider loads, from the provider's copy of the code and without `ctx.state`, which the guards need, and the startup check fails.[3]
+   - **Update:** install again with `--force --ref <commit> --yes-deps`, then restart Hermes, because a running Hermes keeps the environment it started with. An install pinned with `--ref` refuses `hermes plugins update`, so a host only changes when a new commit is named. `--force` also accepts a caution from Hermes's install scan without asking and without showing what the scan found.[3] This procedure has been run only against a throwaway plugin that declares no packages (#29).
+   - **Python packages** are declared in the plugin's manifest. Hermes resolves them when the plugin is selected or enabled, and `--yes-deps` gives the consent it otherwise asks for; this has not yet been run with real packages. Each one comes from a package index: Hermes drops a requirement given as a direct URL without an error.[3] Packages installed by hand with pip are not durable, and a later replacement of Hermes's environment need not keep them.[2]
+   - **Private repository:** when an anonymous clone is refused, Hermes tries `GITHUB_TOKEN` or `GH_TOKEN`, then `gh auth token`, then the git credential helper.[3] This has not yet been run against a private repository.
+7. **Starts the Hermes gateway through a service that runs the build's startup check first** (ARCHITECTURE.md section 5.5). When the check fails, the service does not start Hermes. A session started by hand skips the check. How the check is installed, how the service calls it and where its failure is recorded are open (#29).
 
 ## 4. Scheduled jobs
 
@@ -75,9 +82,9 @@ The report runs as a Hermes script-only cron job (`--no-agent`): it uses no mode
 
 Before upgrading:
 
-1. Read the release notes for changes to hooks, the memory-provider contract, logging and redaction.
+1. Read the release notes for changes to hooks, plugin loading, the memory-provider contract, logging and redaction.
 2. Re-check every Hermes fact that ARCHITECTURE.md and this document state for the current version, and update them in the same pull request as the upgrade.
-3. Run the full test suite and the eval set on the new version before switching machines over.
+3. Run the full test suite and the eval set on the new version before switching machines over. That includes the startup check, which calls a part of Hermes the developer guide does not document (ARCHITECTURE.md section 5.6).
 
 ## 6. Plugins from outside this repository
 
@@ -96,4 +103,4 @@ Before upgrading:
 
 - [1] [Scheduled tasks: no-agent mode (Hermes Agent documentation)](https://hermes-agent.nousresearch.com/docs/user-guide/features/cron)
 - [2] [Build a Hermes plugin (Hermes Agent developer guide)](https://hermes-agent.nousresearch.com/docs/developer-guide/plugins)
-- [3] Hermes v0.23.1 source: `plugins/security-guidance/`, `tools/approval.py`, `gateway/session_finite.py`, `hermes_cli/cli_session_mixin.py`, `hermes_cli/config_defaults.py`, `hermes_cli/plugins_discovery.py`
+- [3] Hermes v0.23.1 source: `plugins/security-guidance/`, `tools/approval.py`, `gateway/session_finite.py`, `hermes_cli/cli_session_mixin.py`, `hermes_cli/config_defaults.py`, `hermes_cli/git_credentials.py`, `hermes_cli/main.py`, `hermes_cli/plugins.py`, `hermes_cli/plugins_cmd.py`, `hermes_cli/plugins_cmd_install.py`, `hermes_cli/plugins_cmd_update.py`, `hermes_cli/plugins_discovery.py`, `hermes_cli/plugins_ledger.py`, `hermes_cli/plugins_loader.py`, `plugins/memory/__init__.py`, `pm/plugin_declarations.py`
