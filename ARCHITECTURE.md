@@ -262,7 +262,7 @@ The memory store is a Supabase project: Postgres with the `pgvector` extension. 
 
 ### 4.2 Schema
 
-This is the plan. Once the first migration merges, the migration files are the source of truth and this section is updated to match.
+`memory.events` exists: `migrations/0001_memory_events.sql` creates it, with the `memory` schema, and that file is its source of truth. The rest of this section is the plan. Each table's migration file becomes its source of truth when it merges, and this section is updated to match.
 
 ```sql
 create extension if not exists vector;
@@ -351,7 +351,7 @@ Two SQL functions do the searching: `match_facts` and `match_transcript_chunks`.
 ### 4.3 Access and migrations
 
 - **The tables live in a schema the Supabase Data API does not expose**, so the project's API keys cannot reach them.
-- **Each machine connects with its own role.** That role can read, insert and update. It cannot delete rows or create, alter or drop anything.
+- **Each machine connects with its own role.** That role can read, insert and update. It cannot delete rows or create, alter or drop anything. The privileges belong to two group roles that the migrations create and that cannot log in: `memory_agent`, which every machine's login role joins, and `memory_maintenance`, which the retention job's login role joins. Each table's migration grants them exactly what code uses: on `events`, select and insert for `memory_agent`, and select and delete for `memory_maintenance`. Login roles and their passwords are created outside the repository (OPERATIONS.md section 3).
 - **Row Level Security is on for every table, as a backstop.** With RLS on and no policy, Postgres denies every row to a role that does not own the table, so each machine's role gets explicit select, insert and update policies and no delete policy.[13]
 - **Schema changes are migration files in this repository**, reviewed through a pull request. Migrations only move forward; an applied migration is never edited.
 - **Data this repository did not create is not ours to change** (CONTRIBUTING.md rule C7). An export exists before any migration touches data.

@@ -18,7 +18,7 @@ These placeholders appear in the documentation. Each deployment sets them in its
 | `<judge-model>` | The hosted model used as judge, as reranker and to route each message. It answers typed questions (a pick from a list, a yes or no) with probabilities and does not need to generate text. It is set by version, never by an alias that can move to a newer model, because the thresholds depend on its answers. |
 | `<extraction-model>` | The model that proposes facts from user messages and tool results |
 | `<digest-model>` | The model that writes session digests |
-| `<maintenance-role>` | The database role that runs retention and migrations |
+| `<maintenance-role>` | The login role the retention job runs as. It joins the group role `memory_maintenance` and is created like a machine's role (section 3). |
 | `<operators-channel>` | Where the daily failure report is sent |
 
 ## 2. Where it runs
@@ -41,7 +41,7 @@ The memory store outlives any one machine and is shared by all of them. What eac
 Every machine that runs the agent:
 
 1. **Runs the pinned embedding build.** Its Ollama model digest must equal `<model-digest>`. At startup the provider compares its digest with the one recorded in the store and refuses to run recall if they differ (`embed.model_mismatch`). Upgrading the model is a migration: every vector is re-embedded and the recorded digest changes.
-2. **Has its own database role.** The role can read, insert and update the memory tables, and cannot delete rows or change the schema (ARCHITECTURE.md section 4.3). Its credentials live in the profile's `.env`. The build reads them through Hermes's secret helper (`get_secret`) and never opens `.env` itself.[2]
+2. **Has its own database role.** The role can read, insert and update the memory tables, and cannot delete rows or change the schema (ARCHITECTURE.md section 4.3). It is a login role that joins the group role `memory_agent`, which the migrations create and grant; it carries no privileges of its own. A maintainer creates it once, outside the repository, with a generated password: `create role <machine-name> login password '<password>' in role memory_agent;`. Its credentials live in the profile's `.env`. The build reads them through Hermes's secret helper (`get_secret`) and never opens `.env` itself.[2]
 3. **Sets its `<machine-name>`**, used in the `source` column of every row it writes. Names are unique across `<agent-hosts>`.
 4. **Uses these Hermes settings:**
 
@@ -101,8 +101,13 @@ Before upgrading:
 | A web search or page-fetch backend | Each deployment's choice | The build does not ship one. A deployment that configures one adds what that backend receives to its own list of what leaves the host (ARCHITECTURE.md section 3.7). |
 | Any other memory provider | Never | Hermes runs one external memory provider, and it is this build's |
 
+## 7. Applying a migration
+
+The files in `migrations/` are applied to `<project-ref>` in file-name order, each once, after its pull request merges. A maintainer applies each one, or approves applying it, through the Supabase Management API's `POST /v1/projects/<project-ref>/database/migrations`, with the file's text as the query and its file name as the name. Supabase runs it and records it in the project's migration history, `supabase_migrations.schema_migrations`.[4] Read the history back afterwards: the newest entry is the file just applied. The tests apply every file to an empty Postgres 17, so a file that does not apply cleanly fails CI before it reaches the project.
+
 ## Sources
 
 - [1] [Scheduled tasks: no-agent mode (Hermes Agent documentation)](https://hermes-agent.nousresearch.com/docs/user-guide/features/cron)
 - [2] [Build a Hermes plugin (Hermes Agent developer guide)](https://hermes-agent.nousresearch.com/docs/developer-guide/plugins)
 - [3] Hermes v0.23.1 source: `plugins/security-guidance/`, `tools/approval.py`, `tools/approval_context.py`, `gateway/session_finite.py`, `hermes_cli/cli_session_mixin.py`, `hermes_cli/config_defaults.py`, `hermes_cli/git_credentials.py`, `hermes_cli/main.py`, `hermes_cli/plugin_isolation.py`, `hermes_cli/plugins.py`, `hermes_cli/plugins_cmd.py`, `hermes_cli/plugins_cmd_install.py`, `hermes_cli/plugins_cmd_update.py`, `hermes_cli/plugins_discovery.py`, `hermes_cli/plugins_ledger.py`, `hermes_cli/plugins_loader.py`, `plugins/memory/__init__.py`, `pm/plugin_declarations.py`
+- [4] [Supabase for Platforms: make database changes (Supabase documentation)](https://supabase.com/docs/guides/integrations/supabase-for-platforms#make-database-changes)
