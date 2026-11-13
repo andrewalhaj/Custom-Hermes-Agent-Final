@@ -35,6 +35,7 @@ def db():
         pytest.fail("no migration files found under migrations/")
     name = f"t_{uuid.uuid4().hex[:12]}"
     agent, maint = f"{name}_agent", f"{name}_maint"
+    password = uuid.uuid4().hex   # a throwaway login's password, so servers that require one (CI's) accept it
     info = psycopg.conninfo.conninfo_to_dict(url)
 
     def dsn(**kw):
@@ -47,9 +48,10 @@ def db():
                 for migration in MIGRATIONS:
                     owner.execute(migration.read_text(encoding="utf-8"))
                 for login, group in ((agent, "memory_agent"), (maint, "memory_maintenance")):
-                    owner.execute(sql.SQL("create role {} login in role {}").format(
-                        sql.Identifier(login), sql.Identifier(group)))
-            yield {"owner": dsn(), "agent": dsn(user=agent), "maint": dsn(user=maint)}
+                    owner.execute(sql.SQL("create role {} login password {} in role {}").format(
+                        sql.Identifier(login), sql.Literal(password), sql.Identifier(group)))
+            yield {"owner": dsn(), "agent": dsn(user=agent, password=password),
+                   "maint": dsn(user=maint, password=password)}
         finally:
             admin.execute(sql.SQL("drop database if exists {} with (force)").format(sql.Identifier(name)))
             _drop_roles(admin, (agent, maint, *GROUP_ROLES))
