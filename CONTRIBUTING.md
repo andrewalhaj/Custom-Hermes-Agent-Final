@@ -156,6 +156,8 @@ git switch -c <type>/<short-description>
 
 - Always fetch before the fast-forward. Without it git reports "Already up to date" and `main` stays behind.
 - Stage by path. Never `git add -A` or `git add .`.
+- The `.gitignore` is an allow-list (section 8), so a new file in a path it does not list is invisible to `git status`. `git add <path>` refuses such a path ("ignored by one of your .gitignore files"), and `git add -A` skips it silently. When a path is refused, add a line for it to `.gitignore` in the same pull request; never use `git add -f`.
+- Before pushing, run `git status --short --ignored`. Every `!!` entry must be a cache or build directory, such as `.pytest_cache/` or `.ruff_cache/`. A file or directory of yours listed there is hidden by the allow-list and is not in your commits.
 - When the tests come first, commit them on their own with "(red)" in the subject, then commit the change that makes them pass. The squash-merge keeps the failing commit off `main`.
 - Run the full test suite and the linter before each commit that changes behaviour.
 
@@ -241,7 +243,7 @@ gh api repos/<owner>/<repo>/pulls/<n>/comments      # comments on lines
    If it prints anything, stop and tell a maintainer.
 3. Delete the branch, local and remote, with a maintainer's yes (W9). Give the tip hash so it can be restored. GitHub deletes the remote branch itself when automatic deletion is on (section 8.1).
 4. Confirm CI passed on `main`: `gh run list --branch main --limit 1`. If it failed in the code, tell a maintainer at once and propose a revert pull request.
-5. End-of-task check: `git status -sb`, `git branch -vv`, `git stash list`. Only `main` should be left.
+5. End-of-task check: `git status -sb`, `git branch -vv`, `git stash list`. Only `main` should be left. Then `git status --short --ignored`: every `!!` entry must be a cache or build directory (4.4). Anything else there was never committed; tell a maintainer.
 
 ### 4.8 What a squash-merge changes
 
