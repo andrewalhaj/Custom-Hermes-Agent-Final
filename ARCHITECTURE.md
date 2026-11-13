@@ -143,7 +143,7 @@ For the facts store:
 1. Embed the query.
 2. Fetch a candidate pool larger than the number of results wanted, from live rows in the current project. A session with no project searches live rows in every project.
 3. Fuse the two ranked lists.
-4. Rerank the pool with the judge model; a cross-encoder (`bge-reranker-v2-m3`) is the fallback. A fallback is a degraded result, never a silent success. Whether the cross-encoder should be the first choice is decided by the eval set.
+4. Rerank the pool with the judge model. If the judge fails or misses its deadline, the pool keeps its fused order and the result is recorded as degraded (`rerank.fallback`), never as a silent success. There is no local reranker to fall back to: a cross-encoder does not meet the recall deadline on an agent host with no GPU (measured in #15). Whether a cross-encoder should replace the judge as the reranker is a question for the eval set, on a machine that can run one.
 5. Blend recency back in. A rerank score ignores age, so the final score adds a recency term from `last_verified_at`, or `created_at` for a fact never checked.[9] Its weight is set by the eval set.
 6. Return the top results. Each result records which searches found it and which stage ranked it.
 
@@ -155,9 +155,13 @@ For the facts store:
 
 1. **Every message is searched.** Only an empty message is skipped.
 2. **Two searches run, one after the other** (section 2):
-   - **The action query, first.** In `pre_llm_call`, a local model (`qwen2.5:14b`) reads the user's message and names the action the agent is likely to take, and the facts store is searched for that description. The results are added to the turn through the hook's own context. It has its own deadline, well inside Hermes's callback timeout.
+   - **The action query, first.** In `pre_llm_call`, one request goes to the judge model with the user's message and the end of the assistant's previous reply, which Hermes passes to the hook in the conversation history.[14] The judge answers three typed questions, each with a probability: which kind of work from a fixed action list the message asks for, whether it asks for work at all, and whether it is about earlier work. The facts store is searched with the chosen action's description, and the results are added to the turn through the hook's own context.
+     - A pick always comes back, even for "thanks". The action query therefore runs unless "asks for work at all" is a clear no (section 3.6).
+     - The action list and the wording of the three questions are one configuration file in this repository. Changing either is a pull request with eval-set numbers (CONTRIBUTING.md rule C8).
+     - It has its own deadline, well inside Hermes's callback timeout. If the judge fails or misses the deadline, the action query is skipped for that turn, the failure is recorded (`judge.error` or `judge.timeout`), and the turn carries a note with the code.
+     - A model that writes the action as free text is not used. A local one added several seconds to every message on an agent host with no GPU, and the judge's pick agreed with hand labels on most messages at a fraction of the time (both measured in #15). Whether a search by the picked action finds the same facts as a search by a freely written one has not been measured; the eval set settles it before the action query is relied on (section 3.8).
    - **The message query, second.** `prefetch()` searches the user's words across the stores, under its own deadline below Hermes's 8-second limit.
-3. **Questions about past work widen the search.** They fetch more results and add past sessions.
+3. **Questions about past work widen the search.** They fetch more results and add past sessions. The routing request's "about earlier work" answer decides it, and only a clear yes widens the search (section 3.6).
 4. **"What is left to do?" is not a similarity search.** A question about open work returns the newest digests' open items for the current project, newest first. Such a question has no topic words to match, and its answer depends on recency.
 5. **Slot rules keep the mix fair.** The merge applies a score floor, a cap on digests and reserved places for references.
 6. **Results are attached to the message** as recalled notes, labelled as notes and not as instructions. Each note shows its origin, its basis, the date it was stored and, when checked since, the date it was last verified.
@@ -184,6 +188,7 @@ These are configuration values. Change one through an issue, with eval-set numbe
 | Score floor | 0.10 |
 | Recall deadline (`prefetch()`) | 6 seconds |
 | Action-query deadline (`pre_llm_call`) | 6 seconds |
+| Routing answers (section 3.5) | A probability of 0.7 or higher is a clear yes, and under 0.3 a clear no. In between, the default applies: the action query runs and the search is not widened. Starting values, set by the eval set. |
 | Recency weight | Set by the eval set |
 | Recalled-note budget | Set by the eval set |
 
@@ -194,7 +199,6 @@ Still open, each tracked in its own issue:
 - How long session chunks are kept (#2).
 - Whether reference chunks move into the shared store (#3).
 - How the score floor applies when stores' scores are not on one scale (#4).
-- Where the naming and rerank models run on an agent host with no GPU (#15).
 - Whether stored rows are keyed by session id or conversation id (#17).
 - How the build validates its settings so that a missing one stops startup (#19).
 - How the build's plugins are laid out and installed on an agent host (#20).
@@ -208,6 +212,7 @@ Every deployment states this in its own documentation:
 
 - Stored facts, digests, session chunks and events go to the memory database.
 - Search candidates, candidate facts and support checks go to the judge model when it is hosted.
+- Each user message, with the end of the assistant's previous reply, goes to the judge model for routing (section 3.5) when it is hosted.
 - User messages and tool output go to the extraction model when it is hosted.
 - Session transcripts go to the digest model when it is hosted.
 - The daily failure report goes to the operators' channel.
@@ -451,7 +456,7 @@ Initial codes:
 | `db.unreachable`, `db.auth`, `db.query` | The memory store cannot be reached, refuses the role, or rejects a query |
 | `recall.timeout` | Recall misses its deadline |
 | `judge.timeout`, `judge.error` | The judge model times out or errors |
-| `rerank.fallback` | The reranker fell back to the cross-encoder or to plain cosine (degraded) |
+| `rerank.fallback` | The judge could not rerank, and the pool kept its fused order (degraded) |
 | `store.gate_error` | The judge failed during a write; the fact is queued |
 | `guard.crash`, `guard.not_loaded` | A guard raised during a turn (recorded instead of `unhandled`), or did not load at startup |
 | `redact.failed` | The redactor raised; the text is not stored or sent |
@@ -508,5 +513,5 @@ The rules are L1–L5 in CONTRIBUTING.md.
 - [11] [Controlling text search (PostgreSQL documentation)](https://www.postgresql.org/docs/current/textsearch-controls.html)
 - [12] [Wu et al., LongMemEval, arXiv 2410.10813](https://arxiv.org/abs/2410.10813)
 - [13] [Row security policies (PostgreSQL documentation)](https://www.postgresql.org/docs/current/ddl-rowsecurity.html)
-- [14] Hermes v0.23.1 source: `hermes_logging.py`, `model_tools.py`, `agent/redact.py`, `agent/memory_provider.py`, `agent/memory_manager.py`, `gateway/session_finite.py`, `hermes_cli/cli_session_mixin.py`, `hermes_cli/config_defaults.py`, `hermes_cli/plugins.py`, `hermes_cli/plugins_context.py`, `hermes_cli/plugins_dispatch.py`, `plugins/memory/__init__.py`, `tools/approval.py`
+- [14] Hermes v0.23.1 source: `hermes_logging.py`, `model_tools.py`, `agent/redact.py`, `agent/memory_provider.py`, `agent/memory_manager.py`, `agent/turn_context.py`, `gateway/session_finite.py`, `hermes_cli/cli_session_mixin.py`, `hermes_cli/config_defaults.py`, `hermes_cli/plugins.py`, `hermes_cli/plugins_context.py`, `hermes_cli/plugins_dispatch.py`, `plugins/memory/__init__.py`, `tools/approval.py`
 - [15] [Build a Hermes plugin (Hermes Agent developer guide)](https://hermes-agent.nousresearch.com/docs/developer-guide/plugins)
