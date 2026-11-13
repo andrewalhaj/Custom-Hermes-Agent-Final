@@ -79,6 +79,24 @@ def test_job_wrapper_records_a_crash_and_exits_non_zero(db, caplog):
     assert any(r.exc_info and r.exc_info[0] is RuntimeError for r in caplog.records)
 
 
+def _query_then_crash(conn):
+    conn.execute("select 1")
+    raise RuntimeError("boom")
+
+
+def _sql_error(conn):
+    conn.execute("select 1/0")
+
+
+@pytest.mark.parametrize("job", [_query_then_crash, _sql_error])
+def test_job_wrapper_records_a_crash_inside_an_open_transaction(db, job):
+    # psycopg's default connection opens a transaction on the first query; the crash leaves it open or aborted
+    with pytest.raises(SystemExit) as exit_info:
+        failures.run_job("nightly", job, source="host-a", connect=lambda: psycopg.connect(db["agent"]))
+    assert exit_info.value.code != 0
+    assert [(r[4], r[5]) for r in _rows(db["agent"])] == [("unhandled", "failed"), ("job.failed", "failed")]
+
+
 def test_job_wrapper_returns_quietly_when_the_job_succeeds(db):
     ran = []
     failures.run_job("nightly", lambda conn: ran.append(True), source="host-a",
