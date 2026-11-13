@@ -220,8 +220,8 @@ Hermes caps the context that one `pre_llm_call` hook adds to a turn at 10,000 ch
 Still open, each tracked in its own issue:
 
 - Whether reference chunks move into the shared store, decided with eval-set numbers once the facts store exists (#3).
-- How the build detects a gateway session that runs without it: one created in safe mode, or with the profile's settings ignored (#23).
 - What happens to a session chunk whose message's uid is shared, changed or missing, to a branch's copied history, and to facts drawn from messages a rewind removed (#17).
+- How the build detects a gateway session that runs without it: one created in safe mode, or with the profile's settings ignored (#23).
 - Whether a search by the picked action finds what a search by a freely written one would, and whether a low-probability pick should count (#26).
 - How the service finds the Python that Hermes runs on, and the install and update procedure with real packages, both to be proved in the plugin's first pull request (#29).
 
