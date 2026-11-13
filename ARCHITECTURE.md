@@ -220,7 +220,6 @@ Hermes caps the context that one `pre_llm_call` hook adds to a turn at 10,000 ch
 Still open, each tracked in its own issue:
 
 - Whether reference chunks move into the shared store, decided with eval-set numbers once the facts store exists (#3).
-- What identifies a session chunk's message, so that it never repeats after Hermes compacts a session or rewinds it with `/undo` or `/rollback`, and what happens to what was drawn from rewound messages or copied into a branch (#17).
 - Whether a search by the picked action finds what a search by a freely written one would, and whether a low-probability pick should count (#26).
 - How the service finds the Python that Hermes runs on, and the install and update procedure with real packages, both proved in the plugin's first pull request (#29).
 
@@ -257,7 +256,7 @@ The memory store is a Supabase project: Postgres with the `pgvector` extension. 
 3. **Nothing is hard-deleted by the agent.** A fact is superseded, with a pointer to its replacement, or retired, with a reason. The row stays.
 4. **Every vector records the build that made it.** A change of embedding model is a visible migration, not a silent mismatch.
 5. **Nothing unused.** No column, index or function argument exists without code that reads it.
-6. **Any machine can write a session chunk.** A chunk is identified by its source, session, message position and chunk number, never by an identifier from one machine's local store. Rows carry Hermes's `session_id`. Compressing a transcript keeps it while `compression.in_place` is `true`, the default, which every agent host keeps; with `false`, Hermes would give the conversation a new `session_id`, and one conversation's rows would sit under two.[14][15] Hermes also changes the `session_id` on purpose, when a session is resumed, branched, reset or started anew. It tells the provider through `on_session_switch`, or through `initialize()` when a resumed session starts in a new process; rows already written keep the id they had.[3][14] A chunk's message position must never repeat within a session. A position in Hermes's message list can repeat after an in-place compaction or a rewind with `/undo` or `/rollback`,[14] so what identifies a chunk's message, what happens to the chunks and facts of messages a rewind removed, and what happens to a branch's copied history, are open (#17).
+6. **Any machine can write a session chunk.** A chunk is identified by its source, session, the message's `message_uid` and its chunk number, never by an identifier from one machine's local store. Rows carry Hermes's `session_id`. Compressing a transcript keeps it while `compression.in_place` is `true`, the default, which every agent host keeps; with `false`, Hermes would give the conversation a new `session_id`, and one conversation's rows would sit under two.[14][15] Hermes also changes the `session_id` on purpose, when a session is resumed, branched, reset or started anew. It tells the provider through `on_session_switch`, or through `initialize()` when a resumed session starts in a new process; rows already written keep the id they had.[3][14] A position in Hermes's message list can repeat after an in-place compaction or a rewind with `/undo` or `/rollback`,[14] so a chunk names its message by the `message_uid` Hermes's session store gives each message, never by its position. Facts drawn from messages a rewind removed are retired with the reason `rewound`; their chunks stay, as a record of what was said, until the 90-day deletion. A branch starts a new `session_id` with a copy of the history, and only the messages added after the branch point are chunked.
 
 ### 4.2 Schema
 
@@ -302,14 +301,14 @@ create table memory.transcript_chunks (
   source           text not null,            -- the machine that wrote the session
   project          text,
   session_id       text not null,
-  message_seq      integer not null,
+  message_uid      text not null,           -- Hermes's id for the message, stable across compaction and rewinds
   chunk_no         smallint not null,
   body             text not null,
   embedding        halfvec(2560) not null,
   embedding_model  text not null,
   search_text      tsvector generated always as (to_tsvector('english', body)) stored,
   created_at       timestamptz not null default now(),
-  unique (source, session_id, message_seq, chunk_no)
+  unique (source, session_id, message_uid, chunk_no)
 );
 
 create index transcript_chunks_embedding_idx on memory.transcript_chunks using hnsw (embedding halfvec_cosine_ops);
