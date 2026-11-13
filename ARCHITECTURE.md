@@ -174,6 +174,7 @@ For the facts store:
 1. **Every message is searched.** Only an empty message is skipped.
 2. **Two searches run, one after the other** (section 2):
    - **The action query, first.** In `pre_llm_call`, one request, the routing request, goes to the judge model with the user's message and the end of the assistant's previous reply, which Hermes passes to the hook in the conversation history.[14] The judge answers two typed questions, each with a probability: which kind of work from a fixed action list the message asks for, and whether it asks for work at all. The facts store is searched with the picked action's description, and the results are added to the turn through the hook's own context.
+     - The action query ships switched off, and is switched on only once the eval set has measured it (#26).
      - The judge always returns a pick, whatever the message. The action query therefore runs unless "asks for work at all" is a clear no (section 3.6). The top pick is used whatever its probability; whether a low one should count as no pick is a question for the eval set (#26).
      - A skipped action query is recorded in `events` under its own event name, so it cannot be mistaken for one that ran and found nothing, which is recorded as `empty`.
      - The action list and the wording of the two questions are one configuration file in this repository. Changing either is a pull request with eval-set numbers (CONTRIBUTING.md rule C8).
@@ -206,6 +207,7 @@ These are configuration values. Change one through an issue, with eval-set numbe
 | Results per message | 5; 8 on a question about past work; 3 for the action query |
 | Score floor | 0.30, on facts the judge reranked, where the score is the judge's probability that the fact helps answer the message: under 0.3 reads as no, as in the "Asks for work at all" row. No floor on results ranked by fusion alone. A starting value; the eval set confirms or changes it. |
 | Recall deadline (`prefetch()`) | 6 seconds |
+| Action query (section 3.5) | Off, until the eval set has measured it (#26) |
 | Action-query deadline (`pre_llm_call`) | 6 seconds |
 | Judge deadline (one rerank or routing request) | 2 seconds. A starting value: the slowest routing request in the test for #15 took 0.3 seconds, and a rerank request has not been timed. |
 | Previous reply sent with the routing request | Its last 500 characters, as in the test for #15 |
