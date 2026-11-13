@@ -29,14 +29,18 @@ Hermes's built-in memory stays on. It is two size-limited files, `MEMORY.md` (2,
 
 Memory is shared. Several machines run the agent against one memory store, so every stored row records the project it belongs to and the machine that wrote it.
 
-**One plugin.** The memory provider, the four guards, the skills and the failure module (section 6.1) ship as a single Hermes plugin: one directory at the root of this repository, with each part a subpackage that reaches the failure module by a relative import. Hermes loads that directory twice:
+**One plugin.** The memory provider, the four guards, the skills and the failure module (section 6.1) ship as a single Hermes plugin: one directory at the root of this repository, with each code part a subpackage that reaches the failure module by a relative import. The directory carries the plugin's name. The name is chosen, and its line added to the `.gitignore` allow-list, by the pull request that adds the first code (#29). Hermes loads that directory twice:
 
 - as an ordinary plugin, listed in `plugins.enabled`, which registers the guards' hooks and the skills when Hermes starts;
 - as the memory provider, selected by `memory.provider`.
 
-The manifest declares `kind: standalone`. Without it, Hermes treats a directory that defines a memory provider as a provider only and skips the ordinary load. With both loads, Hermes registers each hook once.[14] The guards therefore do not wait for the memory provider to load, and no guard can be missing on its own. Hermes v0.23.1 lists a plugin's registered skills in the prompt with the others.[14]
+The manifest declares `kind: standalone`. Without it, Hermes treats a directory that defines a memory provider as a provider only and skips the ordinary load. With both loads, Hermes registers each hook once, provided the directory under `plugins/` carries the manifest's name, as it does when `hermes plugins install` puts it there.[16] The guards therefore do not wait for the memory provider to load, and no guard can be missing on its own. Hermes v0.23.1 lists a plugin's registered skills in the prompt with the others.[16]
 
-Hermes imports the directory once for each load, under two module names, so anything held at module level exists twice. The guards and the provider share nothing in memory. What they share goes through the memory store or the plugin's storage (section 2). The layouts that were compared, and the runs behind this one, are in #20.
+`register()` runs under both loads, and hooks are the only thing Hermes registers once.[16] What the plugin registers under each load, and how it tells the two apart, is decided with the first code (#29).
+
+Hermes imports the directory once for each load, under two module names, so anything held at module level exists twice.[16] The guards and the provider share nothing in memory, and each copy opens its own connection to the store. What they share goes through the memory store or the plugin's storage (section 2).
+
+Loading one directory both ways is not described in Hermes's developer guide. It is read from the v0.23.1 source and was run against a throwaway plugin, and it is re-tested on every Hermes upgrade (OPERATIONS.md section 5). The layouts that were compared, and the runs behind this one, are in #20.
 
 ## 2. The memory-provider contract
 
@@ -56,7 +60,7 @@ Hermes imports the directory once for each load, under two module names, so anyt
   This wrapper, and the job wrapper (section 6.1), are the only code allowed to catch everything (CONTRIBUTING.md rule C2).
 - **A provider tool that raises reaches the agent as a tool error.** Hermes catches an exception from a provider's tool and returns an error result that names the tool and carries the exception's message, so the agent never sees it as an empty result.[14] The memory search tool is a provider tool and goes through the boundary wrapper like any other provider method: an unexpected exception is recorded as `unhandled` and re-raised. A failure the tool expects, such as a missed deadline or an unreachable store, is returned as a failure result that carries its code (CONTRIBUTING.md rule C3).
 - **Threads.** Background work uses Hermes's `spawn_context_thread`, never a bare `threading.Thread`, which would write into the wrong profile's store. `register(ctx)` builds a new provider instance on each load.
-- **Local state.** What a guard keeps on a machine between calls, such as its record of what a session has read, goes through Hermes's per-plugin storage: `ctx.state`, which is scoped to the profile and limited to 10 MiB for each plugin, or the plugin's data directory. Nothing is written into the plugin's own directory, which `hermes plugins update` replaces, or into `config.yaml`.[15] The guards get that storage from the ordinary load (section 1). The memory provider is loaded through a narrower context that forwards only registration calls, so it has no `ctx.state`. It uses Hermes's `plugins.plugin_storage` helpers, which give a plugin a data directory and a SQLite database under the Hermes home.[14]
+- **Local state.** What a guard keeps on a machine between calls, such as its record of what a session has read, goes through Hermes's per-plugin storage: `ctx.state`, which is scoped to the profile and limited to 10 MiB for each plugin, or the plugin's data directory. Nothing is written into the plugin's own directory, which a reinstall replaces, or into `config.yaml`.[15] The guards get that storage from the ordinary load (section 1). The memory provider is loaded through a narrower context that forwards only registration calls, so it has no `ctx.state`.[14] It uses Hermes's `plugins.plugin_storage` helpers, which give a plugin a data directory and a SQLite database under the Hermes home.[16]
 - **Built-in memory writes are mirrored.** `on_memory_write` reports every committed write to `MEMORY.md` or `USER.md`. The provider stores them as deliberate facts.
 - **Session end.** The provider's own `on_session_end` method fires at real session boundaries only, never per turn, and the digest is written there. The plugin hook with the same name is a different call: it fires at the end of every turn's run, so no session-end work is attached to it.[14][15]
 - **Subagents get no automatic recall or writes.** Hermes suppresses prefetch, sync and session-end calls for subagents.[3]
@@ -206,6 +210,7 @@ Still open, each tracked in its own issue:
 - Where the naming and rerank models run on an agent host with no GPU (#15).
 - Whether stored rows are keyed by session id or conversation id (#17).
 - How the build validates its settings so that a missing one stops startup (#19).
+- What the plugin registers under each load, and how the startup check is installed and recorded (#29).
 - What the write gate does when Hermes's approval gate is bypassed (#21).
 - Which hook the fact gate and the recall gate count a lookup from (#22).
 - Whether Hermes's safe-worker mode leaves the guards' hooks unfired (#23).
@@ -410,7 +415,7 @@ Hermes's memory tool enforces the size limits of `MEMORY.md` and `USER.md` itsel
 
 ### 5.5 Failure behaviour
 
-- **At startup.** Hermes does not stop for a plugin that fails to load: it is skipped with a startup warning, and the others keep loading.[1] A plugin cannot stop Hermes from starting either, and no plugin hook fires at startup.[14] The check therefore runs outside Hermes. The service that starts Hermes on an agent host runs the build's startup check first, and does not start Hermes when the check fails (`guard.not_loaded`). The check loads the plugin in a process of its own, through Hermes's plugin discovery and its memory-provider loader, and passes only when the ordinary load reports no error, every guard's hooks are registered, and the provider loads (OPERATIONS.md section 3).
+- **At startup.** Hermes does not stop for a plugin that fails to load: it is skipped with a startup warning, and the others keep loading.[1] A plugin cannot make Hermes refuse to start, because the loader catches an error raised while a plugin loads, and no plugin hook fires at startup.[16] The check therefore runs outside Hermes. The service that keeps the Hermes gateway running on an agent host runs the build's startup check first, and does not start Hermes when the check fails. The check loads the plugin in a process of its own, the way a host does: through Hermes's plugin discovery with the plugin enabled, and through its memory-provider loader. It passes only when the ordinary load reports no error, every guard's hooks are registered, and the provider loads. Its failure code is `guard.not_loaded`. It is a check before the start, not proof about the running process (section 5.6). How it is installed on a host, how the service calls it and where its failure is recorded are open (#29).
 - **During a turn**, Hermes isolates hook errors, and the direction depends on the hook:[4]
 
   | Hook | When the callback raises or times out |
@@ -432,7 +437,8 @@ Hermes's memory tool enforces the size limits of `MEMORY.md` and `USER.md` itsel
 - A lookup check proves that a lookup happened, not that it was the right one.
 - While a reply is held, tool progress and reasoning still show unless turned off, and commentary between tool calls is dropped.[4]
 - Any exemption, such as for subagents or system notifications, is written down. An exempt path produces unguarded claims.
-- A Hermes started by hand, outside the service, skips the startup check (section 5.5). Nothing inside Hermes can tell that the plugin did not load.
+- A Hermes started by hand, outside the service, skips the startup check (section 5.5). Hermes logs a warning for a plugin that did not load, but nothing in Hermes stops it or records `guard.not_loaded`.
+- The startup check runs in a process of its own before Hermes starts. It does not prove the load in the process that serves requests, where a plugin's load has its own deadline, plugins can be reloaded while Hermes runs, and Hermes's safe mode skips plugin discovery (#29).[16]
 - The startup check calls Hermes's plugin loader directly. The developer guide does not document that loader, so the check is re-tested on every Hermes upgrade (OPERATIONS.md section 5).
 - Hermes's approval gate approves without asking in four cases, and the write gate does not hold in them:[14]
   - yolo is on, by any route: the `--yolo` flag, the `HERMES_YOLO_MODE` variable, the `/yolo` command in a CLI or gateway session, or a one-shot run started with `hermes -z`;
@@ -463,7 +469,7 @@ Initial codes:
 | `judge.timeout`, `judge.error` | The judge model times out or errors |
 | `rerank.fallback` | The reranker fell back to the cross-encoder or to plain cosine (degraded) |
 | `store.gate_error` | The judge failed during a write; the fact is queued |
-| `guard.crash`, `guard.not_loaded` | A guard raised during a turn (recorded instead of `unhandled`), or did not load at startup |
+| `guard.crash`, `guard.not_loaded` | A guard raised during a turn (recorded instead of `unhandled`), or the startup check found the plugin, a guard's hooks or the provider not loaded |
 | `redact.failed` | The redactor raised; the text is not stored or sent |
 | `memory.write_rejected` | Hermes refused a built-in memory write |
 | `events.write_failed` | An `events` row could not be written; logged locally at ERROR |
@@ -518,5 +524,6 @@ The rules are L1–L5 in CONTRIBUTING.md.
 - [11] [Controlling text search (PostgreSQL documentation)](https://www.postgresql.org/docs/current/textsearch-controls.html)
 - [12] [Wu et al., LongMemEval, arXiv 2410.10813](https://arxiv.org/abs/2410.10813)
 - [13] [Row security policies (PostgreSQL documentation)](https://www.postgresql.org/docs/current/ddl-rowsecurity.html)
-- [14] Hermes v0.23.1 source: `hermes_logging.py`, `model_tools.py`, `agent/redact.py`, `agent/memory_provider.py`, `agent/memory_manager.py`, `gateway/session_finite.py`, `hermes_cli/cli_session_mixin.py`, `agent/prompt_builder.py`, `hermes_cli/config_defaults.py`, `hermes_cli/plugins.py`, `hermes_cli/plugins_content.py`, `hermes_cli/plugins_context.py`, `hermes_cli/plugins_discovery.py`, `hermes_cli/plugins_dispatch.py`, `hermes_cli/plugins_ledger.py`, `hermes_cli/plugins_loader.py`, `hermes_cli/plugins_manifest.py`, `plugins/memory/__init__.py`, `plugins/plugin_storage.py`, `tools/approval.py`
+- [14] Hermes v0.23.1 source: `hermes_logging.py`, `model_tools.py`, `agent/redact.py`, `agent/memory_provider.py`, `agent/memory_manager.py`, `gateway/session_finite.py`, `hermes_cli/cli_session_mixin.py`, `hermes_cli/config_defaults.py`, `hermes_cli/plugins.py`, `hermes_cli/plugins_context.py`, `hermes_cli/plugins_dispatch.py`, `plugins/memory/__init__.py`, `tools/approval.py`
 - [15] [Build a Hermes plugin (Hermes Agent developer guide)](https://hermes-agent.nousresearch.com/docs/developer-guide/plugins)
+- [16] Hermes v0.23.1 source, plugin loading: `agent/prompt_builder.py`, `hermes_cli/plugins.py`, `hermes_cli/plugins_content.py`, `hermes_cli/plugins_discovery.py`, `hermes_cli/plugins_ledger.py`, `hermes_cli/plugins_loader.py`, `hermes_cli/plugins_manifest.py`, `plugins/memory/__init__.py`, `plugins/plugin_storage.py`
