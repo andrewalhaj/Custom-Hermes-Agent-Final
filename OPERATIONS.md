@@ -15,7 +15,7 @@ These placeholders appear in the documentation. Each deployment sets them in its
 | `<job-host>` | One of the agent hosts that is on when scheduled jobs run |
 | `<project-ref>` | The Supabase project that holds the memory store |
 | `<model-digest>` | The pinned build digest of the embedding model |
-| `<judge-model>` | The hosted model used as judge and first-choice reranker |
+| `<judge-model>` | The hosted model used as judge, as reranker and to route each message. It answers typed questions (a pick from a list, a yes or no) with probabilities and does not need to generate text. It is set by version, never by an alias that can move to a newer model, because the thresholds depend on its answers. |
 | `<extraction-model>` | The model that proposes facts from user messages and tool results |
 | `<digest-model>` | The model that writes session digests |
 | `<maintenance-role>` | The database role that runs retention and migrations |
@@ -26,8 +26,9 @@ These placeholders appear in the documentation. Each deployment sets them in its
 | Part | Where |
 |---|---|
 | Hermes, its plugins, the guards and the memory provider | Every machine in `<agent-hosts>` |
-| Embedding (`qwen3-embedding:4b`), action naming (`qwen2.5:14b`) and the fallback reranker (`bge-reranker-v2-m3`) | Locally, on every machine in `<agent-hosts>` |
-| Judge and first-choice reranker | `<judge-model>`, hosted |
+| Embedding (`qwen3-embedding:4b`) | Locally, on every machine in `<agent-hosts>`. It is the only model an agent host runs, so an agent host needs no GPU (measured in #15). |
+| Bulk embedding, such as the eval set or an import | Any machine that runs the pinned embedding build, preferably one with a GPU. The vectors are the same wherever they are made (section 3). |
+| Judge, reranker and message routing | `<judge-model>`, hosted |
 | Fact extraction | `<extraction-model>`, local or hosted |
 | Session digests | `<digest-model>`, hosted |
 | The memory store | One Supabase project, `<project-ref>`, shared by every machine in `<agent-hosts>` |
