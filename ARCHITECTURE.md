@@ -185,7 +185,7 @@ These are configuration values. Change one through an issue, with eval-set numbe
 | Recency weight | Set by the eval set |
 | Recalled-note budget | Set by the eval set |
 
-Still open, each tracked in its own issue: how long session chunks are kept, whether reference chunks move into the database, and how the score floor applies when stores' scores are not on one scale.
+Still open, each tracked in its own issue: how long session chunks are kept (#2), whether reference chunks move into the shared store (#3), and how the score floor applies when stores' scores are not on one scale (#4).
 
 ### 3.7 What leaves the host
 
