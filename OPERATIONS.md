@@ -40,16 +40,21 @@ The memory store outlives any one machine and is shared by all of them. What eac
 Every machine that runs the agent:
 
 1. **Runs the pinned embedding build.** Its Ollama model digest must equal `<model-digest>`. At startup the provider compares its digest with the one recorded in the store and refuses to run recall if they differ (`embed.model_mismatch`). Upgrading the model is a migration: every vector is re-embedded and the recorded digest changes.
-2. **Has its own database role.** The role can read, insert and update the memory tables, and cannot delete rows or change the schema (ARCHITECTURE.md section 4.3). Its credentials live in the profile's `.env`.
+2. **Has its own database role.** The role can read, insert and update the memory tables, and cannot delete rows or change the schema (ARCHITECTURE.md section 4.3). Its credentials live in the profile's `.env`. The build reads them through Hermes's secret helper (`get_secret`) and never opens `.env` itself.[2]
 3. **Sets its `<machine-name>`**, used in the `source` column of every row it writes. Names are unique across `<agent-hosts>`.
 4. **Uses these Hermes settings:**
 
    | Setting | Value | Why |
    |---|---|---|
+   | `memory.provider` | This build's provider | Hermes runs one external memory provider, and this setting selects it.[2] |
    | `memory.write_approval` | `true` | Every write to `MEMORY.md` and `USER.md` waits for a person's approval, so a wrong assumption is never saved unchecked. |
    | `logging.max_size_mb`, `logging.backup_count` | Defaults (5, 3) or larger | Long enough to cover the period between daily reports |
    | `HERMES_PLUGINS_DEBUG` | Never set | Its console copy of plugin logs is not redacted |
    | `security.redact_secrets` | Left on (default) | Turning it off disables every redaction pattern, including the build's own |
+   | `approvals.mode` | Never `off` | With it off, Hermes's approval gate approves every request without asking, the write gate's included (ARCHITECTURE.md section 5.6).[3] |
+   | `approvals.cron_mode`, `approvals.single_query_mode`, `approvals.unattended_mode` | `deny` (default) | Nobody can answer in these contexts. `approve` lets the write gate's requests through unasked.[3] |
+5. **Never runs the agent with yolo on.** The `--yolo` flag, the gateway's `/yolo` command and a one-shot run started with `hermes -z` all make Hermes's approval gate approve without asking.[3]
+6. **Has the build installed as Hermes plugins.** A plugin installed by the user lives in the `plugins/` directory of the Hermes home, which `hermes update` leaves in place, and runs only after `hermes plugins enable`. The memory provider is selected by `memory.provider` instead. Python packages the build needs are declared with its plugins: the guide says packages installed by hand with pip are not durable, and a later replacement of Hermes's environment need not keep them.[2] How the build's plugins are laid out and installed is open (#20).
 
 ## 4. Scheduled jobs
 
@@ -73,10 +78,21 @@ Before upgrading:
 2. Re-check every Hermes fact that ARCHITECTURE.md and this document state for the current version, and update them in the same pull request as the upgrade.
 3. Run the full test suite and the eval set on the new version before switching machines over.
 
-## 6. Third-party plugins
+## 6. Plugins from outside this repository
 
-None are installed. A third-party plugin runs inside Hermes with the same access as the agent, so any plugin added later is listed here with its pinned commit, what it can access, what it sends off the machine, and how it behaves when it fails.
+**Third-party plugins.** None are installed. A third-party plugin runs inside Hermes with the same access as the agent, so any plugin added later is listed here with its pinned commit, what it can access, what it sends off the machine, and how it behaves when it fails.
+
+**Plugins bundled with Hermes.** These ship with Hermes and are maintained by Nous. They are not part of the build. Bundled platforms and backends load without `hermes plugins enable` and work once they are configured; a standalone bundled plugin such as `security-guidance` has to be enabled.[3]
+
+| Bundled plugin | Used | Why |
+|---|---|---|
+| The messaging platform that carries `<operators-channel>` | Yes, configured | The daily failure report is delivered through it (section 4) |
+| `security-guidance` | Yes, enabled in its default warn mode | It adds a warning to the result of a file write whose content matches a known-dangerous code pattern. It runs on the machine and sends nothing off it.[3] It only warns, so it is not one of the build's guards (ARCHITECTURE.md section 5). Its block mode stays off, because its patterns have false positives. |
+| A web search or page-fetch backend | Each deployment's choice | The build does not ship one. A deployment that configures one adds what that backend receives to its own list of what leaves the host (ARCHITECTURE.md section 3.7). |
+| Any other memory provider | Never | Hermes runs one external memory provider, and it is this build's |
 
 ## Sources
 
 - [1] [Scheduled tasks: no-agent mode (Hermes Agent documentation)](https://hermes-agent.nousresearch.com/docs/user-guide/features/cron)
+- [2] [Build a Hermes plugin (Hermes Agent developer guide)](https://hermes-agent.nousresearch.com/docs/developer-guide/plugins)
+- [3] Hermes v0.23.1 source: `plugins/security-guidance/`, `tools/approval.py`, `gateway/session_finite.py`, `hermes_cli/config_defaults.py`, `hermes_cli/plugins_discovery.py`
