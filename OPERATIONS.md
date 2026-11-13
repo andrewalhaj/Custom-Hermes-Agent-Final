@@ -6,26 +6,32 @@ Facts about Hermes are stated for **Hermes v0.23.1**. Re-check them before upgra
 
 ## 1. Deployment values
 
-These placeholders appear in the documentation. Each deployment sets them in its Hermes profile's `.env` or in the operators' records, never in this repository.
+These placeholders appear in the documentation. Each deployment sets them in its Hermes profile's `.env` or its own configuration management, never in this repository.
 
 | Placeholder | What it is |
 |---|---|
-| `<agent-host>` | The machine that runs Hermes and the guards |
-| `<job-host>` | A machine that is on when scheduled jobs run |
+| `<agent-hosts>` | The machines that run Hermes with this build. There can be several. |
+| `<machine-name>` | Each agent host's name, written to the `source` column of every row it writes |
+| `<job-host>` | One of the agent hosts that is on when scheduled jobs run |
 | `<project-ref>` | The Supabase project that holds the memory store |
 | `<model-digest>` | The pinned build digest of the embedding model |
+| `<judge-model>` | The hosted model used as judge and first-choice reranker |
+| `<digest-model>` | The model that writes session digests |
+| `<maintenance-role>` | The database role that runs retention and migrations |
 | `<operators-channel>` | Where the daily failure report is sent |
 
 ## 2. Where it runs
 
 | Part | Where |
 |---|---|
-| Hermes, its plugins and the guards | `<agent-host>` |
-| Embedding (`qwen3-embedding:4b`) and action naming (`qwen2.5:14b`) | Ollama on each machine that runs the agent |
-| The memory store | One Supabase project, `<project-ref>`, shared by every machine that runs the agent |
-| Scheduled jobs | `<job-host>`. A machine that sleeps cannot be the only job host: a job that does not run is reported as `job.missed`, but nothing runs it. |
+| Hermes, its plugins, the guards and the memory provider | Every machine in `<agent-hosts>` |
+| Embedding (`qwen3-embedding:4b`), action naming (`qwen2.5:14b`) and the fallback reranker (`bge-reranker-v2-m3`) | Locally, on every machine in `<agent-hosts>` |
+| Judge and first-choice reranker | `<judge-model>`, hosted |
+| Session digests | `<digest-model>`, hosted |
+| The memory store | One Supabase project, `<project-ref>`, shared by every machine in `<agent-hosts>` |
+| Scheduled jobs | Hermes cron on `<job-host>`. A machine that sleeps cannot be the only job host: a job that does not run is reported as `job.missed`, but nothing runs it. |
 
-The memory store outlives any one machine and is shared by all of them.
+The memory store outlives any one machine and is shared by all of them. What each hosted part receives is listed in ARCHITECTURE.md section 3.7; each deployment confirms that list against its own `<judge-model>` and `<digest-model>`.
 
 ## 3. Machine setup
 
@@ -33,7 +39,7 @@ Every machine that runs the agent:
 
 1. **Runs the pinned embedding build.** Its Ollama model digest must equal `<model-digest>`. At startup the provider compares its digest with the one recorded in the store and refuses to run recall if they differ (`embed.model_mismatch`). Upgrading the model is a migration: every vector is re-embedded and the recorded digest changes.
 2. **Has its own database role.** The role can read, insert and update the memory tables, and cannot delete rows or change the schema (ARCHITECTURE.md section 4.3). Its credentials live in the profile's `.env`.
-3. **Sets its source name**, used in the `source` column of every row it writes.
+3. **Sets its `<machine-name>`**, used in the `source` column of every row it writes. Names are unique across `<agent-hosts>`.
 4. **Uses these Hermes settings:**
 
    | Setting | Value | Why |
@@ -47,7 +53,7 @@ Every machine that runs the agent:
 
 | Job | Runs | What it does | Its own failure |
 |---|---|---|---|
-| Event retention | Daily | Deletes `events` rows older than 90 days, except those promoted to the eval set. Runs as a maintenance role, not a machine's agent role. | `job.failed` |
+| Event retention | Daily | Deletes `events` rows older than 90 days. Misses worth keeping are copied into the eval set before then (ARCHITECTURE.md section 3.8). Runs as `<maintenance-role>`, not a machine's agent role. | `job.failed` |
 | Job-health check | Daily, before the report | Flags any job with no fresh success (`job.missed`) and any job that took input but produced nothing for more than one run (`job.no_output`) | Reported by the report's absence |
 | Daily failure report | Daily, at a fixed time | Sends the day's failures from `events`, grouped by code and machine, as a dated Markdown file to `<operators-channel>`. With nothing to report it sends a one-line all-clear that names the jobs that ran. | A missing report |
 
