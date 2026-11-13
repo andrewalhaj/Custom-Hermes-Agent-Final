@@ -32,8 +32,9 @@ Memory is shared. Several machines run the agent against one memory store, so ev
 ## 2. The memory-provider contract
 
 - **Prefetch blocks the turn.** Hermes waits for `prefetch()` for up to 8 seconds, then treats a timeout or an error as "no notes" and carries on. The provider therefore enforces its own deadline below 8 seconds. On failure it returns a "recall failed" note with its failure code instead of raising, because that is the only way the failure reaches the turn.
-- **There is no input for a second query.** `prefetch()` receives only the user's message. The action query (section 3.5) runs from a `pre_llm_call` plugin.
-- **The project key comes from `initialize()`.** Hermes passes `cwd`, the session's workspace. The provider resolves it to the git root and uses that as `project`. It never calls `os.getcwd()`.
+- **There is no input for a second query.** `prefetch()` receives only the user's message. The action query (section 3.5) therefore runs from a `pre_llm_call` plugin. Hermes runs `pre_llm_call` before prefetch, bounds it with its own callback timeout (`plugins.hook_callback_timeout`, 30 seconds by default), and skips prefetch entirely for a turn that `pre_llm_call` blocks.[4]
+- **The project key comes from `initialize()`.** Hermes passes `cwd`, the session's workspace. The provider resolves it to the repository and uses a key that is the same on every machine: the normalised URL of the repository's `origin` remote, or a project ID set in the repository's Hermes configuration when there is no remote. An absolute path is never used, because it differs between machines. A workspace that is not a repository has no project. The provider never calls `os.getcwd()`.
+- **Every entry point goes through one boundary wrapper.** Hermes contains errors from hooks and providers, often silently (section 5.5). Each function Hermes calls is wrapped by a single shared wrapper in the failure module. On an unexpected exception it records `unhandled` with the traceback (section 6), then does what that entry point requires: re-raise from `pre_tool_call` and `transform_llm_output`, so Hermes fails closed; return a block from `pre_llm_call`; return a "recall failed" note from `prefetch()`. This wrapper is the only code allowed to catch everything (CONTRIBUTING.md rule C2).
 - **Threads.** Background work uses Hermes's `spawn_context_thread`, never a bare `threading.Thread`, which would write into the wrong profile's store. `register(ctx)` builds a new provider instance on each load.
 - **Built-in memory writes are mirrored.** `on_memory_write` reports every committed write to `MEMORY.md` or `USER.md`. The provider stores them as deliberate facts.
 - **Session end.** `on_session_end` fires at real session boundaries only. The digest is written there.
@@ -46,10 +47,10 @@ The model keeps nothing between turns except the built-in memory files. Every me
 ```mermaid
 flowchart LR
   subgraph W["Write path: what gets remembered"]
-    A["Stored on purpose"] --> F1["Pattern filter"]
-    B["Extracted from user messages and tool results"] --> F2["Judge gate, then support check"]
-    C["Session digest, at session end"] --> F3["Judge gate"]
-    F1 --> S["Store: redact, embed, deduplicate"]
+    A["Stored on purpose"] --> R1["Redact"] --> F1["Pattern filter"]
+    B["Extracted from user messages and tool results"] --> R2["Redact"] --> F2["Judge gate, then support check"]
+    C["Session digest, at session end"] --> R3["Redact"] --> F3["Judge gate"]
+    F1 --> S["Store: embed, deduplicate"]
     F2 --> S
     F3 --> S
     S --> K[("Facts")]
@@ -59,7 +60,7 @@ flowchart LR
     E --> KS["Facts in this project: vector and full-text, fused"]
     KS --> RR["Rerank, then blend in recency"]
     E --> RS["References: vector and keyword, fused"]
-    E --> SS["Sessions: vector and full-text, fused"]
+    E --> SS["Sessions, on past-work questions: vector and full-text, fused"]
     RR --> M["Merge, slot rules, score floor"]
     RS --> M
     SS --> M
@@ -96,13 +97,14 @@ The sessions store is kept only while the eval set (section 3.8) shows it adds r
 1. **Three entrances.**
    - The agent stores a fact on purpose.
    - Extraction takes facts from the user's messages and from tool results (command output, file contents, documentation lookups). It never reads the agent's own replies, because a wrong reply would otherwise be recalled later as a known fact.
-   - At `on_session_end`, the provider writes one digest for each long session that does not have one yet.
-2. **A filter on each.**
-   - A fact stored on purpose passes a pattern filter.
+   - At `on_session_end`, the provider writes one digest for each long session (section 3.6) that does not have one yet.
+2. **Redaction first.** Every entrance redacts secrets before the text goes anywhere else, including a judge model (CONTRIBUTING.md rule L4). If redaction fails, nothing is stored or sent (`redact.failed`).
+3. **A filter on each.**
+   - A fact stored on purpose passes a pattern filter: it must meet the minimum length and must not match the narration patterns in the write-path configuration file.
    - Extracted facts and digests go to a judge model, which drops the ones not worth keeping.
    - An extracted fact then gets a separate check: does its source turn support it? A fact its source does not support is not stored.
    - If the judge errors, the fact is queued for retry, never stored unchecked (`store.gate_error`).
-3. **One store function.** All three entrances then go through one function. It redacts secrets (CONTRIBUTING.md rule L4), embeds the text and compares it with what is already stored:
+4. **One store function.** All three entrances then go through one function. It embeds the text and compares it with what is already stored in the same project. "Short" and "long" are defined in section 3.6.
 
    | Match with an existing fact | Result |
    |---|---|
@@ -110,9 +112,9 @@ The sessions store is kept only while the eval set (section 3.8) shows it adds r
    | Very close in meaning, short text | The new fact supersedes the old one |
    | Very close in meaning, long text, or somewhat close in meaning | The judge decides whether it is the same subject and whether the new fact supersedes the old |
 
-4. **Origin protects deliberate facts.** A fact stored on purpose can supersede an extracted one. The reverse is never allowed.
-5. **Every fact records its basis and source.** `basis` is `user_stated`, `tool_observed` or `assistant_inferred`; `source_turn` points to the turn it came from. A digest takes the weakest basis of its inputs, so a summary never turns an inferred claim into a stated one. Recalled notes show the basis.
-6. **Nothing is silently lost.** A superseded or retired fact stays in the table, marked, with a pointer to its replacement or the reason it was retired.
+5. **Origin protects deliberate facts.** A fact stored on purpose can supersede an extracted one. The reverse is never allowed.
+6. **Every fact records its basis and source.** `basis` is `user_stated`, `tool_observed` or `assistant_inferred`; `source_turn` points to the turn it came from. A digest takes the weakest basis of its inputs, so a summary never turns an inferred claim into a stated one. Recalled notes show the basis.
+7. **Nothing is silently lost.** A superseded or retired fact stays in the table, marked, with a pointer to its replacement or the reason it was retired.
 
 ### 3.4 Retrieval
 
@@ -127,7 +129,7 @@ Retrieval is hybrid, with a rerank stage. A search by meaning and a search by wo
 For the facts store:
 
 1. Embed the query.
-2. Fetch a candidate pool larger than the number of results wanted, from live rows in the current project. A session with no project searches all projects and boosts none.
+2. Fetch a candidate pool larger than the number of results wanted, from live rows in the current project. A session with no project searches live rows in every project.
 3. Fuse the two ranked lists.
 4. Rerank the pool with the judge model; a cross-encoder (`bge-reranker-v2-m3`) is the fallback. A fallback is a degraded result, never a silent success. Whether the cross-encoder should be the first choice is decided by the eval set.
 5. Blend recency back in. A rerank score ignores age, so the final score adds a recency term from `last_verified_at`, or `created_at` for a fact never checked.[9] Its weight is set by the eval set.
@@ -140,7 +142,9 @@ For the facts store:
 ### 3.5 Delivery
 
 1. **Every message is searched.** Only an empty message is skipped.
-2. **Two searches run side by side** under one deadline below Hermes's 8-second limit: one for the user's words, through `prefetch()`, and one for a short description of the action the agent is about to take, through a `pre_llm_call` plugin.
+2. **Two searches run, one after the other** (section 2):
+   - **The action query, first.** In `pre_llm_call`, a local model (`qwen2.5:14b`) reads the user's message and names the action the agent is likely to take, and the facts store is searched for that description. The results are added to the turn through the hook's own context. It has its own deadline, well inside Hermes's callback timeout.
+   - **The message query, second.** `prefetch()` searches the user's words across the stores, under its own deadline below Hermes's 8-second limit.
 3. **Questions about past work widen the search.** They fetch more results and add past sessions.
 4. **"What is left to do?" is not a similarity search.** A question about open work returns the newest digests' open items for the current project, newest first. Such a question has no topic words to match, and its answer depends on recency.
 5. **Slot rules keep the mix fair.** The merge applies a score floor, a cap on digests and reserved places for references.
@@ -158,12 +162,16 @@ These are configuration values. Change one through an issue, with eval-set numbe
 | Chunk size | 800 characters; 100 shared between neighbouring session chunks |
 | Rank-fusion constant | 20 for facts and references, 60 for sessions |
 | Candidate pool for facts | Three times the results wanted, at least 15 |
+| Short text, long text | Short is 300 characters or fewer; long is anything longer |
+| Long session (gets a digest) | 20 messages or more |
+| Minimum fact length | 10 characters |
 | Supersede without the judge | Cosine similarity 0.92 or higher, short texts only |
-| Ask the judge | Cosine similarity from 0.80 up to 0.92, or 0.92 and higher for long texts; both answers must score 0.75 |
+| Ask the judge | Cosine similarity from 0.80 up to 0.92, or 0.92 and higher for long texts. The judge returns two probabilities, "same subject" and "the new fact supersedes the old"; both must be 0.75 or higher. |
 | Judge gate | Drops at a drop score of 0.70 or higher |
 | Results per message | 5; 8 on a question about past work; 3 for the action query |
 | Score floor | 0.10 |
-| Recall deadline | 6 seconds |
+| Recall deadline (`prefetch()`) | 6 seconds |
+| Action-query deadline (`pre_llm_call`) | 6 seconds |
 | Recency weight | Set by the eval set |
 | Recalled-note budget | Set by the eval set |
 
@@ -185,8 +193,8 @@ Secrets are redacted before anything is stored or sent.
 No ranking change ships without numbers from the eval set.
 
 - It starts from LongMemEval-S, which covers information extraction, multi-session reasoning, temporal reasoning, knowledge updates and abstention.[12]
-- It grows from real misses recorded in the `events` table: open-work questions answered badly, notes from the wrong project, recall that found nothing, and questions whose correct answer is "no note".
-- Each question records its project and the expected fact or chunk IDs.
+- It grows from real misses found in the `events` table: open-work questions answered badly, notes from the wrong project, recall that found nothing, and questions whose correct answer is "no note". A miss is promoted by copying it into the eval set; the `events` row itself is not kept.
+- The eval set lives in this repository as data files, reviewed through pull requests like code. Each question records its project and the expected fact or chunk IDs.
 - Reports give recall@5, MRR and an abstention score.
 
 ## 4. The memory store
@@ -217,7 +225,7 @@ create table memory.facts (
   kind             text not null check (kind in ('fact', 'digest')),
   origin           text not null check (origin in ('explicit', 'extracted', 'digest', 'imported')),
   basis            text not null check (basis in ('user_stated', 'tool_observed', 'assistant_inferred')),
-  project          text,                     -- git root of the session's workspace; null when there was none
+  project          text,                     -- project key (section 2); null when the session had none
   source           text not null,            -- the machine that wrote the row
   session_id       text,
   source_turn      integer,                  -- message position of the turn the fact came from
@@ -233,7 +241,7 @@ create table memory.facts (
   check ((kind = 'digest') = (origin = 'digest'))
 );
 
-create unique index facts_live_body_hash on memory.facts (body_hash)
+create unique index facts_live_body_hash on memory.facts (project, body_hash) nulls not distinct
   where superseded_by is null and retired_at is null;
 create index facts_live_embedding_idx on memory.facts using hnsw (embedding halfvec_cosine_ops)
   where superseded_by is null and retired_at is null;
@@ -262,6 +270,7 @@ create table memory.events (
   id          bigint generated always as identity primary key,
   at          timestamptz not null default now(),
   source      text not null,                 -- the machine
+  project     text,
   session_id  text,
   turn        integer,
   code        text not null,                 -- a code from the failure catalog, or an event name
@@ -294,8 +303,8 @@ Two SQL functions do the searching: `match_facts` and `match_transcript_chunks`.
 - **Each machine connects with its own role.** That role can read, insert and update. It cannot delete rows or create, alter or drop anything.
 - **Row Level Security is on for every table, as a backstop.** With RLS on and no policy, Postgres denies every row to a role that does not own the table, so each machine's role gets explicit select, insert and update policies and no delete policy.[13]
 - **Schema changes are migration files in this repository**, reviewed through a pull request. Migrations only move forward; an applied migration is never edited.
-- **Existing data is not ours to change** (CONTRIBUTING.md rule C7). An export exists before any migration touches data.
-- **Retention.** `events` rows are deleted after 90 days by a scheduled job running as a maintenance role, except rows promoted into the eval set.
+- **Data this repository did not create is not ours to change** (CONTRIBUTING.md rule C7). An export exists before any migration touches data.
+- **Retention.** `events` rows are deleted after 90 days by a scheduled job running as the maintenance role (OPERATIONS.md section 1). Misses worth keeping are copied into the eval set before then (section 3.8).
 
 ## 5. Guards
 
@@ -346,6 +355,8 @@ The reminder alone is not enough, because the model can ignore it as it ignores 
 | Verify gate | A tool call would change a managed file or setting | The session must have read it first, or the call is blocked. A reply that says what a file contains is withheld if the file was never read. |
 | Write gate | A tool call matches the list of sensitive actions | A human approval. With nobody to answer, the call is blocked. |
 
+What counts as a checkable question, a question about past work, a managed file or setting, and a sensitive action is defined in each guard's configuration file in this repository, as patterns and lists. Changing one is a pull request like any code change, with the guard's tests updated.
+
 Hermes's memory tool enforces the size limits of `MEMORY.md` and `USER.md` itself, so there is no memory-cap guard.[6]
 
 ### 5.4 How a guard is built
@@ -370,7 +381,8 @@ Hermes's memory tool enforces the size limits of `MEMORY.md` and `USER.md` itsel
   | `transform_tool_result` | The error is logged and the callback is skipped (fails open) |
 
   Hermes logs the first such error at WARNING and identical repeats at DEBUG, so a guard that keeps failing goes quiet in Hermes's own log.
-- **Every guard fails closed.** Guards on `pre_tool_call` and `transform_llm_output` contain no catch-everything blocks; Hermes turns their bugs into a blocked call or a withheld reply. A guard on `pre_llm_call` catches its own errors, logs the traceback and returns a block that names the failure (`guard.crash`), as Nous recommends for policy hooks.[4] That is the one exception to CONTRIBUTING.md rule C2.
+- **Every enforcing guard fails closed, and every failure is recorded.** Each guard's entry point goes through the boundary wrapper (section 2). It records the failure as `guard.crash` with the traceback, then re-raises from `pre_tool_call` and `transform_llm_output`, which Hermes turns into a blocked call or a withheld reply, or returns a block from `pre_llm_call`, as Nous recommends for policy hooks.[4] Recording happens in the wrapper on every occurrence, so it does not depend on Hermes logging a repeated error only once.
+- **`transform_tool_result` is never used to enforce.** Hermes skips a callback that raises there, so a guard on it fails open. It is used only to annotate a tool result, and its failures are recorded by the wrapper like any other.
 
 ### 5.6 Known limits
 
@@ -401,7 +413,7 @@ The catalog is one module in the package. It lists every failure code, its sever
 | `memory.write_rejected` | Hermes refused a built-in memory write |
 | `events.write_failed` | An `events` row could not be written; logged locally at ERROR |
 | `job.failed`, `job.missed`, `job.no_output` | A scheduled job failed, did not run, or took input and produced nothing |
-| `unhandled` | Anything not in the catalog. The process crashes and the traceback is recorded. |
+| `unhandled` | Anything not in the catalog. The boundary wrapper (section 2) records it with its traceback; a standalone script or job crashes. |
 
 ### 6.2 Where a failure appears
 
@@ -431,7 +443,7 @@ What Hermes does not provide, and the build adds:
 
 - **Supabase API key formats.** Hermes's redactor has no pattern for `sb_secret_` or `sb_publishable_` keys, so the build registers them through `register_redaction_patterns`.
 - **Redaction outside logs.** Hermes redacts log lines only. The build redacts every value before it is written to the store or sent to a judge.
-- **Structure.** Hermes's lines are plain text. Each event the build logs is one line whose message is a single JSON object.
+- **Structure.** Hermes's lines are plain text. Each event the build logs is one line whose message is a single JSON object, written by one helper in the failure module that both logs the line and writes the `events` row, so the two always use the same fields.
 - **Durability.** Logs rotate and live on one machine. Decisions and failures also go to `events`, which every machine shares.
 
 The rules are L1–L5 in CONTRIBUTING.md.
