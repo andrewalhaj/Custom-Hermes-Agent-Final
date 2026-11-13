@@ -18,7 +18,7 @@ These placeholders appear in the documentation. Each deployment sets them in its
 | `<judge-model>` | The hosted model used as judge, as reranker and to route each message. It answers typed questions (a pick from a list, a yes or no) with probabilities and does not need to generate text. It is set by version, never by an alias that can move to a newer model, because the thresholds depend on its answers. |
 | `<extraction-model>` | The model that proposes facts from user messages and tool results |
 | `<digest-model>` | The model that writes session digests |
-| `<maintenance-role>` | The login role the retention job runs as. It is created like a machine's role (section 3), but joins the group role `memory_maintenance`: `create role <maintenance-role> login password '<password>' in role memory_maintenance;`. |
+| `<maintenance-role>` | The login role the retention job runs as. It is created like a machine's role (section 3), but joins the group role `memory_maintenance`: `create role <maintenance-role> login in role memory_maintenance;`, then `\password <maintenance-role>`. |
 | `<operators-channel>` | Where the daily failure report is sent |
 
 ## 2. Where it runs
@@ -28,11 +28,11 @@ These placeholders appear in the documentation. Each deployment sets them in its
 | Hermes, its plugins, the guards and the memory provider | Every machine in `<agent-hosts>` |
 | Embedding (`qwen3-embedding:4b`) | Locally, on every machine in `<agent-hosts>`. It is the only model an agent host must run, and it meets the recall deadline without a GPU: about 0.3 seconds for a query on a CPU-only host (#15). |
 | Bulk embedding, such as the eval set or an import | Any machine set up as in section 3, preferably one with a GPU: a CPU-only host took about 3.6 seconds for each chunk (#15). Every machine runs the same pinned build, so its vectors are comparable with any other machine's (ARCHITECTURE.md section 3.2). |
-| Judge, reranker and message routing | `<judge-model>`, hosted |
-| Fact extraction | `<extraction-model>`, local or hosted |
-| Session digests | `<digest-model>`, hosted |
+| Judge, reranker and message routing | `<judge-model>`, hosted. The first deployment uses TypeSafe's Jev 1.14.0 (`jev-1.14.0`), pinned. |
+| Fact extraction | `<extraction-model>`, local or hosted. The first deployment uses Claude Haiku 5.5 (`claude-haiku-5-5`), hosted, through the Anthropic API. |
+| Session digests | `<digest-model>`, hosted. The first deployment uses the same model as fact extraction. |
 | The memory store | One Supabase project, `<project-ref>`, shared by every machine in `<agent-hosts>` |
-| Scheduled jobs | Hermes cron on `<job-host>`. A machine that sleeps cannot be the only job host: a job that does not run is reported as `job.missed`, but nothing runs it. |
+| Scheduled jobs | Hermes cron on `<job-host>`, and the heartbeat job on every machine in `<agent-hosts>`. A machine that sleeps cannot be the only job host: a job that does not run is reported as `job.missed`, but nothing runs it. |
 
 The memory store outlives any one machine and is shared by all of them. What each hosted part receives is listed in ARCHITECTURE.md section 3.7; each deployment confirms that list against its own `<judge-model>`, `<extraction-model>` and `<digest-model>`.
 
@@ -41,7 +41,7 @@ The memory store outlives any one machine and is shared by all of them. What eac
 Every machine that runs the agent:
 
 1. **Runs the pinned embedding build.** Its Ollama model digest must equal `<model-digest>`. At startup the provider compares its digest with the one recorded in the store and refuses to run recall if they differ (`embed.model_mismatch`). Upgrading the model is a migration: every vector is re-embedded and the recorded digest changes.
-2. **Has its own database role.** The role can read, insert and update the memory tables, and cannot delete rows or change the schema (ARCHITECTURE.md section 4.3). It is a login role that joins the group role `memory_agent`, which the migrations create and grant; it carries no privileges of its own. A maintainer creates it once, outside the repository, with a generated password: `create role <machine-name> login password '<password>' in role memory_agent;`. Its credentials live in the profile's `.env`. The build reads them through Hermes's secret helper (`get_secret`) and never opens `.env` itself.[2]
+2. **Has its own database role.** The role can read, insert and update the memory tables, and cannot delete rows or change the schema (ARCHITECTURE.md section 4.3). It is a login role that joins the group role `memory_agent`, which the migrations create and grant; it carries no privileges of its own. A maintainer creates it once, outside the repository, with a generated password: `create role <machine-name> login in role memory_agent;`, then `\password <machine-name>` in psql, which hashes the password on the maintainer's machine (SCRAM, with the server's default `password_encryption`) and sends only the hash, so the password itself never appears in a statement or a log.[5][6] Its credentials live in the profile's `.env`. The build reads them through Hermes's secret helper (`get_secret`) and never opens `.env` itself.[2]
 3. **Sets its `<machine-name>`**, used in the `source` column of every row it writes. Names are unique across `<agent-hosts>`.
 4. **Uses these Hermes settings:**
 
@@ -71,7 +71,8 @@ Every machine that runs the agent:
 | Job | Runs | What it does | Its own failure |
 |---|---|---|---|
 | Retention | Daily | Deletes `events` rows and session chunks older than 90 days. Misses worth keeping are copied into the eval set before then (ARCHITECTURE.md section 3.8). Runs as `<maintenance-role>`, not a machine's agent role. | `job.failed` |
-| Job-health check | Daily, before the report | Flags any job with no fresh success (`job.missed`) and any job that took input but produced nothing for more than one run (`job.no_output`) | Reported by the report's absence |
+| Heartbeat | Daily, on every agent host | Writes one `host.heartbeat` event | `job.failed`; a heartbeat that never runs is caught by the job-health check |
+| Job-health check | Daily, before the report | Flags any job with no fresh success (`job.missed`) and any job that took input but produced nothing for more than one run (`job.no_output`), and records `host.missing` for any machine in `<agent-hosts>` with no heartbeat in the last 24 hours (ARCHITECTURE.md section 6.3). A host's missing heartbeat is reported as `host.missing` only, not also as `job.missed`. | Reported by the report's absence |
 | Daily failure report | Daily, at a fixed time | Sends the day's failures from `events`, grouped by code and machine, and every "always" answer given to the write gate that day, as a dated Markdown file to `<operators-channel>`. With nothing to report it sends a one-line all-clear that names the jobs that ran. | A missing report |
 
 Every job runs through the job wrapper (ARCHITECTURE.md section 6.1), so a crash is recorded in `events` as `unhandled` and `job.failed` before the job exits non-zero.
@@ -111,3 +112,5 @@ The files in `migrations/` are applied to `<project-ref>` in file-name order, ea
 - [2] [Build a Hermes plugin (Hermes Agent developer guide)](https://hermes-agent.nousresearch.com/docs/developer-guide/plugins)
 - [3] Hermes v0.23.1 source: `plugins/security-guidance/`, `tools/approval.py`, `tools/approval_context.py`, `gateway/session_finite.py`, `hermes_cli/cli_session_mixin.py`, `hermes_cli/config_defaults.py`, `hermes_cli/git_credentials.py`, `hermes_cli/main.py`, `hermes_cli/plugin_isolation.py`, `hermes_cli/plugins.py`, `hermes_cli/plugins_cmd.py`, `hermes_cli/plugins_cmd_install.py`, `hermes_cli/plugins_cmd_update.py`, `hermes_cli/plugins_discovery.py`, `hermes_cli/plugins_ledger.py`, `hermes_cli/plugins_loader.py`, `plugins/memory/__init__.py`, `pm/plugin_declarations.py`
 - [4] [Supabase for Platforms: make database changes (Supabase documentation)](https://supabase.com/docs/guides/integrations/supabase-for-platforms#make-database-changes)
+- [5] [psql: `\password` (PostgreSQL 17 documentation)](https://www.postgresql.org/docs/17/app-psql.html)
+- [6] [libpq: `PQencryptPasswordConn` (PostgreSQL 17 documentation)](https://www.postgresql.org/docs/17/libpq-misc.html)

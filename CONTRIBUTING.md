@@ -379,16 +379,16 @@ There is no count ratchet: the repository starts with no catch-everything handle
 
 ### 8.1 Repository settings
 
-Branch protection and rulesets are available on public repositories, and on private repositories only with GitHub Pro, Team or Enterprise.[18] While this repository is private on GitHub Free, the last four rows below cannot be set. A red check then does not block a merge by itself, so W8 (merge only on green) and W9 rest on the maintainer and on how each agent is configured (section 9). The first three rows work on every plan.
+Branch protection and rulesets are available on public repositories, and on private repositories only with GitHub Pro, Team or Enterprise.[18][25] This repository is public. The first three rows are set in its settings, and the last four as one ruleset on `main` with no bypass list, configured and read back on 2026-11-13 but not yet seen to block a push (rule C6). The ruleset enforces part of W8 and W9: a change reaches `main` only through a pull request, squash-merged, with the `tests` check passed, and `main` cannot be force-pushed or deleted. It does not enforce who merges, or W9 on other branches, and an account with admin rights can edit it, so those parts still rest on the maintainer and on how each agent is configured (section 9). If the repository is made private on GitHub Free again, the ruleset stops applying.
 
 | Setting | Why |
 |---|---|
 | Allow squash merging only | Every pull request lands on `main` as one commit.[7] |
 | Default squash title: "Pull request title" | One naming rule for commits on `main`.[8] |
 | Automatically delete head branches | Removes the remote branch on merge. For a pull request from a fork, the fork's own setting applies.[19] |
-| Require a pull request before merging | Nothing lands without one.[18] |
-| Do not allow bypassing the above settings | Administrators are exempt by default.[18] |
-| Allow force pushes and allow deletions: off | Protects the history.[18] |
+| Require a pull request before merging | Nothing lands without one.[25] |
+| No bypass list | In a ruleset, only those on its bypass list can bypass it; this one lists no one.[25] |
+| Block force pushes and deletion | Protects the history.[25] |
 | Require status checks to pass. Add each CI check after it has run once and passed. | Nothing merges on a red check.[20] |
 
 ### 8.2 The CI workflow
@@ -518,7 +518,7 @@ AI coding agents are welcome contributors, under the same rules as everyone else
 
   The line restates C1–C4 and F1–F2. It is a request, not a guard: the lint and the tests in section 8 are what enforce the rules.
 - **`SOUL.md` is never read from a repository.** Hermes reads it only from its home directory.[23] The agent's identity is installed there, not committed here.
-- **Configure the agent so it cannot do what rules W8 and W9 forbid.** Deny it the commands that merge a pull request, push to `main`, force-push, reset hard, skip hooks, or delete a branch. A rule the agent can break is a request (ARCHITECTURE.md section 5.1). While branch protection is unavailable (section 8.1), this configuration is the only thing that enforces W8 and W9.
+- **Configure the agent so it cannot do what rules W8 and W9 forbid, or change repository settings (W10).** Deny it the commands that merge a pull request, push to `main`, force-push, reset hard, skip hooks, delete a branch, or change the repository's settings or rulesets. A rule the agent can break is a request (ARCHITECTURE.md section 5.1). The ruleset in section 8.1 enforces only part of W8 and W9, and an account with admin rights can edit it, so this configuration carries the rest.
 - **A person is accountable for every pull request**, whoever wrote the code.
 
 ## Sources
@@ -547,3 +547,4 @@ AI coding agents are welcome contributors, under the same rules as everyone else
 - [22] [pip-audit README](https://github.com/pypa/pip-audit/blob/main/README.md)
 - [23] [Context files (Hermes Agent documentation)](https://hermes-agent.nousresearch.com/docs/user-guide/features/context-files)
 - [24] [Build a Hermes plugin (Hermes Agent developer guide)](https://hermes-agent.nousresearch.com/docs/developer-guide/plugins)
+- [25] [About rulesets (GitHub Docs)](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/about-rulesets)

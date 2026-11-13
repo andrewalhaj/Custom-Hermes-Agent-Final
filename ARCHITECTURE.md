@@ -22,7 +22,7 @@ The build extends Hermes through its documented extension points and leaves the 
 |---|---|---|
 | Memory provider | A memory provider plugin. Hermes allows one external provider at a time, calls it before each turn, and exposes its tools to the agent.[2][3] | Stores and searches long-term memory (sections 2–4) |
 | Guards | Plugin hooks that run before the model is called, before each tool call and on the final reply.[4] | Force lookups and stop unsafe actions (section 5) |
-| Skills | Hermes skills. Hermes lists every skill's name and description in the prompt itself, so recall does not search them. | Procedures the agent follows for recurring tasks |
+| Skills | Hermes skills. Hermes lists every skill's name and description in the prompt itself, so recall does not search them. | Procedures the agent follows for recurring tasks. The build ships none at first; a skill is added, through a pull request, when a recurring task needs one. |
 | Instruction files | `AGENTS.md`, loaded from the directory a session runs in, and `SOUL.md`, loaded only from the Hermes home directory.[5] | The agent's operating rules and identity. This repository contains neither file (CONTRIBUTING.md section 9). |
 
 Hermes's built-in memory stays on. It is two size-limited files, `MEMORY.md` (2,200 characters) and `USER.md` (1,375 characters), loaded into the prompt at the start of each session.[6] They hold standing rules and preferences. Identity is `SOUL.md`, not memory. Everything else lives in the memory provider.
@@ -220,10 +220,10 @@ Hermes caps the context that one `pre_llm_call` hook adds to a turn at 10,000 ch
 Still open, each tracked in its own issue:
 
 - Whether reference chunks move into the shared store, decided with eval-set numbers once the facts store exists (#3).
-- What identifies a session chunk's message, so that it never repeats after Hermes compacts a session or rewinds it with `/undo` or `/rollback`, and what happens to what was drawn from rewound messages or copied into a branch (#17).
-- Whether Hermes's safe-worker mode leaves the guards' hooks unfired, checked with the first code (#23).
+- Where the memory provider reads each message's uid, and what happens to a session chunk when its uid appears on more than one row, its text changes or the message has none, to a branch's copied history, and to facts drawn from messages a rewind removed (#17).
+- How the build detects a gateway session that runs without it: one created in safe mode, or with the profile's settings ignored (#23).
 - Whether a search by the picked action finds what a search by a freely written one would, and whether a low-probability pick should count (#26).
-- How the service finds the Python that Hermes runs on, the install and update procedure with real packages, an absence check for an agent host, and a signal when the guards fail to load while Hermes runs (#29).
+- How the service finds the Python that Hermes runs on, and the install and update procedure with real packages, both to be proved in the plugin's first pull request (#29).
 
 ### 3.7 What leaves the host
 
@@ -244,7 +244,8 @@ No ranking change ships without numbers from the eval set.
 
 - It starts from LongMemEval-S, which covers information extraction, multi-session reasoning, temporal reasoning, knowledge updates and abstention.[12]
 - It grows from real misses found in the `events` table: open-work questions answered badly, notes from the wrong project, recall that found nothing, and questions whose correct answer is "no note". A miss is promoted by copying it into the eval set; the `events` row itself is not kept.
-- The eval set lives in this repository as data files, reviewed through pull requests like code. Each question records its project and the expected fact or chunk IDs. A question copied from a real miss is reworded so that it holds no deployment values (CONTRIBUTING.md section 3). It expects facts, not session chunks, because chunks are deleted after 90 days (section 4.3), so real misses measure the facts store only; LongMemEval-S measures the sessions store.
+- LongMemEval-S is not committed: its data file is about 280 MB. The eval runner downloads the cleaned release's S file at a pinned revision and checks it against a recorded hash before it runs. It is MIT-licensed.[17]
+- The rest of the eval set lives in this repository as data files, reviewed through pull requests like code. Each question records its project and the expected fact or chunk IDs. A question copied from a real miss is reworded so that it holds no deployment values (CONTRIBUTING.md section 3). It expects facts, not session chunks, because chunks are deleted after 90 days (section 4.3), so real misses measure the facts store only; LongMemEval-S measures the sessions store.
 - Reports give recall@5, MRR and an abstention score.
 
 ## 4. The memory store
@@ -258,7 +259,7 @@ The memory store is a Supabase project: Postgres with the `pgvector` extension. 
 3. **Nothing is hard-deleted by the agent.** A fact is superseded, with a pointer to its replacement, or retired, with a reason. The row stays.
 4. **Every vector records the build that made it.** A change of embedding model is a visible migration, not a silent mismatch.
 5. **Nothing unused.** No column, index or function argument exists without code that reads it.
-6. **Any machine can write a session chunk.** A chunk is identified by its source, session, message position and chunk number, never by an identifier from one machine's local store. Rows carry Hermes's `session_id`. Compressing a transcript keeps it while `compression.in_place` is `true`, the default, which every agent host keeps; with `false`, Hermes would give the conversation a new `session_id`, and one conversation's rows would sit under two.[14][15] Hermes also changes the `session_id` on purpose, when a session is resumed, branched, reset or started anew. It tells the provider through `on_session_switch`, or through `initialize()` when a resumed session starts in a new process; rows already written keep the id they had.[3][14] A chunk's message position must never repeat within a session. A position in Hermes's message list can repeat after an in-place compaction or a rewind with `/undo` or `/rollback`,[14] so what identifies a chunk's message, what happens to the chunks and facts of messages a rewind removed, and what happens to a branch's copied history, are open (#17).
+6. **Any machine can write a session chunk.** A chunk is identified by its source, session, the message's `message_uid` and its chunk number, never by a row id or a position. Rows carry Hermes's `session_id`. Compressing a transcript keeps it while `compression.in_place` is `true`, the default, which every agent host keeps; with `false`, Hermes would give the conversation a new `session_id`, and one conversation's rows would sit under two.[14][15] Hermes also changes the `session_id` on purpose, when a session is resumed, branched, reset or started anew. It tells the provider through `on_session_switch`, or through `initialize()` when a resumed session starts in a new process; rows already written keep the id they had.[3][14] A position in Hermes's message list can repeat after an in-place compaction or a rewind with `/undo` or `/rollback`,[14] while a message's `message_uid` is set when the message is first saved and kept by every later copy of it, through compaction, rewrites and a branch's copied history.[14] Still open (#17): where the memory provider reads each message's uid; what happens when one uid appears on more than one row or the text under it changes, to a message with no uid, to a branch's copied history, and to facts drawn from messages a rewind removed. A fact records only its turn's position, and Hermes's notice of a rewind names no removed message.[14]
 
 ### 4.2 Schema
 
@@ -303,14 +304,14 @@ create table memory.transcript_chunks (
   source           text not null,            -- the machine that wrote the session
   project          text,
   session_id       text not null,
-  message_seq      integer not null,
+  message_uid      text not null,           -- Hermes's id for the message, stable across compaction and rewinds
   chunk_no         smallint not null,
   body             text not null,
   embedding        halfvec(2560) not null,
   embedding_model  text not null,
   search_text      tsvector generated always as (to_tsvector('english', body)) stored,
   created_at       timestamptz not null default now(),
-  unique (source, session_id, message_seq, chunk_no)
+  unique (source, session_id, message_uid, chunk_no)
 );
 
 create index transcript_chunks_embedding_idx on memory.transcript_chunks using hnsw (embedding halfvec_cosine_ops);
@@ -457,9 +458,10 @@ Hermes's memory tool enforces the size limits of `MEMORY.md` and `USER.md` itsel
 - A lookup check proves that a lookup happened, not that it was the right one.
 - While a reply is held, tool progress and reasoning still show unless turned off, and commentary between tool calls is dropped.[4]
 - Any exemption, such as for subagents or system notifications, is written down. An exempt path produces unguarded claims.
-- A Hermes started by hand, outside the service, skips the startup check (section 5.5). Hermes logs a warning for a plugin that failed to load, but nothing in Hermes stops it or records `guard.not_loaded`.
-- The startup check runs in a process of its own before Hermes starts. It does not prove the load in the process that serves requests, where a plugin's load has its own deadline, plugins can be reloaded while Hermes runs, and Hermes's safe mode skips plugin discovery.[16] If the ordinary load fails there while the provider loads, the provider runs with no guards, and nothing reports it during the turn (#29).
-- Some of the build rests on Hermes behaviour that the developer guide does not describe: `kind: standalone` on a memory provider's directory and the two imports it causes (section 1), `register()` telling the two loads apart by its context, the startup check calling Hermes's plugin loader and its approval-mode and isolation readers directly, from a process of its own, and the write gate's checks for an approval bypass. Each is re-tested on every Hermes upgrade (OPERATIONS.md section 5).
+- A Hermes started by hand, outside the service, skips the startup check (section 5.5). Hermes logs a warning for a plugin that failed to load, and nothing in Hermes stops it; if the guards failed to load while the memory provider loaded, the provider records it (next item).
+- The startup check runs in a process of its own before Hermes starts. It does not prove the load in the process that serves requests, where a plugin's load has its own deadline and plugins can be reloaded while Hermes runs.[16] If the ordinary load fails there while the provider loads, the provider runs with no guards. The provider reports it: when it starts, it reads the `custom_build` entry in Hermes's plugin list (`list_plugins()`), and if that entry is missing, or shows an error or no registered hooks, it records `guard.not_loaded` and every recall it returns carries a notice that the guards are off. It checks once, when it starts, so a reload that fails later, while Hermes runs, is not caught.[16] A missing entry is what a gateway started by hand with `HERMES_SAFE_MODE` in its own environment shows: it skips plugin discovery, so the ordinary load never happens, while the memory provider still loads (#29).[16] A CLI or TUI launched with that variable, or with `--safe-mode`, does not take this path: it creates a safe-mode session (next item), and a gateway the CLI starts for itself drops the variable.[14]
+- Two kinds of gateway session run with no part of the build, and nothing records them. A session created in safe mode runs its turns in a worker process where Hermes starts no memory provider and runs no plugin hook. A session created with the profile's settings ignored runs on Hermes's code defaults, which do not select the build. How the build detects either is open (#23).[14]
+- Some of the build rests on Hermes behaviour that the developer guide does not describe: `kind: standalone` on a memory provider's directory and the two imports it causes (section 1), `register()` telling the two loads apart by its context, the startup check calling Hermes's plugin loader and its approval-mode and isolation readers directly, from a process of its own, the memory provider reading Hermes's plugin list to find whether the guards loaded, and the write gate's checks for an approval bypass. Each is re-tested on every Hermes upgrade (OPERATIONS.md section 5).
 - Hermes's approval gate approves without asking in four cases, and the write gate does not hold in them:[14]
   - yolo is on, by any route: the `--yolo` flag, the `HERMES_YOLO_MODE` variable, the `/yolo` command in a CLI or gateway session, or a one-shot run started with `hermes -z`;
   - `approvals.mode` is `off`;
@@ -489,13 +491,14 @@ Initial codes:
 | `judge.timeout`, `judge.error` | The judge model times out or errors |
 | `rerank.fallback` | The judge could not rerank, and the pool kept its fused order (degraded) |
 | `store.gate_error` | The judge failed during a write; the fact is queued |
-| `guard.crash`, `guard.not_loaded` | A guard raised during a turn (recorded instead of `unhandled`), or the startup check found the plugin, a guard's hooks or the provider not loaded |
+| `guard.crash`, `guard.not_loaded` | A guard raised during a turn (recorded instead of `unhandled`), or the startup check found the plugin, a guard's hooks or the provider not loaded, or the memory provider found, when it started, that the guards had not loaded |
 | `config.unsafe` | The startup check found a Hermes setting with a value the build does not support (section 5.5) |
 | `config.missing` | A setting the build needs is missing or invalid: the startup check fails, a scheduled job stops, and inside Hermes every turn is blocked (section 5.5) |
 | `redact.failed` | The redactor raised; the text is not stored or sent |
 | `memory.write_rejected` | Hermes refused a built-in memory write |
 | `events.write_failed` | An `events` row could not be written; logged locally at ERROR |
 | `job.failed`, `job.missed`, `job.no_output` | A scheduled job failed or the startup check crashed; a scheduled job did not run, or took input and produced nothing |
+| `host.missing` | An agent host on the job-health check's list wrote no heartbeat in the last 24 hours |
 | `unhandled` | Anything not in the catalog, outside a guard. Recorded with its traceback by the boundary wrapper or the job wrapper. |
 
 ### 6.2 Where a failure appears
@@ -511,7 +514,7 @@ A retry that succeeds is recorded as `degraded` with its retry count, so a flaky
 
 ### 6.3 Absence checks
 
-Some failures raise nothing. A daily check flags any scheduled job with no fresh success (`job.missed`), and any job that processed input but produced no output for more than one run (`job.no_output`). The daily report is itself checked by its absence: a day with no report is treated as a failure (OPERATIONS.md section 4). A failed startup check is recorded in `events`, so it reaches the daily report when the host can reach the store. A host that cannot reach the store, or does not run at all, has no absence check yet (#29).
+Some failures raise nothing. A daily check flags any scheduled job other than the heartbeat with no fresh success (`job.missed`), and any job that processed input but produced no output for more than one run (`job.no_output`). The daily report is itself checked by its absence: a day with no report is treated as a failure (OPERATIONS.md section 4). A failed startup check is recorded in `events`, so it reaches the daily report when the host can reach the store. A host that cannot reach the store, or does not run at all, is caught by its absence: a heartbeat job on every agent host writes one `host.heartbeat` event a day, and the job-health check, which has the list of agent hosts in its configuration, records `host.missing` for any host with no heartbeat in the last 24 hours.
 
 ## 7. Logging
 
@@ -546,6 +549,7 @@ The rules are L1–L5 in CONTRIBUTING.md.
 - [11] [Controlling text search (PostgreSQL documentation)](https://www.postgresql.org/docs/current/textsearch-controls.html)
 - [12] [Wu et al., LongMemEval, arXiv 2410.10813](https://arxiv.org/abs/2410.10813)
 - [13] [Row security policies (PostgreSQL documentation)](https://www.postgresql.org/docs/current/ddl-rowsecurity.html)
-- [14] Hermes v0.23.1 source: `hermes_logging.py`, `hermes_yaml.py`, `model_tools.py`, `agent/redact.py`, `agent/agent_init_memory_provider.py`, `agent/memory_provider.py`, `agent/memory_manager.py`, `agent/turn_context.py`, `gateway/session_finite.py`, `hermes_cli/cli_commands_session_tools.py`, `hermes_cli/cli_session_mixin.py`, `hermes_cli/config_defaults.py`, `hermes_cli/main.py`, `hermes_cli/plugins.py`, `hermes_cli/plugins_context.py`, `hermes_cli/plugins_dispatch.py`, `plugins/memory/__init__.py`, `tools/approval.py`, `tools/approval_context.py`, `tools/approval_yolo.py`
+- [14] Hermes v0.23.1 source: `hermes_logging.py`, `hermes_state_messages.py`, `hermes_state_mutation_transcript.py`, `hermes_yaml.py`, `model_tools.py`, `agent/agent_init.py`, `agent/agent_init_memory_provider.py`, `agent/managed_worker.py`, `agent/memory_manager.py`, `agent/memory_provider.py`, `agent/message_metadata.py`, `agent/redact.py`, `agent/safe_worker_policy.py`, `agent/turn_context.py`, `gateway/session_finite.py`, `gateway/session_local.py`, `gateway/session_managed_worker.py`, `hermes_cli/cli_commands_mixin.py`, `hermes_cli/cli_commands_session_tools.py`, `hermes_cli/cli_session_mixin.py`, `hermes_cli/config_defaults.py`, `hermes_cli/gateway_chat.py`, `hermes_cli/gateway_runtime_start.py`, `hermes_cli/main.py`, `hermes_cli/plugins.py`, `hermes_cli/plugins_context.py`, `hermes_cli/plugins_dispatch.py`, `tools/approval.py`, `tools/approval_context.py`, `tools/approval_yolo.py`, `plugins/memory/__init__.py`
 - [15] [Build a Hermes plugin (Hermes Agent developer guide)](https://hermes-agent.nousresearch.com/docs/developer-guide/plugins)
 - [16] Hermes v0.23.1 source, plugin loading: `agent/prompt_builder.py`, `hermes_cli/plugin_isolation.py`, `hermes_cli/plugins.py`, `hermes_cli/plugins_cmd_install.py`, `hermes_cli/plugins_content.py`, `hermes_cli/plugins_discovery.py`, `hermes_cli/plugins_ledger.py`, `hermes_cli/plugins_loader.py`, `hermes_cli/plugins_manifest.py`, `plugins/memory/__init__.py`, `plugins/plugin_storage.py`
+- [17] [xiaowu0162/longmemeval-cleaned (Hugging Face dataset card)](https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned)
