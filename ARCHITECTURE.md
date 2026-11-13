@@ -105,7 +105,7 @@ flowchart LR
 |---|---|---|
 | Built-in memory | Standing rules and preferences | Not searched. It is in every prompt.[6] |
 | Facts | Short facts and decisions, and one digest per long session | By meaning and by exact words, then reranked |
-| Sessions | What was said in past conversations, cut into chunks | By meaning and by exact words, on questions about past work |
+| Sessions | What was said in past conversations in the last 90 days, cut into chunks | By meaning and by exact words, on questions about past work |
 | References | Long write-ups and procedures | By meaning and by exact words |
 
 Facts go in the facts store. Long procedures and write-ups are references. What was said is in sessions. How to do a task is a skill.
@@ -217,7 +217,6 @@ Hermes caps the context that one `pre_llm_call` hook adds to a turn at 10,000 ch
 
 Still open, each tracked in its own issue:
 
-- How long session chunks are kept (#2).
 - Whether reference chunks move into the shared store (#3).
 - How the score floor applies when stores' scores are not on one scale (#4).
 - Whether stored rows are keyed by session id or conversation id (#17).
@@ -231,7 +230,7 @@ Still open, each tracked in its own issue:
 
 Every deployment states this in its own documentation:
 
-- Stored facts, digests, session chunks and events go to the memory database.
+- Stored facts, digests, session chunks and events go to the memory database, which keeps session chunks and events for 90 days (section 4.3).
 - Search candidates, candidate facts and support checks go to the judge model when it is hosted.
 - Each user message, with the end of the assistant's previous reply, goes to the judge model for routing (section 3.5) when it is hosted.
 - User messages and tool output go to the extraction model when it is hosted.
@@ -246,7 +245,7 @@ No ranking change ships without numbers from the eval set.
 
 - It starts from LongMemEval-S, which covers information extraction, multi-session reasoning, temporal reasoning, knowledge updates and abstention.[12]
 - It grows from real misses found in the `events` table: open-work questions answered badly, notes from the wrong project, recall that found nothing, and questions whose correct answer is "no note". A miss is promoted by copying it into the eval set; the `events` row itself is not kept.
-- The eval set lives in this repository as data files, reviewed through pull requests like code. Each question records its project and the expected fact or chunk IDs.
+- The eval set lives in this repository as data files, reviewed through pull requests like code. Each question records its project and the expected fact or chunk IDs. A question copied from a real miss also records the text of each chunk it expects, because session chunks are deleted after 90 days (section 4.3).
 - Reports give recall@5, MRR and an abstention score.
 
 ## 4. The memory store
@@ -317,6 +316,7 @@ create table memory.transcript_chunks (
 
 create index transcript_chunks_embedding_idx on memory.transcript_chunks using hnsw (embedding halfvec_cosine_ops);
 create index transcript_chunks_search_text_idx on memory.transcript_chunks using gin (search_text);
+create index transcript_chunks_created_at_idx on memory.transcript_chunks (created_at);   -- the retention job deletes by age
 
 create table memory.events (
   id          bigint generated always as identity primary key,
@@ -356,7 +356,7 @@ Two SQL functions do the searching: `match_facts` and `match_transcript_chunks`.
 - **Row Level Security is on for every table, as a backstop.** With RLS on and no policy, Postgres denies every row to a role that does not own the table, so each machine's role gets explicit select, insert and update policies and no delete policy.[13]
 - **Schema changes are migration files in this repository**, reviewed through a pull request. Migrations only move forward; an applied migration is never edited.
 - **Data this repository did not create is not ours to change** (CONTRIBUTING.md rule C7). An export exists before any migration touches data.
-- **Retention.** `events` rows are deleted after 90 days by a scheduled job running as the maintenance role (OPERATIONS.md section 1). Misses worth keeping are copied into the eval set before then (section 3.8).
+- **Retention.** `events` rows and session chunks are deleted after 90 days by a scheduled job running as the maintenance role (OPERATIONS.md section 1). Facts and digests are kept, so a question about something said longer ago is answered from them. Misses worth keeping are copied into the eval set before then (section 3.8).
 
 ## 5. Guards
 
