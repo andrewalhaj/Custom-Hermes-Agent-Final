@@ -143,7 +143,7 @@ For the facts store:
 1. Embed the query.
 2. Fetch a candidate pool larger than the number of results wanted, from live rows in the current project. A session with no project searches live rows in every project.
 3. Fuse the two ranked lists.
-4. Rerank the pool with the judge model, under the judge deadline (section 3.6). If the judge errors or misses that deadline, the pool keeps its fused order and the result is recorded as degraded (`rerank.fallback`), never as a silent success. No local reranker is kept as a fallback. A cross-encoder would fit the deadline for a pool of short facts on an agent host with no GPU (about 2 seconds for 30 facts, #15), but it would put a second model and its runtime on every agent host for the rare turn when the judge is down. Whether a cross-encoder should replace the judge as the reranker is a question for the eval set.
+4. Rerank the pool with the judge model, under the judge deadline (section 3.6). If the judge errors or misses that deadline, the pool keeps its fused order and the result is recorded as degraded (`rerank.fallback`), never as a silent success. No local reranker is kept as a fallback. A cross-encoder would fit the recall deadline for a pool of short facts on an agent host with no GPU (about 2 seconds for 30 facts, #15), but it would put a second model and its runtime on every agent host only for the turns when the judge is down. Whether a cross-encoder should replace the judge as the reranker is a question for the eval set.
 5. Blend recency back in. A rerank score ignores age, so the final score adds a recency term from `last_verified_at`, or `created_at` for a fact never checked.[9] Its weight is set by the eval set.
 6. Return the top results. Each result records which searches found it and which stage ranked it.
 
@@ -157,9 +157,9 @@ For the facts store:
 2. **Two searches run, one after the other** (section 2):
    - **The action query, first.** In `pre_llm_call`, one request, the routing request, goes to the judge model with the user's message and the end of the assistant's previous reply, which Hermes passes to the hook in the conversation history.[14] The judge answers two typed questions, each with a probability: which kind of work from a fixed action list the message asks for, and whether it asks for work at all. The facts store is searched with the picked action's description, and the results are added to the turn through the hook's own context.
      - The judge always returns a pick, whatever the message. The action query therefore runs unless "asks for work at all" is a clear no (section 3.6). The top pick is used whatever its probability; whether a low one should count as no pick is a question for the eval set (#26).
-     - A skipped action query is recorded in `events`, so it cannot be mistaken for one that ran and found nothing.
+     - A skipped action query is recorded in `events` under its own event name, so it cannot be mistaken for one that ran and found nothing, which is recorded as `empty`.
      - The action list and the wording of the two questions are one configuration file in this repository. Changing either is a pull request with eval-set numbers (CONTRIBUTING.md rule C8).
-     - The routing request runs under the judge deadline, and the action query as a whole under its own deadline, well inside Hermes's callback timeout (section 3.6). If the judge errors or misses its deadline, the action query is skipped for that turn, the failure is recorded (`judge.error` or `judge.timeout`), and the turn carries a note with the code. If the search that follows misses the action query's deadline, that is `recall.timeout`.
+     - The routing request runs under the judge deadline, and the action query as a whole under its own deadline, well inside Hermes's callback timeout (section 3.6). If the routing request errors or misses its deadline, the action query is skipped for that turn, the failure is recorded (`judge.error` or `judge.timeout`), and the turn carries a note with the code. If the search that follows misses the action query's deadline, that is `recall.timeout`.
      - A model that writes the action as free text is not used. In a benchmark on an agent host with no GPU, a local one took 4.5 to 8 seconds for each message. The judge answered in about 0.2 seconds, and its pick was among the answers the test's labels accepted on 42 of 44 messages (#15). Whether a search by the picked action finds the same facts as a search by a freely written one has not been measured; the eval set settles it before the action query is relied on (#26).
    - **The message query, second.** `prefetch()` searches the user's words across the stores, under its own deadline below Hermes's 8-second limit.
 3. **Questions about past work widen the search.** They fetch more results and add past sessions.
@@ -189,9 +189,9 @@ These are configuration values. Change one through an issue, with eval-set numbe
 | Score floor | 0.10 |
 | Recall deadline (`prefetch()`) | 6 seconds |
 | Action-query deadline (`pre_llm_call`) | 6 seconds |
-| Judge deadline (one rerank or routing request) | 2 seconds. A starting value: the slowest routing request in the test for #15 took 0.3 seconds. |
+| Judge deadline (one rerank or routing request) | 2 seconds. A starting value: the slowest routing request in the test for #15 took 0.3 seconds, and a rerank request has not been timed. |
 | Previous reply sent with the routing request | Its last 500 characters, as in the test for #15 |
-| "Asks for work at all" (section 3.5) | A probability under 0.3 is a clear no, and the action query is skipped. Anything higher runs it. A starting value from the judge model's own guidance; the eval set confirms or changes it (#26). |
+| "Asks for work at all" (section 3.5) | A probability under 0.3 is a clear no, and the action query is skipped. Anything higher runs it. A starting value, the one used in the test for #15; the eval set confirms or changes it (#26). |
 | Recency weight | Set by the eval set |
 | Recalled-note budget | Set by the eval set |
 
