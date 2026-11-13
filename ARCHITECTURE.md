@@ -182,7 +182,7 @@ For the facts store:
    - **The message query, second.** `prefetch()` searches the user's words across the stores, under its own deadline below Hermes's 8-second limit.
 3. **Questions about past work widen the search.** They fetch more results and add past sessions.
 4. **"What is left to do?" is not a similarity search.** A question about open work returns the newest digests' open items for the current project, newest first. Such a question has no topic words to match, and its answer depends on recency.
-5. **Slot rules keep the mix fair.** The merge applies a score floor, a cap on digests and reserved places for references.
+5. **Slot rules keep the mix fair.** The merge drops reranked facts under the score floor, then applies a cap on digests, reserved places for references and the per-message cut. The floor applies only where the score is a probability: the judge's rerank score for a fact. Results ranked by fusion alone, which are session chunks, references, and facts whose rerank failed, have no floor and are cut by rank only.
 6. **Results are attached to the message** as recalled notes, labelled as notes and not as instructions. Each note shows its origin, its basis, the date it was stored and, when checked since, the date it was last verified.
 7. **The agent can also search on demand** with the memory search tool.
 
@@ -204,7 +204,7 @@ These are configuration values. Change one through an issue, with eval-set numbe
 | Ask the judge | Cosine similarity from 0.80 up to 0.92, or 0.92 and higher for long texts. The judge returns two probabilities, "same subject" and "the new fact supersedes the old"; both must be 0.75 or higher. |
 | Judge gate | Drops at a drop score of 0.70 or higher |
 | Results per message | 5; 8 on a question about past work; 3 for the action query |
-| Score floor | 0.10 |
+| Score floor | 0.30, on facts the judge reranked, where the score is the judge's probability that the fact helps answer the message: under 0.3 reads as no, as in the "Asks for work at all" row. No floor on results ranked by fusion alone. A starting value; the eval set confirms or changes it. |
 | Recall deadline (`prefetch()`) | 6 seconds |
 | Action-query deadline (`pre_llm_call`) | 6 seconds |
 | Judge deadline (one rerank or routing request) | 2 seconds. A starting value: the slowest routing request in the test for #15 took 0.3 seconds, and a rerank request has not been timed. |
@@ -218,7 +218,6 @@ Hermes caps the context that one `pre_llm_call` hook adds to a turn at 10,000 ch
 Still open, each tracked in its own issue:
 
 - Whether reference chunks move into the shared store (#3).
-- How the score floor applies when stores' scores are not on one scale (#4).
 - How the service finds the Python that Hermes runs on, the install and update procedure with real packages, and an absence check for an agent host (#29).
 - Which hook the fact gate and the recall gate count a lookup from (#22).
 - Whether Hermes's safe-worker mode leaves the guards' hooks unfired (#23).
