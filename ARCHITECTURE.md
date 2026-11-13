@@ -34,7 +34,17 @@ Memory is shared. Several machines run the agent against one memory store, so ev
 - **Prefetch blocks the turn.** Hermes waits for `prefetch()` for up to 8 seconds, then treats a timeout or an error as "no notes" and carries on. The provider therefore enforces its own deadline below 8 seconds. On failure it returns a "recall failed" note with its failure code instead of raising, because that is the only way the failure reaches the turn.
 - **There is no input for a second query.** `prefetch()` receives only the user's message. The action query (section 3.5) therefore runs from a `pre_llm_call` plugin. Hermes runs `pre_llm_call` before prefetch, bounds it with its own callback timeout (`plugins.hook_callback_timeout`, 30 seconds by default), and skips prefetch entirely for a turn that `pre_llm_call` blocks.[4]
 - **The project key comes from `initialize()`.** Hermes passes `cwd`, the session's workspace. The provider resolves it to the repository and uses a key that is the same on every machine: the normalised URL of the repository's `origin` remote, or a project ID set in the repository's Hermes configuration when there is no remote. An absolute path is never used, because it differs between machines. A workspace that is not a repository has no project. The provider never calls `os.getcwd()`.
-- **Every entry point goes through one boundary wrapper.** Hermes contains errors from hooks and providers, often silently (section 5.5). Each function Hermes calls is wrapped by a single shared wrapper in the failure module. On an unexpected exception it records `unhandled` with the traceback (section 6), then does what that entry point requires: re-raise from `pre_tool_call` and `transform_llm_output`, so Hermes fails closed; return a block from `pre_llm_call`; return a "recall failed" note from `prefetch()`. This wrapper is the only code allowed to catch everything (CONTRIBUTING.md rule C2).
+- **Every entry point goes through one boundary wrapper.** Hermes contains errors from hooks and providers, often silently (section 5.5). Each function Hermes calls is wrapped by a single shared wrapper in the failure module. On an unexpected exception it records the failure with its traceback (section 6), then does what that entry point requires:
+
+  | Entry point | Recorded as | Then |
+  |---|---|---|
+  | A guard on `pre_tool_call` or `transform_llm_output` | `guard.crash` | Re-raises, so Hermes blocks the call or withholds the reply |
+  | A guard on `pre_llm_call` | `guard.crash` | Returns a block that names the failure |
+  | The action query on `pre_llm_call` | `unhandled` | Returns a "recall failed" note, so the turn and the message query go ahead |
+  | `prefetch()` | `unhandled` | Returns a "recall failed" note |
+  | Any other provider method | `unhandled` | Re-raises |
+
+  This wrapper, and the job wrapper (section 6.1), are the only code allowed to catch everything (CONTRIBUTING.md rule C2).
 - **Threads.** Background work uses Hermes's `spawn_context_thread`, never a bare `threading.Thread`, which would write into the wrong profile's store. `register(ctx)` builds a new provider instance on each load.
 - **Built-in memory writes are mirrored.** `on_memory_write` reports every committed write to `MEMORY.md` or `USER.md`. The provider stores them as deliberate facts.
 - **Session end.** `on_session_end` fires at real session boundaries only. The digest is written there.
@@ -48,8 +58,8 @@ The model keeps nothing between turns except the built-in memory files. Every me
 flowchart LR
   subgraph W["Write path: what gets remembered"]
     A["Stored on purpose"] --> R1["Redact"] --> F1["Pattern filter"]
-    B["Extracted from user messages and tool results"] --> R2["Redact"] --> F2["Judge gate, then support check"]
-    C["Session digest, at session end"] --> R3["Redact"] --> F3["Judge gate"]
+    B["User messages and tool results"] --> R2["Redact"] --> X["Extraction model"] --> F2["Judge gate, then support check"]
+    C["Session transcript, at session end"] --> R3["Redact"] --> D["Digest model"] --> F3["Judge gate"]
     F1 --> S["Store: embed, deduplicate"]
     F2 --> S
     F3 --> S
@@ -96,9 +106,9 @@ The sessions store is kept only while the eval set (section 3.8) shows it adds r
 
 1. **Three entrances.**
    - The agent stores a fact on purpose.
-   - Extraction takes facts from the user's messages and from tool results (command output, file contents, documentation lookups). It never reads the agent's own replies, because a wrong reply would otherwise be recalled later as a known fact.
-   - At `on_session_end`, the provider writes one digest for each long session (section 3.6) that does not have one yet.
-2. **Redaction first.** Every entrance redacts secrets before the text goes anywhere else, including a judge model (CONTRIBUTING.md rule L4). If redaction fails, nothing is stored or sent (`redact.failed`).
+   - An extraction model reads the user's messages and tool results (command output, file contents, documentation lookups) and proposes facts. It never reads the agent's own replies, because a wrong reply would otherwise be recalled later as a known fact.
+   - At `on_session_end`, a digest model writes one digest for each long session (section 3.6) that does not have one yet.
+2. **Redaction before any model sees the text.** The message, the tool output and the session transcript are redacted before they reach the extraction, digest or judge model, and before anything is stored (CONTRIBUTING.md rule L4). If redaction fails, nothing is sent or stored (`redact.failed`).
 3. **A filter on each.**
    - A fact stored on purpose passes a pattern filter: it must meet the minimum length and must not match the narration patterns in the write-path configuration file.
    - Extracted facts and digests go to a judge model, which drops the ones not worth keeping.
@@ -183,7 +193,8 @@ Every deployment states this in its own documentation:
 
 - Stored facts, digests, session chunks and events go to the memory database.
 - Search candidates, candidate facts and support checks go to the judge model when it is hosted.
-- Session transcripts go to the model that writes digests.
+- User messages and tool output go to the extraction model when it is hosted.
+- Session transcripts go to the digest model when it is hosted.
 - The daily failure report goes to the operators' channel.
 
 Secrets are redacted before anything is stored or sent.
@@ -381,7 +392,7 @@ Hermes's memory tool enforces the size limits of `MEMORY.md` and `USER.md` itsel
   | `transform_tool_result` | The error is logged and the callback is skipped (fails open) |
 
   Hermes logs the first such error at WARNING and identical repeats at DEBUG, so a guard that keeps failing goes quiet in Hermes's own log.
-- **Every enforcing guard fails closed, and every failure is recorded.** Each guard's entry point goes through the boundary wrapper (section 2). It records the failure as `guard.crash` with the traceback, then re-raises from `pre_tool_call` and `transform_llm_output`, which Hermes turns into a blocked call or a withheld reply, or returns a block from `pre_llm_call`, as Nous recommends for policy hooks.[4] Recording happens in the wrapper on every occurrence, so it does not depend on Hermes logging a repeated error only once.
+- **Every enforcing guard fails closed, and every failure is recorded.** Each guard's entry point goes through the boundary wrapper (section 2), which records `guard.crash` with the traceback and then re-raises or blocks as the table in section 2 shows. Returning a block from `pre_llm_call` is what Nous recommends for policy hooks.[4] Recording happens in the wrapper on every occurrence, so it does not depend on Hermes logging a repeated error only once.
 - **`transform_tool_result` is never used to enforce.** Hermes skips a callback that raises there, so a guard on it fails open. It is used only to annotate a tool result, and its failures are recorded by the wrapper like any other.
 
 ### 5.6 Known limits
@@ -397,7 +408,11 @@ Every point of failure has a name, and a failure, an empty result and a fallback
 
 ### 6.1 The failure catalog
 
-The catalog is one module in the package. It lists every failure code, its severity and whether it is shown in the turn. A test fails the build if any handler or fallback emits a code that is not in it, or emits none. Initial codes:
+The catalog is one module in the package. It lists every failure code, its severity and whether it is shown in the turn. A test fails the build if any handler or fallback emits a code that is not in it, or emits none.
+
+Two wrappers in the same module record what no handler caught. The boundary wrapper covers every entry point Hermes calls (section 2). The job wrapper covers every scheduled job: on an unexpected exception it records `unhandled` and `job.failed` with the traceback, then exits non-zero, so Hermes cron also sends its own error alert (OPERATIONS.md section 4). These two wrappers are the only code allowed to catch everything.
+
+Initial codes:
 
 | Code | Raised when |
 |---|---|
@@ -408,12 +423,12 @@ The catalog is one module in the package. It lists every failure code, its sever
 | `judge.timeout`, `judge.error` | The judge model times out or errors |
 | `rerank.fallback` | The reranker fell back to the cross-encoder or to plain cosine (degraded) |
 | `store.gate_error` | The judge failed during a write; the fact is queued |
-| `guard.crash`, `guard.not_loaded` | A guard raised during a turn, or did not load at startup |
+| `guard.crash`, `guard.not_loaded` | A guard raised during a turn (recorded instead of `unhandled`), or did not load at startup |
 | `redact.failed` | The redactor raised; the text is not stored or sent |
 | `memory.write_rejected` | Hermes refused a built-in memory write |
 | `events.write_failed` | An `events` row could not be written; logged locally at ERROR |
 | `job.failed`, `job.missed`, `job.no_output` | A scheduled job failed, did not run, or took input and produced nothing |
-| `unhandled` | Anything not in the catalog. The boundary wrapper (section 2) records it with its traceback; a standalone script or job crashes. |
+| `unhandled` | Anything not in the catalog, outside a guard. Recorded with its traceback by the boundary wrapper or the job wrapper. |
 
 ### 6.2 Where a failure appears
 
