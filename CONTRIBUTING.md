@@ -44,19 +44,19 @@ Three rules follow from this:
 
 ## 2. What this project is for
 
-The goal is an agent whose answers can be trusted without re-checking them. That breaks down into four properties.
+The goal is an agent whose answers can be relied on without re-checking them. It is pursued through four design goals; the limits of each are stated in ARCHITECTURE.md.
 
-1. **It never forgets.** What was said, decided or learned is stored outside the model and searched on every message, so the agent answers from the record and not from what happens to be in its context.
-2. **It does not state what it has not verified.** Every factual statement is backed by something the agent looked up in that turn: a document, a file, a command result, or a stored fact with its date. When it cannot verify something, it says so.
-3. **It earns trust by being right, measurably.** Accuracy is enforced by code and measured by an eval set. It is not requested in a prompt and assumed.
-4. **It fails loudly and says how.** Every point of failure has a name. A failure, an empty result and a fallback can always be told apart, and none of them passes silently.
+1. **Remember.** What was said, decided or learned is stored outside the model and searched on every message, so the agent answers from the record and not from what happens to be in its context.
+2. **Verify before stating.** A factual statement is backed by something the agent looked up in that turn: a document, a file, a command result, or a stored fact with its date. When it cannot verify something, it says so.
+3. **Be measurably right.** Accuracy is enforced by code and measured by an eval set. It is not requested in a prompt and assumed.
+4. **Fail loudly and say how.** Every point of failure has a name. A failure, an empty result and a fallback can always be told apart, and none of them passes silently.
 
 | Property | What delivers it | Where it is described |
 |---|---|---|
-| Never forgets | A shared memory store, searched on every message | ARCHITECTURE.md sections 2–4 |
-| Verified before stated | Guards that withhold a reply until the required lookup has run | ARCHITECTURE.md section 5 |
-| Right, measurably | Tests, the retrieval eval set, and the coding standards | ARCHITECTURE.md section 3.8; sections 4–5 here |
-| Fails loudly | Failure codes, the `events` table and the daily failure report | ARCHITECTURE.md section 6; sections 6–7 here |
+| Remember | A shared memory store, searched on every message | ARCHITECTURE.md sections 2–4 |
+| Verify before stating | Guards that withhold a reply until the required lookup has run | ARCHITECTURE.md section 5 |
+| Be measurably right | Tests, the retrieval eval set, and the coding standards | ARCHITECTURE.md section 3.8; sections 4–5 here |
+| Fail loudly | Failure codes, the `events` table and the daily failure report | ARCHITECTURE.md section 6; sections 6–7 here |
 
 The same standard applies to contributions. A change that makes the agent sound more certain without making it more verifiable is rejected.
 
@@ -70,7 +70,7 @@ The same standard applies to contributions. A change that makes the agent sound 
 
 Conventions used in all three:
 
-- **Placeholders.** Values in angle brackets, such as `<project-ref>` or `<job-host>`, are set per deployment outside the repository. OPERATIONS.md section 1 lists them. Real hostnames, project references, chat IDs and credentials never appear in the repository.
+- **Placeholders.** Values in angle brackets are filled in by the reader. Deployment values, such as `<project-ref>` or `<job-host>`, are set outside the repository and listed in OPERATIONS.md section 1. Workflow placeholders, such as `<branch>` or `<n>`, are defined where they are used. Real hostnames, project references, chat IDs and credentials never appear in the repository.
 - **Hermes facts are versioned.** A statement about how Hermes behaves names the Hermes version it was checked against. Re-check it before relying on it with a newer version.
 
 ## 4. Contribution workflow
@@ -145,7 +145,7 @@ Keep the issue number. The pull request needs it for `Closes #<n>`.
 
 ### 4.4 Branch and commits
 
-Contributors with write access branch in this repository. Everyone else forks it and branches in the fork.
+Contributors with write access branch in this repository. Everyone else forks it and branches in the fork. In a fork, add this repository as a remote named `upstream` (`git remote add upstream https://github.com/<owner>/<repo>.git`) and read `upstream` wherever the commands in this section and in 4.6–4.7 say `origin` for `main`; push branches to `origin`, the fork.
 
 ```bash
 git fetch --prune
@@ -257,12 +257,12 @@ gh api repos/<owner>/<repo>/pulls/<n>/comments      # comments on lines
 ### 5.1 Rules
 
 - **C1. Catch the error you expect, by name.** Before writing a handler, look up what the call raises, in the library's documentation or its source, and name that type. The `try` covers only the lines that can raise it. Imports, formatting and plain data handling stay outside.
-- **C2. No catch-everything blocks.** Never write `except Exception`, `except BaseException` or a bare `except:`. Catch by name, or let it crash. For cleanup, use `try`/`finally`. Never silence the lint for this rule with `# noqa`; CI fails on it (section 8). The one exception is a guard on `pre_llm_call` (ARCHITECTURE.md section 5.5): it catches everything, logs with `logger.exception`, and returns a block. Ruff accepts a handler that logs the traceback, so it needs no `# noqa`.[11]
+- **C2. No catch-everything blocks.** Never write `except Exception`, `except BaseException` or a bare `except:`. Catch by name, or let it crash. For cleanup, use `try`/`finally`. Never silence the lint for this rule, by `noqa` comment or by configuration; CI fails on either (section 8). The one exception is the shared boundary wrapper that every Hermes entry point goes through (ARCHITECTURE.md section 2): it catches everything, records the failure with its traceback, and then re-raises, blocks or returns a failure note as its entry point requires. It logs with `logger.exception`, which ruff accepts without a `noqa`.[11] No other code catches everything.
 - **C3. A failure never looks like an empty result.** Do not return `[]`, `None`, `0` or "skipped" for a failure when the same value also means "nothing found". Raise, or return a failure the caller has to check. A missing setting is a startup error, never a silent default.
 - **C4. Let it crash.** Code fails loudly by default. Add handling that keeps code running only when the issue asks for it and gives the reason, and record the failure even then (section 6). "Must not crash" never means "must not show the failure".
 - **C5. No bare "never raises", "fail open" or "best-effort".** In an issue, a brief, a docstring or a comment, follow each of those phrases with which failures it covers, the failure code that records them, and how the caller tells a failure from an empty result. A spec that says only "must never raise" invites a silent catch-everything handler.
-- **C6. Prove every guard and every check.** It counts as working only after it has been seen to block its own failing case. A check must fail when its tool is missing or broken. A guard blocks or stays silent; it does not warn.
-- **C7. Existing data is not ours to change.** In a database that already holds data, create new tables under new names. Never alter, rename or drop a table or function that is already there. Do not connect with a credential that can delete until a maintainer confirms an export exists.
+- **C6. Prove every guard and every check.** It counts as working only after it has been seen to block its own failing case. A check must fail when its tool is missing or broken. A guard's enforcement step blocks or withholds; it never only warns. Reminders and `log` mode come before enforcement, not instead of it.
+- **C7. Data this repository did not create is not ours to change.** In a database that holds tables, functions or data that this repository's migrations did not create, create new objects under new names, and never alter, rename or drop the existing ones. Objects this repository created change only through new forward migrations. Do not connect with a credential that can delete until a maintainer confirms an export exists.
 - **C8. Retrieval changes come with numbers.** A change to chunking, embedding, fusion, reranking, recall delivery or any default in ARCHITECTURE.md section 3.6 reports the eval-set results before and after (ARCHITECTURE.md section 3.8).
 - **C9. Code taken from elsewhere meets these rules before it merges.** Code copied or ported from another project, an earlier version of this build, or a generated draft has every handler narrowed to a named error with a failure code, or removed, in the same pull request.
 
@@ -321,7 +321,7 @@ The lint fails a pull request on:
 - `except Exception` or `except BaseException` (`BLE001`).[11]
 - `try`-`except`-`pass` on a catch-everything block (`S110`). By default it flags only `Exception`, `BaseException` and a bare `except:`.[13][14]
 - A bare `except:` (`E722`).
-- Any `# noqa` for `BLE001`, `S110` or `E722` (a separate CI step, section 8.2).
+- Any suppression of `BLE001`, `S110` or `E722`: a `noqa` comment, a file-level `ruff: noqa` or `flake8: noqa`, or an ignore entry in `pyproject.toml` (separate CI steps, section 8.2).
 
 The reviewer checks what the lint cannot:
 
@@ -337,18 +337,18 @@ Every point of failure is loud and distinguishable. The mechanism, including the
 
 - **F1. Every failure has a named code from the catalog.** A handler or fallback emits one. There is no bare "error".
 - **F2. Failed, empty and degraded are different results.** A failure is never returned as an empty result, and a fallback or a retry that succeeded is recorded as degraded, never as plain success.
-- **F3. Every occurrence is logged and recorded.** Each one is logged at WARNING or above and written to the `events` table. Code does not rely on Hermes logging a repeated error only once.
+- **F3. Every occurrence is logged and recorded.** Each one is logged at WARNING or above and written to the `events` table, through the one recording helper in the failure module. Errors that reach a Hermes entry point are recorded by the boundary wrapper (ARCHITECTURE.md section 2), so code never relies on Hermes, which logs a repeated error only once.
 - **F4. A failure that changed the answer is shown in the turn.** Every failure, shown or not, appears in the daily failure report.
 - **F5. Recording a failure must not lose it.** If the `events` row cannot be written, the failure is logged locally at ERROR with `events.write_failed`.
-- **F6. The catalog is enforced.** A test fails the build if a handler or fallback emits no code or a code not in the catalog. A failure that is not in the catalog is a bug: the process crashes and records it as `unhandled`.
+- **F6. The catalog is enforced.** A test fails the build if a handler or fallback emits no code or a code not in the catalog. A failure that is not in the catalog is a bug. Inside Hermes, the boundary wrapper records it as `unhandled` with its traceback; a standalone script or job crashes and its runner records it.
 
 ## 7. Logging rules
 
 Hermes owns logging for code that runs inside it: the log files, rotation and redaction (ARCHITECTURE.md section 7).
 
-- **L1. One logger per module, through Hermes.** Use `logging.getLogger(__name__)`. Never add handlers or call `logging.basicConfig()`; a plugin that does bypasses Hermes's redaction. Pass values as `%`-style arguments, not f-strings, so formatting is deferred.[15]
+- **L1. One logger per module, through Hermes.** Use `logging.getLogger(__name__)`. Never add handlers or call `logging.basicConfig()`; a plugin that does bypasses Hermes's redaction. For free-text lines, pass values as `%`-style arguments, not f-strings, so formatting is deferred.[15]
 - **L2. Use Hermes's log files and rotation.** Warnings and above also reach `errors.log`, so every failure is logged at WARNING or above (F3).
-- **L3. One event per line.** The message is a single JSON object with `event`, `source` (the machine), `session_id`, `turn`, `result` and `reason`, plus IDs, counts and scores. Where a field has an OpenTelemetry GenAI name (`gen_ai.operation.name`, `gen_ai.tool.name`, `error.type`), use it.[16]
+- **L3. Events go through one helper.** Decisions and failures are logged by the recording helper in the failure module, never by hand. It writes one line whose message is a single JSON object, and the matching `events` row, with the same fields: `code`, `source` (the machine), `project`, `session_id`, `turn`, `result` and `reason`, plus IDs, counts and scores. Extra fields that have an OpenTelemetry GenAI name (`gen_ai.operation.name`, `gen_ai.tool.name`, `error.type`) use it.[16]
 - **L4. Redact before every write, not only before logging.** Every value written to the memory store or sent to a judge model passes through Hermes's redactor first. The build registers patterns for Supabase API keys (`sb_secret_`, `sb_publishable_`), which Hermes does not cover. A test proves it: a fake key sent through every write path never appears in a log line, a stored row or an outgoing request.[17]
 - **L5. No content in logs.** Prompts, replies, judge input, and fact or chunk text never appear in a log line. Log IDs, counts, scores and hashes. Untrusted strings appear only as truncated values inside the JSON object.[16][17]
 
@@ -359,7 +359,7 @@ A rule in this file does not block anything. These guards do. Each is proven wit
 | Guard | Rules | Where it lives | The failing case that proves it |
 |---|---|---|---|
 | Lint over the whole repository: ruff's default rules plus `BLE001` and `S110` | C1, C2 | `pyproject.toml`, the CI workflow | A pull request that adds `except Exception: pass` anywhere fails |
-| `noqa` ban for `BLE001`, `S110`, `E722` | C2 | The CI workflow | A pull request that adds `# noqa: BLE001` fails |
+| Suppression ban for `BLE001`, `S110`, `E722` | C2 | The CI workflow | A pull request that adds `# noqa: BLE001`, a bare `# noqa`, a file-level `# ruff: noqa`, or an ignore entry for these rules in `pyproject.toml` fails |
 | Tests in CI | W3 | The CI workflow | A pull request with a failing test fails |
 | Failure-catalog test | F1, F6 | The test suite | A handler that emits no code, or an unknown one, fails the build |
 | Secret-leak test | L4, W13 | The test suite | A fake key that reaches a log line, a stored row or an outgoing request fails the build |
@@ -406,14 +406,28 @@ jobs:
         with: { python-version: "3.12", cache: pip }
       - run: pip install -e ".[dev]"
       - run: ruff check .
-      - name: no noqa for the error-handling rules
+      - name: no noqa that can silence the error-handling rules
         shell: bash
         run: |
+          # Matches a bare noqa, a noqa naming one of these rules, and file-level ruff/flake8 noqa, in any case.
           set +e
-          git grep -n -E 'noqa:[^#]*(BLE001|S110|E722)' -- '*.py'
+          git grep -n -i -E '#[[:space:]]*noqa([[:space:]]*$|[[:space:]]*[^:[:space:]]|:[^#]*(BLE001|S110|E722))|(ruff|flake8):[[:space:]]*noqa' -- '*.py'
           rc=$?
           set -e
           [ "$rc" -eq 1 ]   # 1 = no match (pass); 0 = a match was found; anything else = git failed
+      - name: no configuration that ignores the error-handling rules
+        shell: bash
+        run: |
+          python - <<'PY'
+          import sys, tomllib
+          lint = tomllib.load(open("pyproject.toml", "rb")).get("tool", {}).get("ruff", {}).get("lint", {})
+          rules = ("BLE001", "S110", "E722")
+          def hits(codes):   # a code or prefix that covers one of the rules, such as "E", "BLE" or "ALL"
+              return [c for c in codes if c == "ALL" or any(r.startswith(c) for r in rules)]
+          bad = hits(lint.get("ignore", []) + lint.get("extend-ignore", []))
+          bad += [f"{path}: {c}" for path, codes in lint.get("per-file-ignores", {}).items() for c in hits(codes)]
+          sys.exit(f"ruff is told to ignore the error-handling rules: {bad}" if bad else 0)
+          PY
       - run: python -m pytest -q
 ```
 
@@ -425,9 +439,9 @@ extend-select = ["BLE001", "S110"]
 ```
 
 - `ruff check .` covers every Python file in the repository, tests included.
-- Pin ruff to one version in the project's dev dependencies, so local runs and CI agree. Recent ruff releases already include these rules by default; `extend-select` keeps them on whatever the version.
+- Pin ruff to one version in the project's dev dependencies, so local runs and CI agree.
 - The job name is what appears as the status check to require.
-- Give any step that pipes a tool into a count or a test `shell: bash`, and never end it with `|| true`. Without `shell: bash` a failed command in the middle of a pipe does not stop the step, so a tool that did not start reads as a count of 0 and the check passes.[21] A check must tell "found nothing" from "the tool failed", as the `noqa` step above does.
+- Give any step that pipes a tool into a count or a test `shell: bash`, and never end it with `|| true`. Without `shell: bash` a failed command in the middle of a pipe does not stop the step, so a tool that did not start reads as a count of 0 and the check passes.[21] A check must tell "found nothing" from "the tool failed", as the `noqa` step above does. Prove each step with its failing case before relying on it (C6).
 - Add a secret scan beside the tests.
 - Add a dependency audit when there are dependencies: `pip-audit` with no arguments.[22]
 
