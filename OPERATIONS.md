@@ -18,7 +18,7 @@ These placeholders appear in the documentation. Each deployment sets them in its
 | `<judge-model>` | The hosted model used as judge, as reranker and to route each message. It answers typed questions (a pick from a list, a yes or no) with probabilities and does not need to generate text. It is set by version, never by an alias that can move to a newer model, because the thresholds depend on its answers. |
 | `<extraction-model>` | The model that proposes facts from user messages and tool results |
 | `<digest-model>` | The model that writes session digests |
-| `<maintenance-role>` | The login role the retention job runs as. It joins the group role `memory_maintenance` and is created like a machine's role (section 3). |
+| `<maintenance-role>` | The login role the retention job runs as. It is created like a machine's role (section 3), but joins the group role `memory_maintenance`: `create role <maintenance-role> login password '<password>' in role memory_maintenance;`. |
 | `<operators-channel>` | Where the daily failure report is sent |
 
 ## 2. Where it runs
@@ -103,7 +103,7 @@ Before upgrading:
 
 ## 7. Applying a migration
 
-The files in `migrations/` are applied to `<project-ref>` in file-name order, each once, after its pull request merges. A maintainer applies each one, or approves applying it, through the Supabase Management API's `POST /v1/projects/<project-ref>/database/migrations`, with the file's text as the query and its file name as the name. Supabase runs it and records it in the project's migration history, `supabase_migrations.schema_migrations`.[4] Read the history back afterwards: the newest entry is the file just applied. The tests apply every file to an empty Postgres 17, so a file that does not apply cleanly fails CI before it reaches the project.
+The files in `migrations/` are applied to `<project-ref>` in file-name order, each once, after its pull request merges. A maintainer applies each one, or approves applying it, through the Supabase Management API's `POST /v1/projects/<project-ref>/database/migrations`, with the file's text as the query and its file name as the name. Supabase runs it and records it in the project's migration history, `supabase_migrations.schema_migrations`.[4] Read the history back afterwards: the newest entry is the file just applied. Then read back which role can grant each group role (`pg_auth_members`), because that role is the one that creates the login roles in section 3. The tests apply every file to an empty Postgres 17 as a superuser. That catches a file that is wrong in itself, but not one that fails only under Supabase's own roles and extensions; the first apply to the project shows that.
 
 ## Sources
 
