@@ -114,3 +114,12 @@ def test_without_the_ordinary_load_the_check_does_not_exist(tmp_path, db):
     code, output, rows = run_check(tmp_path, db, config=config)
     assert code != 0, output   # the service does not start Hermes
     assert rows == []          # and nothing can be recorded: the absence check covers this host
+
+
+def test_host_plugin_isolation_leaves_no_check_to_pass(tmp_path, db):
+    # Under `host` isolation Hermes registers no subcommand for the plugin, so the check cannot run,
+    # the service does not start Hermes, and nothing is recorded (ARCHITECTURE.md section 5.5).
+    code, output, rows = run_check(tmp_path, db, config=_with(("plugins", "isolation"), "host"))
+    assert code != 0, output
+    assert "is not a `hermes` command" in output
+    assert rows == []
