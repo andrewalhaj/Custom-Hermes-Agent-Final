@@ -8,6 +8,7 @@ Needs `git`, `ruff` and `python` on PATH, as the CI job has them.
 """
 
 import pathlib
+import shutil
 import subprocess
 
 import pytest
@@ -191,3 +192,84 @@ def test_tests_run_on_hermes_v0_23_1_and_its_python():
     assert "pip install --no-deps -r hermes-requirements.txt" in script
     commands = [s.get("run", "") for s in steps]
     assert commands.index(script) < commands.index("python -m pytest -q")
+
+
+# The secret scan (CONTRIBUTING.md section 8, W13; #84): gitleaks in CI over the whole history, and as a
+# pre-commit hook over what is staged. Needs gitleaks on PATH, as the CI job installs it.
+
+GITLEAKS_VERSION = "8.30.1"
+HOOK = WORKFLOW.parent.parent.parent / ".githooks" / "pre-commit"
+SCAN_STEP = "no secret in the repository's history"
+
+
+def fake_token():
+    # A GitHub token's shape, put together at run time so no key-shaped literal sits in the repository.
+    return "gh" + "p_" + "R8vXq2LmT5wZ9kPa3Nc7Jd1Hf6Gs4Bt0Yu2E"
+
+
+def committed_repo(tmp_path, files):
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    for name, body in files.items():
+        (tmp_path / name).write_text(body)
+        subprocess.run(["git", "-C", str(tmp_path), "add", "-f", name], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@example.invalid",
+                    "commit", "-q", "-m", "x"], check=True)
+
+
+@pytest.mark.parametrize("label, files, expect", [
+    ("clean", {"a.py": CODE}, None),
+    ("a committed token", {"a.py": f'token = "{fake_token()}"\n'}, "leaks found"),
+])
+def test_secret_scan(tmp_path, label, files, expect):
+    committed_repo(tmp_path, files)
+    result = subprocess.run(["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", step_script(SCAN_STEP)],
+                            check=False, cwd=tmp_path, capture_output=True, text=True)
+    output = result.stdout + result.stderr
+    if expect is None:
+        assert result.returncode == 0, output
+    else:
+        assert result.returncode != 0 and expect in output, output
+        assert fake_token() not in output   # redacted
+
+
+def test_ci_installs_a_pinned_gitleaks_checked_against_its_checksum_before_the_tests():
+    steps = yaml.safe_load(WORKFLOW.read_text())["jobs"]["tests"]["steps"]
+    install = step_script(f"install gitleaks {GITLEAKS_VERSION}, checked against its published checksum")
+    assert f"v{GITLEAKS_VERSION}/gitleaks_{GITLEAKS_VERSION}_linux_x64.tar.gz" in install
+    assert "sha256sum -c" in install
+    checkout = next(s for s in steps if s.get("uses", "").startswith("actions/checkout"))
+    assert checkout.get("with", {}).get("fetch-depth") == 0   # the scan reads the whole history
+    commands = [s.get("run", "") for s in steps]
+    assert commands.index(install) < commands.index("python -m pytest -q")
+
+
+def run_hook(tmp_path, files, path):
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    for name, body in files.items():
+        (tmp_path / name).write_text(body)
+        subprocess.run(["git", "-C", str(tmp_path), "add", "-f", name], check=True)
+    result = subprocess.run([str(HOOK)], check=False, cwd=tmp_path, capture_output=True, text=True,
+                            env={"PATH": path, "HOME": str(tmp_path)})
+    return result.returncode, result.stdout + result.stderr
+
+
+def gitleaks_path():
+    found = shutil.which("gitleaks")
+    assert found, "gitleaks is not on PATH; install it as CONTRIBUTING.md 4.4 says"
+    return f"{pathlib.Path(found).parent}:/usr/bin:/bin"
+
+
+def test_the_hook_refuses_a_staged_token(tmp_path):
+    code, output = run_hook(tmp_path, {"a.py": f'token = "{fake_token()}"\n'}, gitleaks_path())
+    assert code != 0 and "leaks found" in output, output
+    assert fake_token() not in output
+
+
+def test_the_hook_passes_a_clean_commit(tmp_path):
+    code, output = run_hook(tmp_path, {"a.py": CODE}, gitleaks_path())
+    assert code == 0, output
+
+
+def test_the_hook_refuses_when_gitleaks_is_missing(tmp_path):
+    code, output = run_hook(tmp_path, {"a.py": CODE}, "/usr/bin:/bin")
+    assert code != 0 and "gitleaks is not installed" in output, output
