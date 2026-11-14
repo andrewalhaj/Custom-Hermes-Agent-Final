@@ -48,6 +48,11 @@ REFUSED_LOGIN = ("password authentication failed", "no pg_hba.conf entry", "pg_h
                  "is not permitted to log in", "Tenant or user not found")   # reasons are truncated, never full content (rule L5)
 
 
+def refused_login(exc):
+    """True when a failed connection's server refused the login, not when it could not be reached."""
+    return any(text in str(exc) for text in REFUSED_LOGIN)
+
+
 class UnknownFailureCode(ValueError):
     """A code that is not in the catalog: a bug in the caller (rule F6)."""
 
@@ -93,7 +98,7 @@ def _log_lost_write(fields, reason):
 
 def _record_lost_connection(exc, source):
     """Log a connection that could not be opened: `db.auth` when the server refused the login."""
-    if any(text in str(exc) for text in REFUSED_LOGIN):
+    if refused_login(exc):
         record(None, "db.auth", "failed", source=source, reason=str(exc))
     else:
         record(None, "db.unreachable", "failed", source=source, reason=str(exc))

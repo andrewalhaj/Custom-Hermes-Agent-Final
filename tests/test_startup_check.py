@@ -26,16 +26,21 @@ def safe_config():
     }
 
 
-def run_check(tmp_path, db, *, config=None, raw_config="", env=None, database_url=True, plugin_edit=None):
+def run_check(tmp_path, db, *, config=None, raw_config="", env=None, database_url=True, plugin_edit=None,
+              startup_edit=None):
     """Run `hermes custom-build check` against a throwaway home; return (exit code, output, events rows)."""
     home = tmp_path / "home"
     shutil.copytree(PLUGIN, home / "plugins" / "custom_build", ignore=shutil.ignore_patterns("__pycache__"))
     if plugin_edit:
         init = home / "plugins" / "custom_build" / "__init__.py"
         init.write_text(plugin_edit(init.read_text(encoding="utf-8")), encoding="utf-8")
+    if startup_edit:
+        check = home / "plugins" / "custom_build" / "startup_check.py"
+        check.write_text(startup_edit(check.read_text(encoding="utf-8")), encoding="utf-8")
     (home / "config.yaml").write_text(yaml.safe_dump(config or safe_config()) + raw_config, encoding="utf-8")
     if database_url:
-        (home / ".env").write_text(f"CUSTOM_BUILD_DATABASE_URL={db['agent']}\n", encoding="utf-8")
+        url = db["agent"] if database_url is True else database_url
+        (home / ".env").write_text(f"CUSTOM_BUILD_DATABASE_URL={url}\n", encoding="utf-8")
     result = subprocess.run(
         [sys.executable, "-c", HERMES, "custom-build", "check"],
         capture_output=True, text=True, timeout=180, check=False, cwd=tmp_path,
@@ -89,6 +94,34 @@ def test_a_provider_that_fails_to_load_fails_with_guard_not_loaded(tmp_path, db)
     code, output, rows = run_check(tmp_path, db, plugin_edit=break_provider_load)
     assert code != 0, output
     assert [(c, r) for c, r, _, _ in rows] == [("guard.not_loaded", "failed")], output
+
+
+def test_a_crash_in_the_check_says_where_its_traceback_went(tmp_path, db):
+    # The service log shows only stderr; a crash is recorded elsewhere, so the check says where (#64).
+    def crash_in_check(text):
+        old = "    if (config.get(\"memory\") or {}).get(\"provider\") != \"custom_build\":"
+        assert old in text
+        return text.replace(old, "    raise KeyError(\"boom\")\n" + old)
+
+    code, output, rows = run_check(tmp_path, db, startup_edit=crash_in_check)
+    assert code != 0
+    assert "unhandled" in output and "errors.log" in output, output
+    assert [c for c, *_ in rows] == ["unhandled", "job.failed"]
+
+
+def test_an_unreachable_store_is_named_in_the_checks_output(tmp_path, db):
+    code, output, rows = run_check(tmp_path, db, database_url="postgresql://u:p@127.0.0.1:1/x?connect_timeout=3")
+    assert code != 0
+    assert "db.unreachable" in output and "errors.log" in output, output
+    assert rows == []
+
+
+def test_a_refused_login_is_named_in_the_checks_output(tmp_path, db):
+    wrong = psycopg.conninfo.make_conninfo(db["agent"], password="not-the-password")
+    code, output, rows = run_check(tmp_path, db, database_url=wrong)
+    assert code != 0
+    assert "db.auth" in output and "errors.log" in output, output
+    assert rows == []
 
 
 def test_a_missing_machine_name_fails_with_config_missing(tmp_path, db):
