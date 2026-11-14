@@ -191,3 +191,11 @@ def test_tests_run_on_hermes_v0_23_1_and_its_python():
     assert "pip install --no-deps -r hermes-requirements.txt" in script
     commands = [s.get("run", "") for s in steps]
     assert commands.index(script) < commands.index("python -m pytest -q")
+
+
+def test_dependencies_are_audited_once_everything_is_installed():
+    # CONTRIBUTING.md 8.2: `pip-audit` with no arguments audits the whole environment the tests ran in (#36).
+    steps = yaml.safe_load(WORKFLOW.read_text())["jobs"]["tests"]["steps"]
+    commands = [s.get("run", "") for s in steps]
+    assert "pip-audit" in commands
+    assert commands.index('pip install -e ".[dev]"') < commands.index("pip-audit")
