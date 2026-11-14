@@ -3,8 +3,10 @@
 `register()` runs under both loads. The ordinary load, from `plugins.enabled`, passes a full plugin
 context; the memory-provider load, from `memory.provider`, passes a narrower one without `state`.
 Both register the redaction patterns, so the provider never writes without them; only the provider
-load registers the provider.
+load registers the provider, and only the ordinary load registers the `hermes custom-build` command.
 """
+
+import sys
 
 from agent.memory_provider import MemoryProvider
 
@@ -29,9 +31,22 @@ class CustomBuildProvider(MemoryProvider):
         return []
 
 
+def _add_subcommands(parser) -> None:
+    commands = parser.add_subparsers(dest="custom_build_command", required=True)
+    commands.add_parser("check", help="Run the startup check; exits non-zero when Hermes must not start")
+
+
 def register(ctx) -> None:
     ctx.register_redaction_patterns(REDACTION_PATTERNS)
     # The provider load's context has no `state`; checked on the class, so the ordinary load's
     # cached `state` property is not built as a side effect.
     if not hasattr(type(ctx), "state"):
         ctx.register_memory_provider(CustomBuildProvider())
+        return
+
+    def run_check(args) -> None:
+        from . import startup_check
+
+        sys.exit(startup_check.run(ctx))
+
+    ctx.register_cli_command("custom-build", "The custom build's commands", _add_subcommands, run_check)
