@@ -12,14 +12,14 @@ These placeholders appear in the documentation. Each deployment sets them in its
 |---|---|
 | `<agent-hosts>` | The machines that run Hermes with this build. There can be several. |
 | `<machine-name>` | Each agent host's name, written to the `source` column of every row it writes. Set as `plugins.entries.custom_build.settings.machine_name` in the profile's `config.yaml`. |
-| `<job-host>` | One of the agent hosts that is on when scheduled jobs run |
+| `<job-host>` | One of the agent hosts that is on when scheduled jobs run. The first deployment has one agent host, which is also the job host. |
 | `<project-ref>` | The Supabase project that holds the memory store |
 | `<model-digest>` | The pinned build digest of the embedding model |
 | `<judge-model>` | The hosted model used as judge, as reranker and to route each message. It answers typed questions (a pick from a list, a yes or no) with probabilities and does not need to generate text. It is set by version, never by an alias that can move to a newer model, because the thresholds depend on its answers. |
 | `<extraction-model>` | The model that proposes facts from user messages and tool results |
 | `<digest-model>` | The model that writes session digests |
 | `<maintenance-role>` | The login role the retention job runs as. It is created like a machine's role (section 3), but joins the group role `memory_maintenance`: `create role <maintenance-role> login in role memory_maintenance;`, then `\password <maintenance-role>`. |
-| `<operators-channel>` | Where the daily failure report is sent |
+| `<operators-channel>` | Where the daily failure report is sent. The first deployment uses a Telegram channel. |
 
 ## 2. Where it runs
 
@@ -48,6 +48,7 @@ Every machine that runs the agent:
    | Setting | Value | Why |
    |---|---|---|
    | `memory.provider` | `custom_build` | Hermes runs one external memory provider, and this setting selects it.[2] The startup check fails otherwise. |
+   | `skills.write_approval` | `true` | Every change Hermes's skill-writing tool makes, in a turn or in its background review, is staged until a person approves it with `/skills approve` (ARCHITECTURE.md section 5.3, #42). It holds that tool only; other tools that write files can still change a skill's files (#80). Unset means off, and the startup check does not read it yet (#81).[3] |
    | `memory.write_approval` | `true` | Every write to `MEMORY.md` and `USER.md` waits for a person's approval, so a wrong assumption is never saved unchecked. |
    | `compression.in_place` | `true` (default) | With `false`, compressing a transcript gives the conversation a new session id, and rows written before and after it no longer match (ARCHITECTURE.md section 4.1).[3] The startup check fails otherwise. |
    | `logging.max_size_mb`, `logging.backup_count` | Defaults (5, 3) or larger | Long enough to cover the period between daily reports |
@@ -56,6 +57,7 @@ Every machine that runs the agent:
    | `security.redact_secrets` | Left on (default) | Turning it off disables every redaction pattern, including the build's own |
    | `plugins.isolation` | `in_process` (default) | The build's layout is supported only in this mode; `host` runs user plugin code in a separate process (ARCHITECTURE.md section 1).[3] Under `host`, Hermes registers no `hermes custom-build` command, so the startup check cannot run and the service does not start Hermes. |
    | `approvals.mode` | Never `off` | With it off, Hermes's approval gate approves every request without asking, the write gate's included (ARCHITECTURE.md section 5.6).[3] The startup check fails otherwise. |
+   | `plugins.hook_callback_timeout` | 30 (default) or more | Hermes skips a `pre_llm_call` hook that runs past it and lets the turn go ahead, so a lower value can let a guard's turn through (ARCHITECTURE.md section 5.5).[3] The startup check fails otherwise (#69). |
    | `approvals.cron_mode`, `approvals.single_query_mode`, `approvals.unattended_mode` | `deny` (default) | Nobody can answer in these contexts. Hermes treats several spellings besides `approve` as approve, which lets the write gate's requests through unasked.[3] The startup check fails unless Hermes's own reader reports `deny`. |
 5. **Never runs the agent with yolo on, by any route.** The `--yolo` flag, the `HERMES_YOLO_MODE` variable, the `/yolo` command in a CLI or gateway session, and a one-shot run started with `hermes -z` all make Hermes's approval gate approve without asking.[3] The startup check fails when it sees `HERMES_YOLO_MODE` set, and the write gate blocks outright when Hermes reports yolo for a session, however it was turned on (ARCHITECTURE.md section 5.3).
 6. **Has the build installed as one Hermes plugin**, which carries the memory provider, the guards and the skills, from its directory in this repository (ARCHITECTURE.md section 1), with Hermes's own commands. Placeholders: `<owner>/<repo>` is this repository on GitHub, and `<commit>` is the full hash of a commit on `main`. The plugin, its directory and its manifest are all named `custom_build`.
@@ -82,15 +84,17 @@ Every machine that runs the agent:
 
      The command is copied from the unit's `ExecStart=` because it differs between kinds of install, and it is copied again after every Hermes update that rewrites the unit; a stale copy fails closed. It is passed to the shell as arguments, not inside the shell's quotes, so systemd parses it exactly as it parses `ExecStart=`; `$$` is systemd's escape for a literal `$`.[7]
    - **Why the check waits before it fails:** Hermes's unit has `Restart=always`, `RestartSec=5` and no start limit, and a failing `ExecStartPre=` triggers that restart; `RestartPreventExitStatus=` does not apply to it.[7] Without the wait, a host whose check keeps failing would run it, and write a row to `events`, every 5 seconds. With it, the check is retried about every 5 minutes, and a host recovers by itself once a temporary cause, such as an unreachable store, goes away. A passing check under the service has been run on the first agent host (#29); a failing one has not, since it takes the gateway offline. `TimeoutStartSec=` is raised above the wait because systemd times `ExecStartPre=` against it.[8] systemd's own backoff (`RestartSteps=`) is not used: its documentation does not say when the delay resets, so it could slow every later restart of a healthy gateway.[7]
+8. **Runs Linux with systemd.** The service runs the startup check before the gateway through a systemd drop-in (item 7). On macOS Hermes runs the gateway under launchd, which has nothing like `ExecStartPre=`, so a Mac is not an agent host (#62).[3]
+9. **Runs one Hermes profile.** With two or more profiles on a host, Hermes by default runs one gateway that serves them all, while the startup check reads one profile's settings, so an agent host has one profile, and the startup check fails with `config.unsafe` when it has more (#63).[3]
 
 ## 4. Scheduled jobs
 
 | Job | Runs | What it does | Its own failure |
 |---|---|---|---|
 | Retention | Daily | Deletes `events` rows and session chunks older than 90 days. Misses worth keeping are copied into the eval set before then (ARCHITECTURE.md section 3.8). Runs as `<maintenance-role>`, not a machine's agent role. | `job.failed` |
-| Heartbeat | Daily, on every agent host | Writes one `host.heartbeat` event | `job.failed`; a heartbeat that never runs is caught by the job-health check |
+| Heartbeat | Every 6 hours, on every agent host (#43) | Writes one `host.heartbeat` event | `job.failed`; a heartbeat that never runs is caught by the job-health check |
 | Job-health check | Daily, before the report | Flags any job with no fresh success (`job.missed`) and any job that took input but produced nothing for more than one run (`job.no_output`), and records `host.missing` for any machine in `<agent-hosts>` with no heartbeat in the last 24 hours (ARCHITECTURE.md section 6.3). A host's missing heartbeat is reported as `host.missing` only, not also as `job.missed`. | Reported by the report's absence |
-| Daily failure report | Daily, at a fixed time | Sends the day's failures from `events`, grouped by code and machine, and every "always" answer given to the write gate that day, as a dated Markdown file to `<operators-channel>`. With nothing to report it sends a one-line all-clear that names the jobs that ran. | A missing report |
+| Daily failure report | Daily at 07:00, the job host's local time | Sends the day's failures from `events`, grouped by code and machine, and every "always" answer given to the write gate that day, as a dated Markdown file to `<operators-channel>`. With nothing to report it sends a one-line all-clear that names the jobs that ran. | A missing report |
 
 Every job runs through the job wrapper (ARCHITECTURE.md section 6.1), so a crash is recorded in `events` as `unhandled` and `job.failed` before the job exits non-zero.
 
@@ -146,7 +150,7 @@ The files in `migrations/` are applied to `<project-ref>` in file-name order, ea
 
 - [1] [Scheduled tasks: no-agent mode (Hermes Agent documentation)](https://hermes-agent.nousresearch.com/docs/user-guide/features/cron)
 - [2] [Build a Hermes plugin (Hermes Agent developer guide)](https://hermes-agent.nousresearch.com/docs/developer-guide/plugins)
-- [3] Hermes v0.23.1 source: `plugins/security-guidance/`, `tools/approval.py`, `tools/approval_context.py`, `gateway/session_finite.py`, `hermes_cli/cli_session_mixin.py`, `hermes_cli/config_defaults.py`, `hermes_cli/gateway.py`, `hermes_cli/gateway_runtime.py`, `hermes_cli/gateway_runtime_service.py`, `hermes_cli/gateway_runtime_service_identity.py`, `hermes_cli/git_credentials.py`, `hermes_cli/main.py`, `hermes_cli/plugin_isolation.py`, `hermes_cli/plugins.py`, `hermes_cli/plugins_cmd.py`, `hermes_cli/plugins_cmd_install.py`, `hermes_cli/plugins_cmd_update.py`, `hermes_cli/plugins_discovery.py`, `hermes_cli/plugins_ledger.py`, `hermes_cli/plugins_loader.py`, `plugins/memory/__init__.py`, `pm/plugin_declarations.py`
+- [3] Hermes v0.23.1 source: `plugins/security-guidance/`, `tools/approval.py`, `tools/approval_context.py`, `gateway/session_finite.py`, `hermes_cli/cli_session_mixin.py`, `hermes_cli/config_defaults.py`, `hermes_cli/gateway.py`, `hermes_cli/gateway_runtime.py`, `hermes_cli/gateway_runtime_service.py`, `hermes_cli/gateway_runtime_service_identity.py`, `hermes_cli/git_credentials.py`, `hermes_cli/main.py`, `hermes_cli/plugin_isolation.py`, `hermes_cli/plugins.py`, `hermes_cli/plugins_cmd.py`, `hermes_cli/plugins_cmd_install.py`, `hermes_cli/plugins_cmd_update.py`, `hermes_cli/plugins_discovery.py`, `hermes_cli/plugins_ledger.py`, `hermes_cli/plugins_loader.py`, `plugins/memory/__init__.py`, `pm/plugin_declarations.py`, `hermes_cli/gateway_launchd.py`, `hermes_cli/gateway_multiplex_mode.py`, `hermes_cli/plugins_dispatch.py`, `tools/skill_manager_tool.py`
 - [4] [Supabase for Platforms: make database changes (Supabase documentation)](https://supabase.com/docs/guides/integrations/supabase-for-platforms#make-database-changes)
 - [5] [psql: `\password` (PostgreSQL 17 documentation)](https://www.postgresql.org/docs/17/app-psql.html)
 - [6] [libpq: `PQencryptPasswordConn` (PostgreSQL 17 documentation)](https://www.postgresql.org/docs/17/libpq-misc.html)
