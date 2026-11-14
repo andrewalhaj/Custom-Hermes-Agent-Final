@@ -150,3 +150,11 @@ def test_an_unreachable_store_is_named_in_the_checks_output(tmp_path, db):
     assert code != 0
     assert "db.unreachable" in output and "errors.log" in output, output
     assert rows == []
+
+
+def test_a_refused_login_is_named_in_the_checks_output(tmp_path, db):
+    wrong = psycopg.conninfo.make_conninfo(db["agent"], password="not-the-password")
+    code, output, rows = run_check(tmp_path, db, database_url=wrong)
+    assert code != 0
+    assert "db.auth" in output and "errors.log" in output, output
+    assert rows == []

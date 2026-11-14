@@ -72,7 +72,18 @@ def run(ctx):
             failures.record(conn, "config.unsafe", "failed", source=machine, reason=unsafe)
             failed.append(f"config.unsafe ({unsafe})")
 
-    failures.run_job("startup-check", check, connect=lambda: psycopg.connect(url, autocommit=True), source=machine)
+    try:
+        failures.run_job("startup-check", check, connect=lambda: psycopg.connect(url, autocommit=True), source=machine)
+    except SystemExit as stop:
+        # The service log shows only stderr, and run_job recorded the cause elsewhere: say which and where (#64).
+        if isinstance(stop.__cause__, psycopg.OperationalError):
+            code = "db.auth" if failures.refused_login(stop.__cause__) else "db.unreachable"
+            print(f"custom-build check failed: {code}; not recorded in events: events.write_failed "
+                  "(no connection to the store); the details are in Hermes's errors.log", file=sys.stderr)
+        else:
+            print("custom-build check failed: unhandled and job.failed; the traceback is in Hermes's errors.log",
+                  file=sys.stderr)
+        raise
     for line in failed:
         print(f"custom-build check failed: {line}", file=sys.stderr)
     return 1 if failed else 0
