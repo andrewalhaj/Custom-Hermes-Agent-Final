@@ -42,6 +42,15 @@ def register(ctx) -> None:
         ctx.register_memory_provider(CustomBuildProvider())
         return
 
+    from . import failures, settings
+
+    @failures.boundary(lambda: settings.store(ctx), settings.crash_block)
+    def check_turn(**kwargs):
+        return settings.check_turn(ctx, **kwargs)
+
+    # Before the subcommand: if this fails, Hermes drops the load and the startup check cannot pass.
+    ctx.register_hook("pre_llm_call", check_turn)
+
     def run_check(args) -> int:
         from . import startup_check
 
