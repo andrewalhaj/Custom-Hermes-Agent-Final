@@ -159,3 +159,27 @@ def test_record_without_a_connection_logs_the_loss(caplog):
         (logging.WARNING, "config.missing"),
         (logging.ERROR, "events.write_failed"),
     ]
+
+
+def _never_runs(conn):
+    raise AssertionError("the job ran without a connection")
+
+
+def test_job_wrapper_logs_an_unreachable_store_and_exits_non_zero(caplog):
+    caplog.set_level(logging.INFO, logger=failures.__name__)
+    with pytest.raises(SystemExit) as exit_info:
+        failures.run_job("nightly", _never_runs, source="host-a",
+                         connect=lambda: psycopg.connect("postgresql://u:p@localhost:1/x", connect_timeout=3))
+    assert exit_info.value.code != 0
+    assert [(level, line["code"]) for level, line in _json_lines(caplog)] == [
+        (logging.WARNING, "db.unreachable"),
+        (logging.ERROR, "events.write_failed"),
+    ]
+
+
+def test_job_wrapper_logs_a_refused_login_as_db_auth(db, caplog):
+    caplog.set_level(logging.INFO, logger=failures.__name__)
+    wrong = psycopg.conninfo.make_conninfo(db["agent"], password="not-the-password")
+    with pytest.raises(SystemExit):
+        failures.run_job("nightly", _never_runs, source="host-a", connect=lambda: psycopg.connect(wrong))
+    assert [line["code"] for _, line in _json_lines(caplog)] == ["db.auth", "events.write_failed"]
