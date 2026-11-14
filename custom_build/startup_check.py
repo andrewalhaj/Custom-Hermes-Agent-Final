@@ -14,7 +14,9 @@ from . import failures
 from .settings import DATABASE_URL, MACHINE_NAME, missing_settings
 
 UNATTENDED_MODES = ("cron_mode", "single_query_mode", "unattended_mode")
-HOOK_TIMEOUT_FLOOR = 30   # seconds; below it, or off, Hermes may skip a guard and let its turn through (#69)
+# Seconds. Below it Hermes may skip a slow guard and let its turn through; at 0 it runs hooks with no
+# deadline, so a hung guard hangs the turn. #75 settled on 30 or more (#69).
+HOOK_TIMEOUT_FLOOR = 30
 
 
 def load_problems():
