@@ -10,10 +10,13 @@ import sys
 
 import psycopg
 
-from . import failures
-from .settings import DATABASE_URL, MACHINE_NAME, missing_settings
+from . import failures, settings
+from .settings import DATABASE_URL
 
 UNATTENDED_MODES = ("cron_mode", "single_query_mode", "unattended_mode")
+# Seconds. Below it Hermes may skip a slow guard and let its turn through; at 0 it runs hooks with no
+# deadline, so a hung guard hangs the turn. #75 settled on 30 or more (#69).
+HOOK_TIMEOUT_FLOOR = 30
 
 
 def load_problems():
@@ -32,6 +35,7 @@ def load_problems():
 def unsafe_settings():
     """Hermes settings with a value the build does not support (`config.unsafe`)."""
     from hermes_cli.config import load_config_readonly
+    from hermes_cli.plugins import _resolve_hook_callback_timeout
     from tools.approval_context import _binary_approval_mode, _get_approval_mode
     from utils import is_truthy_value
 
@@ -41,23 +45,39 @@ def unsafe_settings():
         found.append("memory.provider is not custom_build")
     if _get_approval_mode() == "off":
         found.append("approvals.mode is off")
+    if (timeout := _resolve_hook_callback_timeout()) < HOOK_TIMEOUT_FLOOR:
+        found.append(f"plugins.hook_callback_timeout is {timeout:g} seconds, below {HOOK_TIMEOUT_FLOOR}")
     found += [f"approvals.{mode} does not read as deny" for mode in UNATTENDED_MODES if _binary_approval_mode(mode) != "deny"]
     if is_truthy_value(os.getenv("HERMES_YOLO_MODE", "")):
         found.append("HERMES_YOLO_MODE is set")
     if not is_truthy_value((config.get("compression") or {}).get("in_place"), default=True):
         found.append("compression.in_place is false")
+    if len(profiles := installed_profiles()) > 1:
+        found.append(f"the host has {len(profiles)} Hermes profiles ({', '.join(profiles)}), not one")
     return found
+
+
+def installed_profiles():
+    """The names of every Hermes profile on this host, parked and standalone ones included.
+
+    One gateway serves every profile by default, while this check reads one profile's settings, so an
+    agent host has one profile (#63). Listed the way Hermes itself lists the profiles it can serve.
+    """
+    from hermes_cli.profiles import profiles_to_serve
+
+    return [name for name, _ in profiles_to_serve(multiplex=True, include_standalone=True, include_parked=True)]
 
 
 def run(ctx):
     """Run every check; return the exit code: 0 when all pass, 1 otherwise."""
     from agent.secret_scope import get_secret
 
-    machine = ctx.get_config(MACHINE_NAME)
+    machine = settings.machine(ctx)
     url = get_secret(DATABASE_URL)
-    if missing := missing_settings(ctx):
-        failures.record(None, "config.missing", "failed", source=machine or "unknown", reason=", ".join(missing))
-        print(f"custom-build check failed: config.missing ({', '.join(missing)}); "
+    if missing := settings.missing_settings(ctx):
+        failures.record(None, "config.missing", "failed", source=machine, reason=", ".join(missing))
+        print(f"custom-build check failed: config.missing ({', '.join(missing)}): set each one as text, "
+              "quoting a value YAML would read as a number or date; "
               "not recorded in events: events.write_failed (no connection to the store)", file=sys.stderr)
         return 1
 
@@ -72,7 +92,18 @@ def run(ctx):
             failures.record(conn, "config.unsafe", "failed", source=machine, reason=unsafe)
             failed.append(f"config.unsafe ({unsafe})")
 
-    failures.run_job("startup-check", check, connect=lambda: psycopg.connect(url, autocommit=True), source=machine)
+    try:
+        failures.run_job("startup-check", check, connect=lambda: psycopg.connect(url, autocommit=True), source=machine)
+    except SystemExit as stop:
+        # The service log shows only stderr, and run_job recorded the cause elsewhere: say which and where (#64).
+        if isinstance(stop.__cause__, psycopg.OperationalError):
+            code = "db.auth" if failures.refused_login(stop.__cause__) else "db.unreachable"
+            print(f"custom-build check failed: {code}; not recorded in events: events.write_failed "
+                  "(no connection to the store); the details are in Hermes's errors.log", file=sys.stderr)
+        else:
+            print("custom-build check failed: unhandled and job.failed; the traceback is in Hermes's errors.log",
+                  file=sys.stderr)
+        raise
     for line in failed:
         print(f"custom-build check failed: {line}", file=sys.stderr)
     return 1 if failed else 0

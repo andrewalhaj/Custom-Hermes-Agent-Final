@@ -14,18 +14,25 @@ DATABASE_URL = "CUSTOM_BUILD_DATABASE_URL"   # a secret, in the profile's .env
 CONNECT_TIMEOUT = 5   # seconds, well under Hermes's 30-second deadline for a hook
 
 
+def _usable(value):
+    """A setting is usable only as text with more than whitespace in it; anything else, an unquoted
+    number or date included, counts as missing (#71)."""
+    return isinstance(value, str) and bool(value.strip())
+
+
 def missing_settings(ctx):
-    """The names of the build's settings that are not set."""
+    """The names of the build's settings that are not set, or set to something other than text."""
     from agent.secret_scope import get_secret
 
     found = (("plugins.entries.custom_build.settings." + MACHINE_NAME, ctx.get_config(MACHINE_NAME)),
              (DATABASE_URL, get_secret(DATABASE_URL)))
-    return [name for name, value in found if not value]
+    return [name for name, value in found if not _usable(value)]
 
 
 def machine(ctx):
-    """The machine's name, for the `source` of what it records."""
-    return ctx.get_config(MACHINE_NAME) or "unknown"
+    """The machine's name, for the `source` of what it records; "unknown" when it is not usable."""
+    value = ctx.get_config(MACHINE_NAME)
+    return value if _usable(value) else "unknown"
 
 
 def connect():
@@ -33,7 +40,7 @@ def connect():
     from agent.secret_scope import get_secret
 
     url = get_secret(DATABASE_URL)
-    return psycopg.connect(url, autocommit=True, connect_timeout=CONNECT_TIMEOUT) if url else None
+    return psycopg.connect(url, autocommit=True, connect_timeout=CONNECT_TIMEOUT) if _usable(url) else None
 
 
 def check_turn(ctx, **kwargs):
@@ -48,7 +55,8 @@ def check_turn(ctx, **kwargs):
     failures.record(None, "config.missing", "failed", source=machine(ctx), reason=names,
                     session_id=kwargs.get("session_id"))
     return {"action": "block", "message": f"The custom build blocked this turn: config.missing ({names}). "
-                                          "Set it, then send your message again."}
+                                          "Set each one as text, quoting a value YAML would read as a number "
+                                          "or date, then send your message again."}
 
 
 def crash_block(exc):

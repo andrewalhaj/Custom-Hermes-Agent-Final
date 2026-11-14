@@ -158,6 +158,7 @@ git switch -c <type>/<short-description>
 - Stage by path. Never `git add -A` or `git add .`.
 - The `.gitignore` is an allow-list (section 8), so a new file in a path it does not list is invisible to `git status`. `git add <path>` refuses such a path ("ignored by one of your .gitignore files"), and `git add -A` skips it silently. When a path is refused, add a line for it to `.gitignore` in the same pull request; never use `git add -f`.
 - Before pushing, run `git status --short --ignored`. Every `!!` entry must be a cache or build directory, such as `.pytest_cache/` or `.ruff_cache/`. A file or directory of yours listed there is hidden by the allow-list and is not in your commits.
+- Switch on the repository's pre-commit hook once in each clone: `git config core.hooksPath .githooks`. It runs gitleaks over what is staged and refuses a commit that carries a secret (section 8); without gitleaks on `PATH` it refuses every commit. Install gitleaks 8.30.1 from its GitHub release and check the archive against the release's checksums file. Never skip the hook with `--no-verify`.
 - When the tests come first, commit them on their own with "(red)" in the subject, then commit the change that makes them pass. The squash-merge keeps the failing commit off `main`.
 - Run the full test suite and the linter before each commit that changes behaviour.
 
@@ -313,7 +314,7 @@ def search(query):
 |---|---|
 | Nothing matched | `[]` |
 | The store timed out (expected) | `RecallFailed("recall.timeout")`, logged, recorded, and shown in the turn |
-| A bug (unexpected) | A crash, recorded as `unhandled` with its traceback |
+| A bug (unexpected) | A crash, recorded as `unhandled`, with its traceback in the log |
 
 **Also right:**
 
@@ -346,7 +347,7 @@ Every point of failure is loud and distinguishable. The mechanism, including the
 - **F3. Every occurrence is logged and recorded.** Each one is logged at WARNING or above and written to the `events` table, through the one recording helper in the failure module. Errors that reach a Hermes entry point, a scheduled job or the startup check are recorded by the boundary wrapper or the job wrapper (ARCHITECTURE.md sections 2 and 6.1), so code never relies on Hermes, which logs a repeated error only once.
 - **F4. A failure that changed the answer is shown in the turn.** Every failure, shown or not, appears in the daily failure report.
 - **F5. Recording a failure must not lose it.** If the `events` row cannot be written, the failure is logged locally at ERROR with `events.write_failed`.
-- **F6. The catalog is enforced.** A test fails the build if a handler or fallback emits no code or a code not in the catalog. A failure that is not in the catalog is a bug, recorded with its traceback: inside Hermes by the boundary wrapper, and in a scheduled job or the startup check by the job wrapper, which records it and then exits non-zero (ARCHITECTURE.md section 6.1).
+- **F6. The catalog is enforced.** A test fails the build if a handler or fallback emits no code or a code not in the catalog. A failure that is not in the catalog is a bug, recorded, with its traceback in the log: inside Hermes by the boundary wrapper, and in a scheduled job or the startup check by the job wrapper, which records it and then exits non-zero (ARCHITECTURE.md section 6.1).
 
 ## 7. Logging rules
 
@@ -418,6 +419,7 @@ jobs:
       TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
     steps:
       - uses: actions/checkout@v7
+        with: { fetch-depth: 0 }   # the secret scan reads the whole history
       - uses: actions/setup-python@v7
         with: { python-version: "3.14", cache: pip }
       - name: install Hermes v0.23.1 from its own lock file
@@ -431,6 +433,35 @@ jobs:
           pip install --no-deps -r hermes-requirements.txt
           pip install --no-deps -e "$RUNNER_TEMP/hermes-agent"
       - run: pip install -e ".[dev]"
+      - name: install gitleaks 8.30.1, checked against its published checksum
+        shell: bash
+        run: |
+          curl -sSfL -o "$RUNNER_TEMP/gitleaks.tar.gz" \
+            https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  $RUNNER_TEMP/gitleaks.tar.gz" \
+            | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/gitleaks-bin"
+          tar -xzf "$RUNNER_TEMP/gitleaks.tar.gz" -C "$RUNNER_TEMP/gitleaks-bin" gitleaks
+          echo "$RUNNER_TEMP/gitleaks-bin" >> "$GITHUB_PATH"
+      - name: no secret in the repository's history
+        shell: bash
+        run: |
+          command -v gitleaks >/dev/null || { echo "secret scan: gitleaks is not installed"; exit 1; }
+          errors=$(mktemp)
+          # Findings, redacted, go to stdout; at this log level only gitleaks's errors go to stderr.
+          # --diff-merges=remerge also shows what a merge commit itself brings in.
+          set +e
+          gitleaks git --redact --no-banner -v --log-level error --exit-code 1 \
+            --log-opts="--full-history --all --diff-filter=tuxdb --diff-merges=remerge" . 2>"$errors"
+          code=$?
+          set -e
+          # gitleaks exits 0 when git itself fails: that is no scan, not a clean history.
+          if [ -s "$errors" ]; then
+            cat "$errors"
+            echo "secret scan: gitleaks reported an error, so the history was not scanned"
+            exit 1
+          fi
+          [ "$code" -eq 0 ] || { echo "secret scan: gitleaks found a secret (above, redacted)"; exit "$code"; }
       - run: ruff check .
       - name: no noqa that can silence the error-handling rules
         shell: bash
@@ -490,6 +521,7 @@ jobs:
           sys.exit("\n".join(bad) if bad else 0)
           PY
       - run: python -m pytest -q
+      - run: pip-audit   # audits the whole environment the tests ran in, Hermes's packages included
 ```
 
 Lint selection in `pyproject.toml`. Use `extend-select`, which adds to ruff's default rules and keeps `E722` on.[13][14]
@@ -505,7 +537,7 @@ extend-select = ["BLE001", "S110"]
 - Pin ruff to one version in the project's dev dependencies, so local runs and CI agree.
 - The job name is what appears as the status check to require.
 - Give any step that pipes a tool into a count or a test `shell: bash`, and never end it with `|| true`. Without `shell: bash` a failed command in the middle of a pipe does not stop the step, so a tool that did not start reads as a count of 0 and the check passes.[21] A check must tell "found nothing" from "the tool failed", as the `noqa` step above does. Prove each step with its failing case before relying on it (C6).
-- Add a secret scan beside the tests.
+- The secret scan runs gitleaks, at a pinned version checked against its published checksum, over the whole history (`fetch-depth: 0`), merge commits included. It fails on a finding and on any error gitleaks reports, because gitleaks exits 0 when git itself fails.
 - Add a dependency audit when there are dependencies: `pip-audit` with no arguments.[22]
 
 ### 8.3 When a guard or a permission blocks you
@@ -547,7 +579,7 @@ AI coding agents are welcome contributors, under the same rules as everyone else
 - [12] [Liu et al., Debt Behind the AI Boom, arXiv 2603.28592 version 3 (preprint)](https://arxiv.org/html/2603.28592v3)
 - [13] [try-except-pass (S110) (Ruff documentation)](https://docs.astral.sh/ruff/rules/try-except-pass)
 - [14] [Settings (Ruff documentation)](https://docs.astral.sh/ruff/settings)
-- [15] [Logging HOWTO (Python 3.12 documentation)](https://docs.python.org/3.12/howto/logging.html)
+- [15] [Logging HOWTO (Python 3.14 documentation)](https://docs.python.org/3.14/howto/logging.html)
 - [16] [OpenTelemetry semantic conventions for generative AI](https://github.com/open-telemetry/semantic-conventions-genai)
 - [17] [Logging Cheat Sheet (OWASP)](https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html)
 - [18] [About protected branches (GitHub Docs)](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches)

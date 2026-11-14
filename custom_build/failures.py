@@ -48,6 +48,11 @@ REFUSED_LOGIN = ("password authentication failed", "no pg_hba.conf entry", "pg_h
                  "is not permitted to log in", "Tenant or user not found")   # reasons are truncated, never full content (rule L5)
 
 
+def refused_login(exc):
+    """True when a failed connection's server refused the login, not when it could not be reached."""
+    return any(text in str(exc) for text in REFUSED_LOGIN)
+
+
 class UnknownFailureCode(ValueError):
     """A code that is not in the catalog: a bug in the caller (rule F6)."""
 
@@ -93,7 +98,7 @@ def _log_lost_write(fields, reason):
 
 def _record_lost_connection(exc, source):
     """Log a connection that could not be opened: `db.auth` when the server refused the login."""
-    if any(text in str(exc) for text in REFUSED_LOGIN):
+    if refused_login(exc):
         record(None, "db.auth", "failed", source=source, reason=str(exc))
     else:
         record(None, "db.unreachable", "failed", source=source, reason=str(exc))
@@ -106,12 +111,17 @@ def run_job(name, job, *, connect, source):
     and message as the reason, then as `job.failed` naming the job. SystemExit(1) follows, so the
     scheduler sees the failure too. When the connection cannot be opened, the job does not run: the
     failure is logged as `db.auth` (the server refused the login) or `db.unreachable`, with
-    `events.write_failed`, since there is no store to write to, and SystemExit(1) follows.
+    `events.write_failed`, since there is no store to write to, and SystemExit(1) follows. Any other
+    exception from `connect` is a bug, logged as `unhandled` and `job.failed` the same way.
     """
     try:
         conn = connect()
     except psycopg.OperationalError as exc:
         _record_lost_connection(exc, source)
+        raise SystemExit(1) from exc
+    except Exception as exc:
+        logger.exception("job %s could not open its connection", name)
+        _record_job_crash(None, name, source, exc)
         raise SystemExit(1) from exc
     with conn:
         try:
@@ -120,10 +130,14 @@ def run_job(name, job, *, connect, source):
             logger.exception("job %s crashed", name)
             if not conn.closed:   # a lost connection reads as closed; record() then logs events.write_failed
                 conn.rollback()   # leave the job's open or aborted transaction, so the records below commit
-            reason = "".join(traceback.format_exception_only(exc)).strip()
-            record(conn, "unhandled", "failed", source=source, reason=reason)
-            record(conn, "job.failed", "failed", source=source, reason=reason, detail={"job": name})
+            _record_job_crash(conn, name, source, exc)
             raise SystemExit(1) from exc
+
+
+def _record_job_crash(conn, name, source, exc):
+    reason = "".join(traceback.format_exception_only(exc)).strip()
+    record(conn, "unhandled", "failed", source=source, reason=reason)
+    record(conn, "job.failed", "failed", source=source, reason=reason, detail={"job": name})
 
 
 def boundary(source, connect, on_crash):

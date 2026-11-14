@@ -13,6 +13,7 @@
 !/tests/
 !/migrations/
 !/custom_build/
+!/.githooks/
 
 /.github/*
 !/.github/workflows/
@@ -28,3 +29,6 @@
 /custom_build/*
 !/custom_build/*.py
 !/custom_build/plugin.yaml
+
+/.githooks/*
+!/.githooks/pre-commit

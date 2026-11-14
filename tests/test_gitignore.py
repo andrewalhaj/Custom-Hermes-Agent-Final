@@ -28,6 +28,8 @@ HIDDEN = [
     "migrations/notes.md",
     "custom_build/.env",
     "custom_build/__pycache__/failures.cpython-312.pyc",
+    ".githooks/.env",
+    ".githooks/notes.md",
 ]
 VISIBLE = [
     "tests/test_new.py",
@@ -36,6 +38,7 @@ VISIBLE = [
     "custom_build/new_module.py",
     "custom_build/plugin.yaml",
     "hermes-requirements.txt",
+    ".githooks/pre-commit",
 ]
 
 
