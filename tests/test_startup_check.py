@@ -109,6 +109,18 @@ def test_a_missing_database_url_fails_with_config_missing(tmp_path, db):
     assert rows == []
 
 
+def test_a_machine_name_that_is_not_a_string_fails_with_config_missing(tmp_path, db):
+    import datetime
+
+    config = safe_config()
+    config["plugins"]["entries"]["custom_build"]["settings"]["machine_name"] = datetime.date(2026, 11, 14)
+    code, output, rows = run_check(tmp_path, db, config=config)
+    assert code != 0
+    assert "config.missing" in output and "machine_name" in output, output
+    assert "Traceback" not in output
+    assert rows == []
+
+
 def test_without_the_ordinary_load_the_check_does_not_exist(tmp_path, db):
     config = safe_config()
     config["plugins"]["enabled"] = []
@@ -124,16 +136,4 @@ def test_host_plugin_isolation_leaves_no_check_to_pass(tmp_path, db):
     code, output, rows = run_check(tmp_path, db, config=_with(("plugins", "isolation"), "host"))
     assert code != 0, output
     assert "is not a `hermes` command" in output
-    assert rows == []
-
-
-def test_a_machine_name_that_is_not_a_string_fails_with_config_missing(tmp_path, db):
-    import datetime
-
-    config = safe_config()
-    config["plugins"]["entries"]["custom_build"]["settings"]["machine_name"] = datetime.date(2026, 11, 14)
-    code, output, rows = run_check(tmp_path, db, config=config)
-    assert code != 0
-    assert "config.missing" in output and "machine_name" in output, output
-    assert "Traceback" not in output
     assert rows == []
