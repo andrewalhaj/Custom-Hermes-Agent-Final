@@ -66,8 +66,8 @@ Every machine that runs the agent:
    - **Private repository:** when an anonymous clone is refused, Hermes tries `GITHUB_TOKEN` or `GH_TOKEN`, then `gh auth token`, then the git credential helper.[3] This has not yet been run against a private repository.
 7. **Starts the Hermes gateway through a service that runs the build's startup check first** (ARCHITECTURE.md section 5.5). When the check fails, the service does not start Hermes. A session started by hand skips the check. The check is `hermes custom-build check`, run through the same command Hermes's own unit uses to start the gateway, so it runs on Hermes's interpreter and packages. It runs through the job wrapper, so a crash in it is recorded as a scheduled job's is, and a failed check records its own code (ARCHITECTURE.md section 5.5).
    - **The service:** Hermes's own unit, `hermes-gateway.service` for the default profile, enabled at boot. It is set up in this order, with no Hermes client open:
-     1. `hermes gateway stop`, which stops a gateway a client started (`gateway run --idle-exit`). Once the unit exists, the same command stops the unit and leaves such a gateway running.[3]
-     2. `hermes gateway install --system --no-start-now --start-on-login`.
+     1. `hermes gateway stop`, which stops a gateway a client started (`gateway run --idle-exit`). Once the unit exists, the same command stops the unit and leaves such a gateway running.[3] The gateway is offline from here until step 4.
+     2. `hermes gateway install --system --run-as-user <service-user> --no-start-now --start-on-login`, where `<service-user>` is the account whose home holds both the Hermes home and the Hermes install: Hermes rewrites the unit's paths into that account's home. Without `--run-as-user`, Hermes takes the account from the environment and refuses when that is `root`, before it writes the unit; with `--run-as-user root` it installs and warns that root is not recommended on a bare-metal host.[3] The first agent host runs it as `root`, where Hermes is installed (#60).
      3. The drop-in below, then `systemctl daemon-reload`.
      4. `systemctl start hermes-gateway`.
 
