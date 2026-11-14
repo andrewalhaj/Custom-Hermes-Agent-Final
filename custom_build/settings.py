@@ -15,7 +15,8 @@ CONNECT_TIMEOUT = 5   # seconds, well under Hermes's 30-second deadline for a ho
 
 
 def _usable(value):
-    """A setting is usable only as a non-empty string; anything else counts as missing (#71)."""
+    """A setting is usable only as text with more than whitespace in it; anything else, an unquoted
+    number or date included, counts as missing (#71)."""
     return isinstance(value, str) and bool(value.strip())
 
 
@@ -39,7 +40,7 @@ def connect():
     from agent.secret_scope import get_secret
 
     url = get_secret(DATABASE_URL)
-    return psycopg.connect(url, autocommit=True, connect_timeout=CONNECT_TIMEOUT) if url else None
+    return psycopg.connect(url, autocommit=True, connect_timeout=CONNECT_TIMEOUT) if _usable(url) else None
 
 
 def check_turn(ctx, **kwargs):
@@ -54,7 +55,8 @@ def check_turn(ctx, **kwargs):
     failures.record(None, "config.missing", "failed", source=machine(ctx), reason=names,
                     session_id=kwargs.get("session_id"))
     return {"action": "block", "message": f"The custom build blocked this turn: config.missing ({names}). "
-                                          "Set it, then send your message again."}
+                                          "Set each one as text, quoting a value YAML would read as a number "
+                                          "or date, then send your message again."}
 
 
 def crash_block(exc):
