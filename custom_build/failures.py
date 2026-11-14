@@ -40,7 +40,11 @@ CATALOG = {
 }
 
 RESULTS = ("ok", "empty", "failed", "degraded")
-REASON_LIMIT = 500   # reasons are truncated, never full content (rule L5)
+REASON_LIMIT = 500
+# Postgres's and Supabase's pooler's texts for a refused login; psycopg gives no SQL state on connect.
+# shortcut: matches English server messages only, extend if a server runs another lc_messages.
+REFUSED_LOGIN = ("password authentication failed", "no pg_hba.conf entry", "pg_hba.conf rejects",
+                 "is not permitted to log in", "Tenant or user not found")   # reasons are truncated, never full content (rule L5)
 
 
 class UnknownFailureCode(ValueError):
@@ -91,9 +95,19 @@ def run_job(name, job, *, connect, source):
 
     The crash is recorded as `unhandled`, with the traceback in the log line and the exception's type
     and message as the reason, then as `job.failed` naming the job. SystemExit(1) follows, so the
-    scheduler sees the failure too.
+    scheduler sees the failure too. When the connection cannot be opened, the job does not run: the
+    failure is logged as `db.auth` (the server refused the login) or `db.unreachable`, with
+    `events.write_failed`, since there is no store to write to, and SystemExit(1) follows.
     """
-    with connect() as conn:
+    try:
+        conn = connect()
+    except psycopg.OperationalError as exc:
+        if any(text in str(exc) for text in REFUSED_LOGIN):
+            record(None, "db.auth", "failed", source=source, reason=str(exc))
+        else:
+            record(None, "db.unreachable", "failed", source=source, reason=str(exc))
+        raise SystemExit(1) from exc
+    with conn:
         try:
             job(conn)
         except Exception as exc:
