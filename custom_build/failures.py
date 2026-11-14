@@ -91,6 +91,14 @@ def _log_lost_write(fields, reason):
     }))
 
 
+def _record_lost_connection(exc, source):
+    """Log a connection that could not be opened: `db.auth` when the server refused the login."""
+    if any(text in str(exc) for text in REFUSED_LOGIN):
+        record(None, "db.auth", "failed", source=source, reason=str(exc))
+    else:
+        record(None, "db.unreachable", "failed", source=source, reason=str(exc))
+
+
 def run_job(name, job, *, connect, source):
     """Run job(conn) on a fresh connection; on any exception record it and exit non-zero.
 
@@ -103,10 +111,7 @@ def run_job(name, job, *, connect, source):
     try:
         conn = connect()
     except psycopg.OperationalError as exc:
-        if any(text in str(exc) for text in REFUSED_LOGIN):
-            record(None, "db.auth", "failed", source=source, reason=str(exc))
-        else:
-            record(None, "db.unreachable", "failed", source=source, reason=str(exc))
+        _record_lost_connection(exc, source)
         raise SystemExit(1) from exc
     with conn:
         try:
@@ -121,15 +126,17 @@ def run_job(name, job, *, connect, source):
             raise SystemExit(1) from exc
 
 
-def boundary(store, on_crash):
+def boundary(source, connect, on_crash):
     """Wrap a guard that Hermes calls on `pre_llm_call` (ARCHITECTURE.md section 2).
 
     On any exception the guard raises, log it with its traceback, record `guard.crash` with the
-    exception as the reason, and return `on_crash(exc)`, the block that ends the turn: Hermes would
-    otherwise log the error and let the turn go ahead. `store()` gives the machine's name and a new
-    connection, or None for the connection when there is no store to write to; when it gives None or
-    raises, the record is logged with events.write_failed instead, and the block is still returned.
-    Only this row of section 2's table is built; the others arrive with their entry points.
+    exception's type and message as the reason, and return `on_crash(exc)`, the block that ends the
+    turn: Hermes would otherwise log the error and let the turn go ahead. `source()` names the machine
+    and `connect()` opens a connection for the record, or gives None when there is no store. A
+    connection that fails to open is logged as `db.auth` or `db.unreachable`, as in `run_job`; with no
+    connection, or an insert the store refuses, the record is logged with events.write_failed, and the
+    block is still returned. Only this row of section 2's table is built; the others arrive with their
+    entry points.
     """
     def wrap(guard):
         @functools.wraps(guard)
@@ -139,13 +146,16 @@ def boundary(store, on_crash):
             except Exception as exc:
                 logger.exception("guard %s crashed", guard.__qualname__)
                 reason = "".join(traceback.format_exception_only(exc)).strip()
+                machine, conn = "unknown", None
                 try:
-                    source, conn = store()
+                    machine = source()
+                    conn = connect()
+                except psycopg.OperationalError as lost:
+                    _record_lost_connection(lost, machine)
                 except Exception:   # the turn's block must not depend on reaching the store (rule F5)
                     logger.exception("no connection to record guard.crash")
-                    source, conn = "unknown", None
                 with conn or contextlib.nullcontext():   # closes the connection opened for this record
-                    record(conn, "guard.crash", "failed", source=source, reason=reason, session_id=kwargs.get("session_id"))
+                    record(conn, "guard.crash", "failed", source=machine, reason=reason, session_id=kwargs.get("session_id"))
                 return on_crash(exc)
         return call
     return wrap

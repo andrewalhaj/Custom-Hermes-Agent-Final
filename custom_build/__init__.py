@@ -44,7 +44,7 @@ def register(ctx) -> None:
 
     from . import failures, settings
 
-    @failures.boundary(lambda: settings.store(ctx), settings.crash_block)
+    @failures.boundary(lambda: settings.machine(ctx), settings.connect, settings.crash_block)
     def check_turn(**kwargs):
         return settings.check_turn(ctx, **kwargs)
 

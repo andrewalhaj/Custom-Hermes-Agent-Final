@@ -23,13 +23,17 @@ def missing_settings(ctx):
     return [name for name, value in found if not value]
 
 
-def store(ctx):
-    """The machine's name and a new connection to the store, or None for it when no URL is set."""
+def machine(ctx):
+    """The machine's name, for the `source` of what it records."""
+    return ctx.get_config(MACHINE_NAME) or "unknown"
+
+
+def connect():
+    """A new connection to the store, or None when no URL is set."""
     from agent.secret_scope import get_secret
 
     url = get_secret(DATABASE_URL)
-    conn = psycopg.connect(url, autocommit=True, connect_timeout=CONNECT_TIMEOUT) if url else None
-    return ctx.get_config(MACHINE_NAME) or "unknown", conn
+    return psycopg.connect(url, autocommit=True, connect_timeout=CONNECT_TIMEOUT) if url else None
 
 
 def check_turn(ctx, **kwargs):
@@ -41,8 +45,8 @@ def check_turn(ctx, **kwargs):
     if not (missing := missing_settings(ctx)):
         return None
     names = ", ".join(missing)
-    failures.record(None, "config.missing", "failed", source=ctx.get_config(MACHINE_NAME) or "unknown",
-                    reason=names, session_id=kwargs.get("session_id"))
+    failures.record(None, "config.missing", "failed", source=machine(ctx), reason=names,
+                    session_id=kwargs.get("session_id"))
     return {"action": "block", "message": f"The custom build blocked this turn: config.missing ({names}). "
                                           "Set it, then send your message again."}
 
