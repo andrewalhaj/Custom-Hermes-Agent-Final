@@ -161,39 +161,6 @@ def test_config_location_fails_when_git_is_missing(tmp_path):
     check(tmp_path, script, {"pyproject.toml": CONFIG}, "/nonexistent/git")
 
 
-def test_workflow_runs_on_pull_requests_and_main():
-    workflow = yaml.safe_load(WORKFLOW.read_text())
-    triggers = workflow[True] if True in workflow else workflow["on"]  # YAML 1.1 reads a bare `on` key as True
-    assert triggers["pull_request"]["branches"] == ["main"]
-    assert triggers["push"]["branches"] == ["main"]
-    commands = [s.get("run", "") for s in workflow["jobs"]["tests"]["steps"]]
-    assert "ruff check ." in commands
-    assert "python -m pytest -q" in commands
-
-
-def test_tests_get_a_postgres_17_to_apply_migrations_to():
-    job = yaml.safe_load(WORKFLOW.read_text())["jobs"]["tests"]
-    service = job["services"]["postgres"]
-    assert service["image"].startswith("postgres:17")
-    assert "5432:5432" in service["ports"]
-    assert job["env"]["TEST_DATABASE_URL"].startswith("postgresql://postgres:")
-    assert job["env"]["TEST_DATABASE_URL"].endswith("@localhost:5432/postgres")
-
-
-HERMES_COMMIT = "3b421578588243f920886e6fe79a6faa87ea026e"   # tag v0.23.1
-
-
-def test_tests_run_on_hermes_v0_23_1_and_its_python():
-    steps = yaml.safe_load(WORKFLOW.read_text())["jobs"]["tests"]["steps"]
-    python = next(s for s in steps if s.get("uses", "").startswith("actions/setup-python"))
-    assert python["with"]["python-version"] == "3.14"
-    script = step_script("install Hermes v0.23.1 from its own lock file")
-    assert HERMES_COMMIT in script
-    assert "pip install --no-deps -r hermes-requirements.txt" in script
-    commands = [s.get("run", "") for s in steps]
-    assert commands.index(script) < commands.index("python -m pytest -q")
-
-
 # The secret scan (CONTRIBUTING.md section 8, W13; #84): gitleaks in CI over the whole history, and as a
 # pre-commit hook over what is staged. Needs gitleaks on PATH, as the CI job installs it.
 
@@ -273,3 +240,36 @@ def test_the_hook_passes_a_clean_commit(tmp_path):
 def test_the_hook_refuses_when_gitleaks_is_missing(tmp_path):
     code, output = run_hook(tmp_path, {"a.py": CODE}, "/usr/bin:/bin")
     assert code != 0 and "gitleaks is not installed" in output, output
+
+
+def test_workflow_runs_on_pull_requests_and_main():
+    workflow = yaml.safe_load(WORKFLOW.read_text())
+    triggers = workflow[True] if True in workflow else workflow["on"]  # YAML 1.1 reads a bare `on` key as True
+    assert triggers["pull_request"]["branches"] == ["main"]
+    assert triggers["push"]["branches"] == ["main"]
+    commands = [s.get("run", "") for s in workflow["jobs"]["tests"]["steps"]]
+    assert "ruff check ." in commands
+    assert "python -m pytest -q" in commands
+
+
+def test_tests_get_a_postgres_17_to_apply_migrations_to():
+    job = yaml.safe_load(WORKFLOW.read_text())["jobs"]["tests"]
+    service = job["services"]["postgres"]
+    assert service["image"].startswith("postgres:17")
+    assert "5432:5432" in service["ports"]
+    assert job["env"]["TEST_DATABASE_URL"].startswith("postgresql://postgres:")
+    assert job["env"]["TEST_DATABASE_URL"].endswith("@localhost:5432/postgres")
+
+
+HERMES_COMMIT = "3b421578588243f920886e6fe79a6faa87ea026e"   # tag v0.23.1
+
+
+def test_tests_run_on_hermes_v0_23_1_and_its_python():
+    steps = yaml.safe_load(WORKFLOW.read_text())["jobs"]["tests"]["steps"]
+    python = next(s for s in steps if s.get("uses", "").startswith("actions/setup-python"))
+    assert python["with"]["python-version"] == "3.14"
+    script = step_script("install Hermes v0.23.1 from its own lock file")
+    assert HERMES_COMMIT in script
+    assert "pip install --no-deps -r hermes-requirements.txt" in script
+    commands = [s.get("run", "") for s in steps]
+    assert commands.index(script) < commands.index("python -m pytest -q")
