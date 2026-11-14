@@ -52,6 +52,12 @@ def test_a_safe_setup_passes(tmp_path, db):
     assert rows == []
 
 
+def test_a_hook_timeout_of_30_seconds_or_more_passes(tmp_path, db):
+    code, output, rows = run_check(tmp_path, db, config=_with(("plugins", "hook_callback_timeout"), 45))
+    assert code == 0, output
+    assert rows == []
+
+
 def _with(path, value):
     config = safe_config()
     node = config
@@ -126,10 +132,4 @@ def test_host_plugin_isolation_leaves_no_check_to_pass(tmp_path, db):
     code, output, rows = run_check(tmp_path, db, config=_with(("plugins", "isolation"), "host"))
     assert code != 0, output
     assert "is not a `hermes` command" in output
-    assert rows == []
-
-
-def test_a_hook_timeout_of_30_seconds_or_more_passes(tmp_path, db):
-    code, output, rows = run_check(tmp_path, db, config=_with(("plugins", "hook_callback_timeout"), 45))
-    assert code == 0, output
     assert rows == []
