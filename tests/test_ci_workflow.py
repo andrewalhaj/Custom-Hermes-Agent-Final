@@ -167,6 +167,7 @@ def test_config_location_fails_when_git_is_missing(tmp_path):
 GITLEAKS_VERSION = "8.30.1"
 HOOK = WORKFLOW.parent.parent.parent / ".githooks" / "pre-commit"
 SCAN_STEP = "no secret in the repository's history"
+TOKEN_FILE = "leaky.py"   # the redacted findings must name it
 
 
 def fake_token():
@@ -174,29 +175,73 @@ def fake_token():
     return "gh" + "p_" + "R8vXq2LmT5wZ9kPa3Nc7Jd1Hf6Gs4Bt0Yu2E"
 
 
+def git(repo, *args):
+    subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@example.invalid", *args],
+                   check=True, capture_output=True)
+
+
 def committed_repo(tmp_path, files):
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
     for name, body in files.items():
         (tmp_path / name).write_text(body)
-        subprocess.run(["git", "-C", str(tmp_path), "add", "-f", name], check=True)
-    subprocess.run(["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@example.invalid",
-                    "commit", "-q", "-m", "x"], check=True)
+        git(tmp_path, "add", "-f", name)
+    git(tmp_path, "commit", "-q", "-m", "x")
 
 
-@pytest.mark.parametrize("label, files, expect", [
-    ("clean", {"a.py": CODE}, None),
-    ("a committed token", {"a.py": f'token = "{fake_token()}"\n'}, "leaks found"),
-])
-def test_secret_scan(tmp_path, label, files, expect):
-    committed_repo(tmp_path, files)
+def merge_brings_in_a_token(tmp_path):
+    # The merge commit adds a file neither parent has; plain `git log -p` shows merges without a diff.
+    subprocess.run(["git", "init", "-q", "-b", "main", str(tmp_path)], check=True)
+    for branch, name in (("main", "a.py"), ("side", "b.py"), ("main", "c.py")):
+        if branch == "side":
+            git(tmp_path, "switch", "-q", "-c", "side")
+        elif name == "c.py":
+            git(tmp_path, "switch", "-q", "main")
+        (tmp_path / name).write_text(CODE)
+        git(tmp_path, "add", name)
+        git(tmp_path, "commit", "-q", "-m", name)
+    git(tmp_path, "merge", "-q", "--no-commit", "--no-ff", "side")
+    (tmp_path / TOKEN_FILE).write_text(f'token = "{fake_token()}"\n')
+    git(tmp_path, "add", TOKEN_FILE)
+    git(tmp_path, "commit", "-q", "-m", "merge")
+
+
+def run_scan(cwd, path=None):
+    env = None if path is None else {"PATH": path, "HOME": str(cwd)}
     result = subprocess.run(["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", step_script(SCAN_STEP)],
-                            check=False, cwd=tmp_path, capture_output=True, text=True)
-    output = result.stdout + result.stderr
-    if expect is None:
-        assert result.returncode == 0, output
-    else:
-        assert result.returncode != 0 and expect in output, output
-        assert fake_token() not in output   # redacted
+                            check=False, cwd=cwd, capture_output=True, text=True, env=env)
+    return result.returncode, result.stdout + result.stderr
+
+
+def test_the_scan_passes_a_clean_history(tmp_path):
+    committed_repo(tmp_path, {"a.py": CODE})
+    code, output = run_scan(tmp_path)
+    assert code == 0, output
+
+
+def test_the_scan_refuses_a_committed_token_and_names_its_file_redacted(tmp_path):
+    committed_repo(tmp_path, {TOKEN_FILE: f'token = "{fake_token()}"\n'})
+    code, output = run_scan(tmp_path)
+    assert code != 0 and "gitleaks found a secret" in output, output
+    assert TOKEN_FILE in output and fake_token() not in output
+
+
+def test_the_scan_refuses_a_token_a_merge_commit_brings_in(tmp_path):
+    merge_brings_in_a_token(tmp_path)
+    code, output = run_scan(tmp_path)
+    assert code != 0 and TOKEN_FILE in output, output
+    assert fake_token() not in output
+
+
+def test_the_scan_fails_when_git_cannot_read_the_history(tmp_path):
+    # gitleaks itself exits 0 when git fails; that is no scan, not a clean history.
+    code, output = run_scan(tmp_path)   # not a repository
+    assert code != 0 and "reported an error" in output, output
+
+
+def test_the_scan_fails_when_gitleaks_is_missing(tmp_path):
+    committed_repo(tmp_path, {"a.py": CODE})
+    code, output = run_scan(tmp_path, path="/usr/bin:/bin")
+    assert code != 0 and "gitleaks is not installed" in output, output
 
 
 def test_ci_installs_a_pinned_gitleaks_checked_against_its_checksum_before_the_tests():
@@ -210,13 +255,14 @@ def test_ci_installs_a_pinned_gitleaks_checked_against_its_checksum_before_the_t
     assert commands.index(install) < commands.index("python -m pytest -q")
 
 
-def run_hook(tmp_path, files, path):
-    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
-    for name, body in files.items():
-        (tmp_path / name).write_text(body)
-        subprocess.run(["git", "-C", str(tmp_path), "add", "-f", name], check=True)
-    result = subprocess.run([str(HOOK)], check=False, cwd=tmp_path, capture_output=True, text=True,
-                            env={"PATH": path, "HOME": str(tmp_path)})
+def run_hook(cwd, path, files=None):
+    if files is not None:
+        subprocess.run(["git", "init", "-q", str(cwd)], check=True)
+        for name, body in files.items():
+            (cwd / name).write_text(body)
+            git(cwd, "add", "-f", name)
+    result = subprocess.run([str(HOOK)], check=False, cwd=cwd, capture_output=True, text=True,
+                            env={"PATH": path, "HOME": str(cwd)})
     return result.returncode, result.stdout + result.stderr
 
 
@@ -226,20 +272,25 @@ def gitleaks_path():
     return f"{pathlib.Path(found).parent}:/usr/bin:/bin"
 
 
-def test_the_hook_refuses_a_staged_token(tmp_path):
-    code, output = run_hook(tmp_path, {"a.py": f'token = "{fake_token()}"\n'}, gitleaks_path())
-    assert code != 0 and "leaks found" in output, output
-    assert fake_token() not in output
+def test_the_hook_refuses_a_staged_token_and_names_its_file_redacted(tmp_path):
+    code, output = run_hook(tmp_path, gitleaks_path(), {TOKEN_FILE: f'token = "{fake_token()}"\n'})
+    assert code != 0 and "gitleaks found a secret" in output, output
+    assert TOKEN_FILE in output and fake_token() not in output
 
 
 def test_the_hook_passes_a_clean_commit(tmp_path):
-    code, output = run_hook(tmp_path, {"a.py": CODE}, gitleaks_path())
+    code, output = run_hook(tmp_path, gitleaks_path(), {"a.py": CODE})
     assert code == 0, output
 
 
 def test_the_hook_refuses_when_gitleaks_is_missing(tmp_path):
-    code, output = run_hook(tmp_path, {"a.py": CODE}, "/usr/bin:/bin")
+    code, output = run_hook(tmp_path, "/usr/bin:/bin", {"a.py": CODE})
     assert code != 0 and "gitleaks is not installed" in output, output
+
+
+def test_the_hook_refuses_when_git_cannot_read_what_is_staged(tmp_path):
+    code, output = run_hook(tmp_path, gitleaks_path())   # not a repository
+    assert code != 0 and "reported an error" in output, output
 
 
 def test_workflow_runs_on_pull_requests_and_main():
