@@ -150,3 +150,12 @@ def test_the_catalog_holds_the_architecture_codes():
         "config.unsafe", "config.missing", "redact.failed", "memory.write_rejected", "events.write_failed",
         "job.failed", "job.missed", "job.no_output", "unhandled",
     }
+
+
+def test_record_without_a_connection_logs_the_loss(caplog):
+    caplog.set_level(logging.INFO, logger=failures.__name__)
+    failures.record(None, "config.missing", "failed", source="host-a", reason="machine_name")
+    assert [(level, line["code"]) for level, line in _json_lines(caplog)] == [
+        (logging.WARNING, "config.missing"),
+        (logging.ERROR, "events.write_failed"),
+    ]
