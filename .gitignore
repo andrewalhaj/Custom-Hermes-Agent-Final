@@ -26,3 +26,4 @@
 
 /custom_build/*
 !/custom_build/*.py
+!/custom_build/plugin.yaml
