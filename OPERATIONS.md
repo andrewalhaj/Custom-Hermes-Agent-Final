@@ -65,17 +65,23 @@ Every machine that runs the agent:
    - **Python packages** are declared in the plugin's manifest. Hermes resolves them when the plugin is selected or enabled, and `--yes-deps` gives the consent it otherwise asks for; this has not yet been run with real packages. Each one comes from a package index: Hermes drops a requirement given as a direct URL without an error.[3] Packages installed by hand with pip are not durable, and a later replacement of Hermes's environment need not keep them.[2]
    - **Private repository:** when an anonymous clone is refused, Hermes tries `GITHUB_TOKEN` or `GH_TOKEN`, then `gh auth token`, then the git credential helper.[3] This has not yet been run against a private repository.
 7. **Starts the Hermes gateway through a service that runs the build's startup check first** (ARCHITECTURE.md section 5.5). When the check fails, the service does not start Hermes. A session started by hand skips the check. The check is `hermes custom-build check`, run through the same command Hermes's own unit uses to start the gateway, so it runs on Hermes's interpreter and packages. It runs through the job wrapper, so a crash in it is recorded as a scheduled job's is, and a failed check records its own code (ARCHITECTURE.md section 5.5).
-   - **The service:** Hermes's own unit, installed with `hermes gateway install --system --no-start-now --start-on-login` (`hermes-gateway.service` for the default profile). Once it exists, a Hermes client that needs a gateway starts that service instead of a gateway of its own, so the check runs on every start.[3] A gateway a client started earlier (`gateway run --idle-exit`) is stopped with `hermes gateway stop` before the service is started.
+   - **The service:** Hermes's own unit, `hermes-gateway.service` for the default profile, enabled at boot. It is set up in this order, with no Hermes client open:
+     1. `hermes gateway stop`, which stops a gateway a client started (`gateway run --idle-exit`). Once the unit exists, the same command stops the unit and leaves such a gateway running.[3]
+     2. `hermes gateway install --system --no-start-now --start-on-login`.
+     3. The drop-in below, then `systemctl daemon-reload`.
+     4. `systemctl start hermes-gateway`.
+
+     With the drop-in in place, a Hermes client no longer starts a gateway itself: it refuses a unit that has an `ExecStartPre=` line, reports the gateway inaccessible and starts nothing. Only systemd starts the gateway, and always through the check.[3]
    - **The drop-in**, `/etc/systemd/system/hermes-gateway.service.d/10-custom-build-check.conf`, beside Hermes's unit, so it survives Hermes regenerating the unit:
 
      ```ini
      [Service]
      TimeoutStartSec=10min
-     ExecStartPre=/bin/sh -c '<the command from ExecStart=, with "custom-build check" in place of "gateway run"> || { sleep 300; exit 1; }'
+     ExecStartPre=/bin/sh -c '"$$@" || { sleep 300; exit 1; }' custom-build-check <the command from ExecStart=, ending in "custom-build" "check" in place of "gateway" "run">
      ```
 
-     The command is copied from the unit's `ExecStart=` because it differs between kinds of install, and it is copied again after every Hermes update that rewrites the unit; a stale copy fails closed.
-   - **Why the check waits before it fails:** Hermes's unit restarts the service 5 seconds after any failure, with no start limit, and a failing `ExecStartPre=` counts as a failure; `RestartPreventExitStatus=` does not apply to it.[7] Without the wait, a host whose check keeps failing would run it, and write a row to `events`, every 5 seconds. With it, the check is retried about every 5 minutes, and a host recovers by itself once a temporary cause, such as an unreachable store, goes away. `TimeoutStartSec=` is raised because it covers `ExecStartPre=`. systemd's own backoff (`RestartSteps=`) is not used: its documentation does not say when the delay resets, so it could slow every later restart of a healthy gateway.[7]
+     The command is copied from the unit's `ExecStart=` because it differs between kinds of install, and it is copied again after every Hermes update that rewrites the unit; a stale copy fails closed. It is passed to the shell as arguments, not inside the shell's quotes, so systemd parses it exactly as it parses `ExecStart=`; `$$` is systemd's escape for a literal `$`.[7]
+   - **Why the check waits before it fails:** Hermes's unit has `Restart=always`, `RestartSec=5` and no start limit, and a failing `ExecStartPre=` triggers that restart; `RestartPreventExitStatus=` does not apply to it.[7] Without the wait, a host whose check keeps failing would run it, and write a row to `events`, every 5 seconds. With it, the check is retried about every 5 minutes, and a host recovers by itself once a temporary cause, such as an unreachable store, goes away. `TimeoutStartSec=` is raised above the wait because systemd times `ExecStartPre=` against it.[8] systemd's own backoff (`RestartSteps=`) is not used: its documentation does not say when the delay resets, so it could slow every later restart of a healthy gateway.[7]
 
 ## 4. Scheduled jobs
 
@@ -140,8 +146,9 @@ The files in `migrations/` are applied to `<project-ref>` in file-name order, ea
 
 - [1] [Scheduled tasks: no-agent mode (Hermes Agent documentation)](https://hermes-agent.nousresearch.com/docs/user-guide/features/cron)
 - [2] [Build a Hermes plugin (Hermes Agent developer guide)](https://hermes-agent.nousresearch.com/docs/developer-guide/plugins)
-- [3] Hermes v0.23.1 source: `plugins/security-guidance/`, `tools/approval.py`, `tools/approval_context.py`, `gateway/session_finite.py`, `hermes_cli/cli_session_mixin.py`, `hermes_cli/config_defaults.py`, `hermes_cli/gateway.py`, `hermes_cli/gateway_runtime.py`, `hermes_cli/gateway_runtime_service.py`, `hermes_cli/git_credentials.py`, `hermes_cli/main.py`, `hermes_cli/plugin_isolation.py`, `hermes_cli/plugins.py`, `hermes_cli/plugins_cmd.py`, `hermes_cli/plugins_cmd_install.py`, `hermes_cli/plugins_cmd_update.py`, `hermes_cli/plugins_discovery.py`, `hermes_cli/plugins_ledger.py`, `hermes_cli/plugins_loader.py`, `plugins/memory/__init__.py`, `pm/plugin_declarations.py`
+- [3] Hermes v0.23.1 source: `plugins/security-guidance/`, `tools/approval.py`, `tools/approval_context.py`, `gateway/session_finite.py`, `hermes_cli/cli_session_mixin.py`, `hermes_cli/config_defaults.py`, `hermes_cli/gateway.py`, `hermes_cli/gateway_runtime.py`, `hermes_cli/gateway_runtime_service.py`, `hermes_cli/gateway_runtime_service_identity.py`, `hermes_cli/git_credentials.py`, `hermes_cli/main.py`, `hermes_cli/plugin_isolation.py`, `hermes_cli/plugins.py`, `hermes_cli/plugins_cmd.py`, `hermes_cli/plugins_cmd_install.py`, `hermes_cli/plugins_cmd_update.py`, `hermes_cli/plugins_discovery.py`, `hermes_cli/plugins_ledger.py`, `hermes_cli/plugins_loader.py`, `plugins/memory/__init__.py`, `pm/plugin_declarations.py`
 - [4] [Supabase for Platforms: make database changes (Supabase documentation)](https://supabase.com/docs/guides/integrations/supabase-for-platforms#make-database-changes)
 - [5] [psql: `\password` (PostgreSQL 17 documentation)](https://www.postgresql.org/docs/17/app-psql.html)
 - [6] [libpq: `PQencryptPasswordConn` (PostgreSQL 17 documentation)](https://www.postgresql.org/docs/17/libpq-misc.html)
-- [7] [systemd.service: Restart=, RestartPreventExitStatus=, RestartSteps=, TimeoutStartSec= (systemd documentation)](https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html)
+- [7] [systemd.service: command lines, Restart=, RestartPreventExitStatus=, RestartSteps= (systemd documentation)](https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html)
+- [8] [systemd v255 source: `service_enter_start_pre` in `src/core/service.c`](https://github.com/systemd/systemd/blob/v255/src/core/service.c)
