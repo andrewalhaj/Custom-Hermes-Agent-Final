@@ -11,9 +11,8 @@ import sys
 import psycopg
 
 from . import failures
+from .settings import DATABASE_URL, MACHINE_NAME, missing_settings
 
-MACHINE_NAME = "machine_name"   # plugins.entries.custom_build.settings.machine_name in config.yaml
-DATABASE_URL = "CUSTOM_BUILD_DATABASE_URL"   # a secret, in the profile's .env
 UNATTENDED_MODES = ("cron_mode", "single_query_mode", "unattended_mode")
 
 
@@ -56,9 +55,7 @@ def run(ctx):
 
     machine = ctx.get_config(MACHINE_NAME)
     url = get_secret(DATABASE_URL)
-    missing = [name for name, value in (("plugins.entries.custom_build.settings." + MACHINE_NAME, machine),
-                                        (DATABASE_URL, url)) if not value]
-    if missing:
+    if missing := missing_settings(ctx):
         failures.record(None, "config.missing", "failed", source=machine or "unknown", reason=", ".join(missing))
         print(f"custom-build check failed: config.missing ({', '.join(missing)}); "
               "not recorded in events: events.write_failed (no connection to the store)", file=sys.stderr)

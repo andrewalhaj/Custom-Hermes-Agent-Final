@@ -187,3 +187,72 @@ def test_job_wrapper_logs_a_refused_login_as_db_auth(db, caplog):
         (logging.WARNING, "db.auth"),
         (logging.ERROR, "events.write_failed"),
     ]
+
+
+# The boundary wrapper (ARCHITECTURE.md section 2), as a guard on pre_llm_call uses it (issue #68).
+
+def _guard_that_crashes(**kwargs):
+    raise KeyError("boom")
+
+
+def _block(exc):
+    return {"action": "block", "message": f"blocked after {type(exc).__name__}"}
+
+
+def _host_a():
+    return "host-a"
+
+
+def _codes(caplog):
+    return [(level, line["code"]) for level, line in _json_lines(caplog)]
+
+
+def test_boundary_records_a_crash_and_returns_the_entry_points_answer(db, caplog):
+    caplog.set_level(logging.INFO, logger=failures.__name__)
+    guard = failures.boundary(_host_a, lambda: psycopg.connect(db["agent"], autocommit=True), _block)(_guard_that_crashes)
+    assert guard(session_id="s1") == {"action": "block", "message": "blocked after KeyError"}
+    rows = _rows(db["owner"])
+    assert [(r[0], r[2], r[4], r[5]) for r in rows] == [("host-a", "s1", "guard.crash", "failed")]
+    assert rows[0][6] == "KeyError: 'boom'"
+    assert any(r.exc_info and r.exc_info[0] is KeyError for r in caplog.records)   # the traceback is logged
+
+
+def test_boundary_passes_a_normal_answer_through_without_opening_a_connection():
+    def connect():
+        raise AssertionError("a connection was opened with nothing to record")
+
+    assert failures.boundary(_host_a, connect, _block)(lambda **kwargs: None)(session_id="s1") is None
+
+
+def test_boundary_with_no_store_logs_the_lost_record_and_still_answers(caplog):
+    caplog.set_level(logging.INFO, logger=failures.__name__)
+    guard = failures.boundary(_host_a, lambda: None, _block)(_guard_that_crashes)
+    assert guard() == {"action": "block", "message": "blocked after KeyError"}
+    assert _codes(caplog) == [(logging.WARNING, "guard.crash"), (logging.ERROR, "events.write_failed")]
+
+
+def test_boundary_records_an_unreachable_store_and_still_answers(caplog):
+    caplog.set_level(logging.INFO, logger=failures.__name__)
+    guard = failures.boundary(_host_a, lambda: psycopg.connect("postgresql://u:p@localhost:1/x", connect_timeout=3),
+                              _block)(_guard_that_crashes)
+    assert guard() == {"action": "block", "message": "blocked after KeyError"}
+    assert _codes(caplog) == [
+        (logging.WARNING, "db.unreachable"), (logging.ERROR, "events.write_failed"),   # as the job wrapper does
+        (logging.WARNING, "guard.crash"), (logging.ERROR, "events.write_failed"),
+    ]
+
+
+def test_boundary_still_answers_when_the_store_refuses_the_record(db, caplog):
+    # The maintenance login cannot insert into events: the insert fails after the connection opened.
+    caplog.set_level(logging.INFO, logger=failures.__name__)
+    guard = failures.boundary(_host_a, lambda: psycopg.connect(db["maint"], autocommit=True), _block)(_guard_that_crashes)
+    assert guard() == {"action": "block", "message": "blocked after KeyError"}
+    assert _codes(caplog) == [(logging.WARNING, "guard.crash"), (logging.ERROR, "events.write_failed")]
+
+
+def test_record_logs_a_row_the_store_refuses_as_a_lost_write(db, caplog):
+    caplog.set_level(logging.INFO, logger=failures.__name__)
+    with psycopg.connect(db["maint"], autocommit=True) as conn:
+        failures.record(conn, "config.missing", "failed", source="host-a", reason="machine_name")
+    assert _codes(caplog) == [(logging.WARNING, "config.missing"), (logging.ERROR, "events.write_failed")]
+    assert _rows(db["owner"]) == []

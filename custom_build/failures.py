@@ -1,11 +1,12 @@
 """The failure module: the catalog, the one recording helper and the job wrapper.
 
 ARCHITECTURE.md section 6.1; CONTRIBUTING.md rules F1-F6 and L3. Every failure is logged as one JSON
-line and written to memory.events with the same fields, through `record`. `run_job` is one of the two
-places allowed to catch everything (rule C2); the boundary wrapper arrives with the plugin's first
-entry point.
+line and written to memory.events with the same fields, through `record`. `run_job` and `boundary` are
+the only places allowed to catch everything (rule C2).
 """
 
+import contextlib
+import functools
 import json
 import logging
 import traceback
@@ -56,9 +57,9 @@ def record(conn, code, result, *, source, reason=None, project=None, session_id=
 
     Raises UnknownFailureCode for a code outside the catalog and ValueError for an unknown result,
     before anything is logged or written. When the row cannot be written, because `conn` is None (no
-    store is configured) or the connection failed (psycopg.OperationalError), the original line is
-    already logged, and the loss is logged at ERROR as events.write_failed (rule F5); nothing is
-    returned either way.
+    store is configured) or the store failed or refused the insert (any psycopg.Error), the original
+    line is already logged, and the loss is logged at ERROR as events.write_failed (rule F5); nothing
+    is returned either way.
     """
     if code not in CATALOG:
         raise UnknownFailureCode(code)
@@ -79,7 +80,7 @@ def record(conn, code, result, *, source, reason=None, project=None, session_id=
                 " values (%s, %s, %s, %s, %s, %s, %s, %s)",
                 (source, project, session_id, turn, code, result, fields["reason"], Jsonb(fields["detail"])),
             )
-    except psycopg.OperationalError as exc:
+    except psycopg.Error as exc:
         _log_lost_write(fields, str(exc))
 
 
@@ -88,6 +89,14 @@ def _log_lost_write(fields, reason):
         **fields, "code": "events.write_failed", "result": "failed", "reason": reason[:REASON_LIMIT],
         "detail": {"lost_code": fields["code"]},
     }))
+
+
+def _record_lost_connection(exc, source):
+    """Log a connection that could not be opened: `db.auth` when the server refused the login."""
+    if any(text in str(exc) for text in REFUSED_LOGIN):
+        record(None, "db.auth", "failed", source=source, reason=str(exc))
+    else:
+        record(None, "db.unreachable", "failed", source=source, reason=str(exc))
 
 
 def run_job(name, job, *, connect, source):
@@ -102,10 +111,7 @@ def run_job(name, job, *, connect, source):
     try:
         conn = connect()
     except psycopg.OperationalError as exc:
-        if any(text in str(exc) for text in REFUSED_LOGIN):
-            record(None, "db.auth", "failed", source=source, reason=str(exc))
-        else:
-            record(None, "db.unreachable", "failed", source=source, reason=str(exc))
+        _record_lost_connection(exc, source)
         raise SystemExit(1) from exc
     with conn:
         try:
@@ -118,3 +124,38 @@ def run_job(name, job, *, connect, source):
             record(conn, "unhandled", "failed", source=source, reason=reason)
             record(conn, "job.failed", "failed", source=source, reason=reason, detail={"job": name})
             raise SystemExit(1) from exc
+
+
+def boundary(source, connect, on_crash):
+    """Wrap a guard that Hermes calls on `pre_llm_call` (ARCHITECTURE.md section 2).
+
+    On any exception the guard raises, log it with its traceback, record `guard.crash` with the
+    exception's type and message as the reason, and return `on_crash(exc)`, the block that ends the
+    turn: Hermes would otherwise log the error and let the turn go ahead. `source()` names the machine
+    and `connect()` opens a connection for the record, or gives None when there is no store. A
+    connection that fails to open is logged as `db.auth` or `db.unreachable`, as in `run_job`; with no
+    connection, or an insert the store refuses, the record is logged with events.write_failed, and the
+    block is still returned. Only this row of section 2's table is built; the others arrive with their
+    entry points.
+    """
+    def wrap(guard):
+        @functools.wraps(guard)
+        def call(*args, **kwargs):
+            try:
+                return guard(*args, **kwargs)
+            except Exception as exc:
+                logger.exception("guard %s crashed", guard.__qualname__)
+                reason = "".join(traceback.format_exception_only(exc)).strip()
+                machine, conn = "unknown", None
+                try:
+                    machine = source()
+                    conn = connect()
+                except psycopg.OperationalError as lost:
+                    _record_lost_connection(lost, machine)
+                except Exception:   # the turn's block must not depend on reaching the store (rule F5)
+                    logger.exception("no connection to record guard.crash")
+                with conn or contextlib.nullcontext():   # closes the connection opened for this record
+                    record(conn, "guard.crash", "failed", source=machine, reason=reason, session_id=kwargs.get("session_id"))
+                return on_crash(exc)
+        return call
+    return wrap
