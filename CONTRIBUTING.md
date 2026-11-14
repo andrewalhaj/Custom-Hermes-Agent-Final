@@ -547,7 +547,7 @@ AI coding agents are welcome contributors, under the same rules as everyone else
 - [12] [Liu et al., Debt Behind the AI Boom, arXiv 2603.28592 version 3 (preprint)](https://arxiv.org/html/2603.28592v3)
 - [13] [try-except-pass (S110) (Ruff documentation)](https://docs.astral.sh/ruff/rules/try-except-pass)
 - [14] [Settings (Ruff documentation)](https://docs.astral.sh/ruff/settings)
-- [15] [Logging HOWTO (Python 3.12 documentation)](https://docs.python.org/3.12/howto/logging.html)
+- [15] [Logging HOWTO (Python 3.14 documentation)](https://docs.python.org/3.14/howto/logging.html)
 - [16] [OpenTelemetry semantic conventions for generative AI](https://github.com/open-telemetry/semantic-conventions-genai)
 - [17] [Logging Cheat Sheet (OWASP)](https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html)
 - [18] [About protected branches (GitHub Docs)](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches)
