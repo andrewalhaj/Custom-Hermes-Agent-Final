@@ -1,7 +1,8 @@
 """The build's two settings and the per-turn check on them (ARCHITECTURE.md section 5.5).
 
 The startup check reads the same two settings before Hermes starts; the plugin's `pre_llm_call` hook
-reads them again on every turn, so a setting removed while Hermes runs blocks the next turn.
+reads them again on every turn, in the process that serves it, which a hand-started Hermes never
+checked before.
 """
 
 import psycopg
