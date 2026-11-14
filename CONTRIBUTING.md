@@ -370,7 +370,7 @@ A rule in this file does not block anything. These guards do. Each is proven wit
 | Plugin validation: `hermes plugins doctor --ci` and a load test, added with the plugin's first code | ARCHITECTURE.md 5.5 | The CI workflow | A plugin whose `register(ctx)` raises fails doctor; a manifest without `kind: standalone` fails the load test |
 | Failure-catalog test | F1, F6 | The test suite | A handler that emits no code, or an unknown one, fails the build |
 | Secret-leak test | L4, W13 | The test suite | A fake key that reaches a log line, a stored row or an outgoing request fails the build |
-| Secret scan, as a pre-commit hook and as a CI job | W13 | A git hook, a workflow | A commit carrying a fake key is refused |
+| Secret scan with gitleaks, at a pinned version, as a pre-commit hook and as a CI job, and GitHub's own secret scanning | W13 | A git hook, a workflow, repository settings | A commit carrying a fake key is refused |
 | Branch protection on `main` | W8, W9 | Repository settings; needs a public repository or a paid plan (8.1) | A direct push to `main` is rejected |
 | An allow-list `.gitignore` | W13, W14 | The repository root | A credential or runtime file placed in the working tree does not show as untracked |
 | Separate database roles for each machine and for maintenance | C7 | The database | With a machine's role, deleting a row or altering a table is refused |
