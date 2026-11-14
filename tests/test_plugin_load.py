@@ -13,24 +13,42 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 PLUGIN = ROOT / "custom_build"
-FAKE_SECRET = "sb_secret_" + "Zq7" * 12
-FAKE_PUBLISHABLE = "sb_publishable_" + "Kp4" * 12
+# Shaped like Supabase's documented keys: 22 random characters, which can include "-", then "_" and an
+# 8-character checksum. Fake values, assembled at run time so no key-shaped literal sits in the
+# repository for a secret scanner to flag.
+FAKE_BODY = "N7UNd0UgjKTV-Uodkm0Hg0_xSvQ7d3m"
+FAKE_SECRET = "sb_" + "secret_" + FAKE_BODY
+FAKE_PUBLISHABLE = "sb_" + "publishable_" + FAKE_BODY
 
 SCENARIO = r"""
 import json, sys
+import plugins.memory
+from hermes_cli.plugins_context import PluginContext
+
+# Only register() may supply the provider: Hermes otherwise falls back to instantiating any
+# MemoryProvider subclass in the module, which would hide a register() that skips it.
+assert hasattr(plugins.memory, "_instantiate_subclass"), "Hermes renamed its provider fallback; re-check this patch"
+plugins.memory._instantiate_subclass = lambda namespace: None
+ordinary_provider_calls = []
+_original = PluginContext.register_memory_provider
+def _record(self, provider):
+    ordinary_provider_calls.append(type(provider).__name__)
+    return _original(self, provider)
+PluginContext.register_memory_provider = _record
+
 from hermes_cli.plugins import discover_plugins, get_plugin_manager
-from plugins.memory import load_memory_provider
 from agent.memory_provider import MemoryProvider
 from agent.redact import redact_sensitive_text
 
 load_provider = sys.argv[1] == "provider"
 discover_plugins()
 entry = next((p for p in get_plugin_manager().list_plugins() if p["name"] == "custom_build"), None)
-provider = load_memory_provider("custom_build") if load_provider else None
+provider = plugins.memory.load_memory_provider("custom_build") if load_provider else None
 text = " ".join(sys.argv[2:])
 print(json.dumps({
     "entry": entry,
     "provider": provider.name if isinstance(provider, MemoryProvider) else None,
+    "ordinary_provider_calls": ordinary_provider_calls,
     "redacted": redact_sensitive_text(text),
 }))
 """
@@ -69,7 +87,13 @@ def test_ordinary_load_succeeds(tmp_path):
 
 def test_ordinary_load_registers_nothing_else_yet(tmp_path):
     entry = load(tmp_path, provider=False)["entry"]
-    assert (entry["tools"], entry["hooks"], entry["commands"]) == (0, 0, 0)
+    assert (entry["tools"], entry["hooks"], entry["commands"], entry["middleware"]) == (0, 0, 0, 0)
+
+
+def test_only_the_provider_load_registers_the_provider(tmp_path):
+    report = load(tmp_path)
+    assert report["provider"] == "custom_build"
+    assert report["ordinary_provider_calls"] == []
 
 
 def test_provider_load_returns_the_custom_build_provider(tmp_path):
