@@ -490,6 +490,7 @@ jobs:
           sys.exit("\n".join(bad) if bad else 0)
           PY
       - run: python -m pytest -q
+      - run: pip-audit   # audits the whole environment the tests ran in, Hermes's packages included
 ```
 
 Lint selection in `pyproject.toml`. Use `extend-select`, which adds to ruff's default rules and keeps `E722` on.[13][14]
