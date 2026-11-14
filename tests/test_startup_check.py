@@ -125,3 +125,14 @@ def test_host_plugin_isolation_leaves_no_check_to_pass(tmp_path, db):
     assert code != 0, output
     assert "is not a `hermes` command" in output
     assert rows == []
+
+
+def test_a_second_profile_fails_with_config_unsafe(tmp_path, db):
+    # One gateway serves every profile by default, while the check reads one profile's settings (#63).
+    second = tmp_path / "home" / "profiles" / "second"
+    second.mkdir(parents=True)
+    (second / "config.yaml").write_text("{}\n", encoding="utf-8")   # a config file makes it a live profile
+    code, output, rows = run_check(tmp_path, db)
+    assert code != 0, output
+    assert [(c, r) for c, r, _, _ in rows] == [("config.unsafe", "failed")], output
+    assert "profile" in rows[0][2] and "second" in rows[0][2]
