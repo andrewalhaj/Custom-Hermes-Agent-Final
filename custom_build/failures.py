@@ -106,12 +106,17 @@ def run_job(name, job, *, connect, source):
     and message as the reason, then as `job.failed` naming the job. SystemExit(1) follows, so the
     scheduler sees the failure too. When the connection cannot be opened, the job does not run: the
     failure is logged as `db.auth` (the server refused the login) or `db.unreachable`, with
-    `events.write_failed`, since there is no store to write to, and SystemExit(1) follows.
+    `events.write_failed`, since there is no store to write to, and SystemExit(1) follows. Any other
+    exception from `connect` is a bug, logged as `unhandled` and `job.failed` the same way.
     """
     try:
         conn = connect()
     except psycopg.OperationalError as exc:
         _record_lost_connection(exc, source)
+        raise SystemExit(1) from exc
+    except Exception as exc:
+        logger.exception("job %s could not open its connection", name)
+        _record_job_crash(None, name, source, exc)
         raise SystemExit(1) from exc
     with conn:
         try:
@@ -120,10 +125,14 @@ def run_job(name, job, *, connect, source):
             logger.exception("job %s crashed", name)
             if not conn.closed:   # a lost connection reads as closed; record() then logs events.write_failed
                 conn.rollback()   # leave the job's open or aborted transaction, so the records below commit
-            reason = "".join(traceback.format_exception_only(exc)).strip()
-            record(conn, "unhandled", "failed", source=source, reason=reason)
-            record(conn, "job.failed", "failed", source=source, reason=reason, detail={"job": name})
+            _record_job_crash(conn, name, source, exc)
             raise SystemExit(1) from exc
+
+
+def _record_job_crash(conn, name, source, exc):
+    reason = "".join(traceback.format_exception_only(exc)).strip()
+    record(conn, "unhandled", "failed", source=source, reason=reason)
+    record(conn, "job.failed", "failed", source=source, reason=reason, detail={"job": name})
 
 
 def boundary(source, connect, on_crash):
