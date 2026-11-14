@@ -98,7 +98,8 @@ def test_a_missing_machine_name_fails_with_config_missing(tmp_path, db):
     assert code != 0
     assert "config.missing" in output and "machine_name" in output
     assert rows == []   # nowhere to write: logged with events.write_failed instead
-    assert "events.write_failed" in output
+    errors_log = (tmp_path / "home" / "logs" / "errors.log").read_text(encoding="utf-8")
+    assert errors_log.index('"code": "config.missing"') < errors_log.index('"code": "events.write_failed"')
 
 
 def test_a_missing_database_url_fails_with_config_missing(tmp_path, db):
@@ -113,6 +114,7 @@ def test_without_the_ordinary_load_the_check_does_not_exist(tmp_path, db):
     config["plugins"]["enabled"] = []
     code, output, rows = run_check(tmp_path, db, config=config)
     assert code != 0, output   # the service does not start Hermes
+    assert "is not a `hermes` command" in output
     assert rows == []          # and nothing can be recorded: the absence check covers this host
 
 
