@@ -256,3 +256,20 @@ def test_record_logs_a_row_the_store_refuses_as_a_lost_write(db, caplog):
         failures.record(conn, "config.missing", "failed", source="host-a", reason="machine_name")
     assert _codes(caplog) == [(logging.WARNING, "config.missing"), (logging.ERROR, "events.write_failed")]
     assert _rows(db["owner"]) == []
+
+
+def test_job_wrapper_records_an_unexpected_error_while_connecting(caplog):
+    # Anything but a connection failure, raised before the job runs, is a bug: `unhandled` and
+    # `job.failed`, with nowhere to write them (#54).
+    def connect():
+        raise ValueError("bad connection string")
+
+    caplog.set_level(logging.INFO, logger=failures.__name__)
+    with pytest.raises(SystemExit) as exit_info:
+        failures.run_job("nightly", _never_runs, source="host-a", connect=connect)
+    assert exit_info.value.code != 0
+    assert _codes(caplog) == [
+        (logging.WARNING, "unhandled"), (logging.ERROR, "events.write_failed"),
+        (logging.WARNING, "job.failed"), (logging.ERROR, "events.write_failed"),
+    ]
+    assert any(r.exc_info and r.exc_info[0] is ValueError for r in caplog.records)   # the traceback is logged
