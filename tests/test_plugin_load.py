@@ -105,3 +105,31 @@ def test_a_manifest_without_kind_standalone_fails_the_load_check(tmp_path):
         return text.replace("kind: standalone\n", "")
 
     assert not ordinary_load_ok(load(tmp_path, provider=False, manifest_edit=drop_kind))
+
+
+DOCTOR = "import sys; from hermes_cli.main import main; sys.argv = ['hermes', *sys.argv[1:]]; main()"
+
+
+def doctor(tmp_path, plugin_dir):
+    """Run `hermes plugins doctor <dir> --ci` with a throwaway home; return its exit code and output."""
+    env = {"HERMES_HOME": str(tmp_path / "doctor-home"), "HOME": str(tmp_path), "PATH": "/usr/bin:/bin"}
+    result = subprocess.run([sys.executable, "-c", DOCTOR, "plugins", "doctor", str(plugin_dir), "--ci"],
+                            capture_output=True, text=True, env=env, cwd=tmp_path, timeout=120, check=False)
+    return result.returncode, result.stdout + result.stderr
+
+
+def test_doctor_passes_the_plugin(tmp_path):
+    code, output = doctor(tmp_path, PLUGIN)
+    assert code == 0, output
+    assert "custom_build" in output and "standalone" in output
+
+
+def test_doctor_fails_a_plugin_whose_register_raises(tmp_path):
+    broken = tmp_path / "custom_build"
+    shutil.copytree(PLUGIN, broken, ignore=shutil.ignore_patterns("__pycache__"))
+    init = broken / "__init__.py"
+    init.write_text(init.read_text(encoding="utf-8").replace(
+        "def register(ctx) -> None:\n", "def register(ctx) -> None:\n    raise RuntimeError('broken on purpose')\n"),
+        encoding="utf-8")
+    code, output = doctor(tmp_path, broken)
+    assert code != 0, output
