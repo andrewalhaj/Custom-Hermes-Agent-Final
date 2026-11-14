@@ -14,18 +14,24 @@ DATABASE_URL = "CUSTOM_BUILD_DATABASE_URL"   # a secret, in the profile's .env
 CONNECT_TIMEOUT = 5   # seconds, well under Hermes's 30-second deadline for a hook
 
 
+def _usable(value):
+    """A setting is usable only as a non-empty string; anything else counts as missing (#71)."""
+    return isinstance(value, str) and bool(value.strip())
+
+
 def missing_settings(ctx):
-    """The names of the build's settings that are not set."""
+    """The names of the build's settings that are not set, or set to something other than text."""
     from agent.secret_scope import get_secret
 
     found = (("plugins.entries.custom_build.settings." + MACHINE_NAME, ctx.get_config(MACHINE_NAME)),
              (DATABASE_URL, get_secret(DATABASE_URL)))
-    return [name for name, value in found if not value]
+    return [name for name, value in found if not _usable(value)]
 
 
 def machine(ctx):
-    """The machine's name, for the `source` of what it records."""
-    return ctx.get_config(MACHINE_NAME) or "unknown"
+    """The machine's name, for the `source` of what it records; "unknown" when it is not usable."""
+    value = ctx.get_config(MACHINE_NAME)
+    return value if _usable(value) else "unknown"
 
 
 def connect():

@@ -102,3 +102,4 @@ def test_a_machine_name_that_is_not_a_string_blocks_the_turn(tmp_path, db):
 def test_a_blank_machine_name_blocks_the_turn(tmp_path, db):
     blocks, output, rows = run_turn(tmp_path, db, machine_name="   ")
     assert len(blocks) == 1 and "config.missing" in blocks[0], output
+    assert rows == []
