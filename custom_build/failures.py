@@ -27,7 +27,7 @@ CATALOG = {
     "rerank.fallback": "The judge could not rerank, and the pool kept its fused order (degraded)",
     "store.gate_error": "The judge failed during a write; the fact is queued",
     "guard.crash": "A guard raised during a turn",
-    "guard.not_loaded": "The startup check found the plugin, a guard's hooks or the provider not loaded",
+    "guard.not_loaded": "The startup check found a guard's hooks or the provider not loaded",
     "config.unsafe": "The startup check found a Hermes setting with a value the build does not support",
     "config.missing": "A setting the build needs is missing or invalid",
     "redact.failed": "The redactor raised; the text is not stored or sent",

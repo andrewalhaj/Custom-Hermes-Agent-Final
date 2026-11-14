@@ -493,7 +493,7 @@ Initial codes:
 | `judge.timeout`, `judge.error` | The judge model times out or errors |
 | `rerank.fallback` | The judge could not rerank, and the pool kept its fused order (degraded) |
 | `store.gate_error` | The judge failed during a write; the fact is queued |
-| `guard.crash`, `guard.not_loaded` | A guard raised during a turn (recorded instead of `unhandled`), or the startup check found the plugin, a guard's hooks or the provider not loaded, or the memory provider found, when it started, that the guards had not loaded |
+| `guard.crash`, `guard.not_loaded` | A guard raised during a turn (recorded instead of `unhandled`), or the startup check found a guard's hooks or the provider not loaded, or the memory provider found, when it started, that the guards had not loaded |
 | `config.unsafe` | The startup check found a Hermes setting with a value the build does not support (section 5.5) |
 | `config.missing` | A setting the build needs is missing or invalid: the startup check fails, a scheduled job stops, and inside Hermes every turn is blocked (section 5.5) |
 | `redact.failed` | The redactor raised; the text is not stored or sent |
