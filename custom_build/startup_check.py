@@ -14,6 +14,9 @@ from . import failures
 from .settings import DATABASE_URL, MACHINE_NAME, missing_settings
 
 UNATTENDED_MODES = ("cron_mode", "single_query_mode", "unattended_mode")
+# Seconds. Below it Hermes may skip a slow guard and let its turn through; at 0 it runs hooks with no
+# deadline, so a hung guard hangs the turn. #75 settled on 30 or more (#69).
+HOOK_TIMEOUT_FLOOR = 30
 
 
 def load_problems():
@@ -32,6 +35,7 @@ def load_problems():
 def unsafe_settings():
     """Hermes settings with a value the build does not support (`config.unsafe`)."""
     from hermes_cli.config import load_config_readonly
+    from hermes_cli.plugins import _resolve_hook_callback_timeout
     from tools.approval_context import _binary_approval_mode, _get_approval_mode
     from utils import is_truthy_value
 
@@ -41,6 +45,8 @@ def unsafe_settings():
         found.append("memory.provider is not custom_build")
     if _get_approval_mode() == "off":
         found.append("approvals.mode is off")
+    if (timeout := _resolve_hook_callback_timeout()) < HOOK_TIMEOUT_FLOOR:
+        found.append(f"plugins.hook_callback_timeout is {timeout:g} seconds, below {HOOK_TIMEOUT_FLOOR}")
     found += [f"approvals.{mode} does not read as deny" for mode in UNATTENDED_MODES if _binary_approval_mode(mode) != "deny"]
     if is_truthy_value(os.getenv("HERMES_YOLO_MODE", "")):
         found.append("HERMES_YOLO_MODE is set")
