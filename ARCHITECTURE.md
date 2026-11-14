@@ -223,7 +223,6 @@ Still open, each tracked in its own issue:
 - Where the memory provider reads each message's uid, and what happens to a session chunk when its uid appears on more than one row, its text changes or the message has none, to a branch's copied history, and to facts drawn from messages a rewind removed (#17).
 - How the build detects a gateway session that runs without it: one created in safe mode, or with the profile's settings ignored (#23).
 - Whether a search by the picked action finds what a search by a freely written one would, and whether a low-probability pick should count (#26).
-- The update procedure with real packages, to be run at the plugin's first update on an agent host (#61).
 
 ### 3.7 What leaves the host
 
