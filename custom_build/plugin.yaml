@@ -4,3 +4,7 @@ version: 0.1.0
 # skips the ordinary load (ARCHITECTURE.md section 1). tests/test_plugin_load.py proves it.
 kind: standalone
 description: "The custom build: the memory provider, the guards and the failure module, as one plugin"
+# Hermes installs these into its own environment when the plugin is enabled (OPERATIONS.md section 3).
+# They must equal pyproject.toml's dependencies; tests/test_plugin_load.py checks it.
+python_dependencies:
+  - "psycopg[binary]>=3.2,<4"
