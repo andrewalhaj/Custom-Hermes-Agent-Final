@@ -1,0 +1,6 @@
+name: custom_build
+version: 0.1.0
+# Without this line Hermes treats a directory that defines a memory provider as a provider only and
+# skips the ordinary load (ARCHITECTURE.md section 1). tests/test_plugin_load.py proves it.
+kind: standalone
+description: "The custom build: the memory provider, the guards and the failure module, as one plugin"

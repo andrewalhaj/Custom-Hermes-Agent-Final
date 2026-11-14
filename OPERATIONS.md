@@ -87,7 +87,8 @@ Before upgrading:
 
 1. Read the release notes for changes to hooks, plugin loading, the memory-provider contract, logging and redaction.
 2. Re-check every Hermes fact that ARCHITECTURE.md and this document state for the current version, and update them in the same pull request as the upgrade.
-3. Run the full test suite and the eval set on the new version before switching machines over. That includes the parts of the build that rest on Hermes behaviour the developer guide does not describe (ARCHITECTURE.md section 5.6).
+3. Export the new tag's dependency pins into `hermes-requirements.txt` and change the pinned tag and commit in the CI workflow (CONTRIBUTING.md 8.2).
+4. Run the full test suite and the eval set on the new version before switching machines over. That includes the parts of the build that rest on Hermes behaviour the developer guide does not describe (ARCHITECTURE.md section 5.6).
 
 ## 6. Plugins from outside this repository
 
