@@ -187,3 +187,46 @@ def test_job_wrapper_logs_a_refused_login_as_db_auth(db, caplog):
         (logging.WARNING, "db.auth"),
         (logging.ERROR, "events.write_failed"),
     ]
+
+
+# The boundary wrapper (ARCHITECTURE.md section 2), as a guard on pre_llm_call uses it (issue #68).
+
+def _guard_that_crashes(**kwargs):
+    raise KeyError("boom")
+
+
+def _block(exc):
+    return {"action": "block", "message": f"blocked after {type(exc).__name__}"}
+
+
+def _unreachable_store():
+    return "host-a", psycopg.connect("postgresql://u:p@localhost:1/x", connect_timeout=3)
+
+
+def test_boundary_records_a_crash_and_returns_the_entry_points_answer(db, caplog):
+    caplog.set_level(logging.INFO, logger=failures.__name__)
+    guard = failures.boundary("guard.crash", lambda: ("host-a", psycopg.connect(db["agent"], autocommit=True)),
+                              _block)(_guard_that_crashes)
+    assert guard(session_id="s1") == {"action": "block", "message": "blocked after KeyError"}
+    rows = _rows(db["owner"])
+    assert [(r[0], r[2], r[4], r[5]) for r in rows] == [("host-a", "s1", "guard.crash", "failed")]
+    assert rows[0][6] == "KeyError: 'boom'"
+    assert any(r.exc_info and r.exc_info[0] is KeyError for r in caplog.records)   # the traceback is logged
+
+
+def test_boundary_passes_a_normal_answer_through_without_opening_a_connection():
+    def store():
+        raise AssertionError("a connection was opened with nothing to record")
+
+    assert failures.boundary("guard.crash", store, _block)(lambda **kwargs: None)(session_id="s1") is None
+
+
+@pytest.mark.parametrize("store", [lambda: ("host-a", None), _unreachable_store], ids=["no store", "unreachable"])
+def test_boundary_logs_a_lost_record_and_still_answers(caplog, store):
+    caplog.set_level(logging.INFO, logger=failures.__name__)
+    guard = failures.boundary("guard.crash", store, _block)(_guard_that_crashes)
+    assert guard() == {"action": "block", "message": "blocked after KeyError"}
+    assert [(level, line["code"]) for level, line in _json_lines(caplog)] == [
+        (logging.WARNING, "guard.crash"),
+        (logging.ERROR, "events.write_failed"),
+    ]
