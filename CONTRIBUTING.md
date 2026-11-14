@@ -158,6 +158,7 @@ git switch -c <type>/<short-description>
 - Stage by path. Never `git add -A` or `git add .`.
 - The `.gitignore` is an allow-list (section 8), so a new file in a path it does not list is invisible to `git status`. `git add <path>` refuses such a path ("ignored by one of your .gitignore files"), and `git add -A` skips it silently. When a path is refused, add a line for it to `.gitignore` in the same pull request; never use `git add -f`.
 - Before pushing, run `git status --short --ignored`. Every `!!` entry must be a cache or build directory, such as `.pytest_cache/` or `.ruff_cache/`. A file or directory of yours listed there is hidden by the allow-list and is not in your commits.
+- Switch on the repository's pre-commit hook once in each clone: `git config core.hooksPath .githooks`. It runs gitleaks over what is staged and refuses a commit that carries a secret (section 8); without gitleaks on `PATH` it refuses every commit. Install gitleaks 8.30.1 from its GitHub release and check the archive against the release's checksums file. Never skip the hook with `--no-verify`.
 - When the tests come first, commit them on their own with "(red)" in the subject, then commit the change that makes them pass. The squash-merge keeps the failing commit off `main`.
 - Run the full test suite and the linter before each commit that changes behaviour.
 

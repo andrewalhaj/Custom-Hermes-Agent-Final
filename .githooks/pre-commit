@@ -1,0 +1,8 @@
+#!/bin/sh
+# Refuse a commit that carries a secret (CONTRIBUTING.md sections 4.4 and 8, rule W13).
+# Fails closed: without gitleaks on PATH, nothing is committed.
+command -v gitleaks >/dev/null 2>&1 || {
+    echo "pre-commit: gitleaks is not installed, so nothing was scanned; see CONTRIBUTING.md 4.4" >&2
+    exit 1
+}
+exec gitleaks git --pre-commit --staged --redact --no-banner --exit-code 1
