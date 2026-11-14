@@ -46,7 +46,23 @@ jobs:
           echo "$RUNNER_TEMP/gitleaks-bin" >> "$GITHUB_PATH"
       - name: no secret in the repository's history
         shell: bash
-        run: gitleaks git --redact --no-banner --exit-code 1 .
+        run: |
+          command -v gitleaks >/dev/null || { echo "secret scan: gitleaks is not installed"; exit 1; }
+          errors=$(mktemp)
+          # Findings, redacted, go to stdout; at this log level only gitleaks's errors go to stderr.
+          # --diff-merges=remerge also shows what a merge commit itself brings in.
+          set +e
+          gitleaks git --redact --no-banner -v --log-level error --exit-code 1 \
+            --log-opts="--full-history --all --diff-filter=tuxdb --diff-merges=remerge" . 2>"$errors"
+          code=$?
+          set -e
+          # gitleaks exits 0 when git itself fails: that is no scan, not a clean history.
+          if [ -s "$errors" ]; then
+            cat "$errors"
+            echo "secret scan: gitleaks reported an error, so the history was not scanned"
+            exit 1
+          fi
+          [ "$code" -eq 0 ] || { echo "secret scan: gitleaks found a secret (above, redacted)"; exit "$code"; }
       - run: ruff check .
       - name: no noqa that can silence the error-handling rules
         shell: bash

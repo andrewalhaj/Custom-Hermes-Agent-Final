@@ -445,7 +445,23 @@ jobs:
           echo "$RUNNER_TEMP/gitleaks-bin" >> "$GITHUB_PATH"
       - name: no secret in the repository's history
         shell: bash
-        run: gitleaks git --redact --no-banner --exit-code 1 .
+        run: |
+          command -v gitleaks >/dev/null || { echo "secret scan: gitleaks is not installed"; exit 1; }
+          errors=$(mktemp)
+          # Findings, redacted, go to stdout; at this log level only gitleaks's errors go to stderr.
+          # --diff-merges=remerge also shows what a merge commit itself brings in.
+          set +e
+          gitleaks git --redact --no-banner -v --log-level error --exit-code 1 \
+            --log-opts="--full-history --all --diff-filter=tuxdb --diff-merges=remerge" . 2>"$errors"
+          code=$?
+          set -e
+          # gitleaks exits 0 when git itself fails: that is no scan, not a clean history.
+          if [ -s "$errors" ]; then
+            cat "$errors"
+            echo "secret scan: gitleaks reported an error, so the history was not scanned"
+            exit 1
+          fi
+          [ "$code" -eq 0 ] || { echo "secret scan: gitleaks found a secret (above, redacted)"; exit "$code"; }
       - run: ruff check .
       - name: no noqa that can silence the error-handling rules
         shell: bash
@@ -520,7 +536,7 @@ extend-select = ["BLE001", "S110"]
 - Pin ruff to one version in the project's dev dependencies, so local runs and CI agree.
 - The job name is what appears as the status check to require.
 - Give any step that pipes a tool into a count or a test `shell: bash`, and never end it with `|| true`. Without `shell: bash` a failed command in the middle of a pipe does not stop the step, so a tool that did not start reads as a count of 0 and the check passes.[21] A check must tell "found nothing" from "the tool failed", as the `noqa` step above does. Prove each step with its failing case before relying on it (C6).
-- Add a secret scan beside the tests.
+- The secret scan runs gitleaks, at a pinned version checked against its published checksum, over the whole history (`fetch-depth: 0`), merge commits included. It fails on a finding and on any error gitleaks reports, because gitleaks exits 0 when git itself fails.
 - Add a dependency audit when there are dependencies: `pip-audit` with no arguments.[22]
 
 ### 8.3 When a guard or a permission blocks you
