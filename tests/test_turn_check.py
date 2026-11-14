@@ -87,3 +87,18 @@ def test_a_crash_in_the_check_is_recorded_and_blocks_the_turn(tmp_path, db):
     assert len(blocks) == 1, output
     assert "guard.crash" in blocks[0]
     assert rows == [("guard.crash", "failed", "KeyError: 'boom'", "host-a", "s1")], output
+
+
+def test_a_machine_name_that_is_not_a_string_blocks_the_turn(tmp_path, db):
+    # An unquoted date in config.yaml loads as a date; it counts as missing (#71) instead of crashing record().
+    import datetime
+
+    blocks, output, rows = run_turn(tmp_path, db, machine_name=datetime.date(2026, 11, 14))
+    assert len(blocks) == 1, output
+    assert "config.missing" in blocks[0] and "machine_name" in blocks[0], blocks
+    assert rows == []
+
+
+def test_a_blank_machine_name_blocks_the_turn(tmp_path, db):
+    blocks, output, rows = run_turn(tmp_path, db, machine_name="   ")
+    assert len(blocks) == 1 and "config.missing" in blocks[0], output
