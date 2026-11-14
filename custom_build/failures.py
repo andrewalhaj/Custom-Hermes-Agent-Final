@@ -1,11 +1,12 @@
 """The failure module: the catalog, the one recording helper and the job wrapper.
 
 ARCHITECTURE.md section 6.1; CONTRIBUTING.md rules F1-F6 and L3. Every failure is logged as one JSON
-line and written to memory.events with the same fields, through `record`. `run_job` is one of the two
-places allowed to catch everything (rule C2); the boundary wrapper arrives with the plugin's first
-entry point.
+line and written to memory.events with the same fields, through `record`. `run_job` and `boundary` are
+the only places allowed to catch everything (rule C2).
 """
 
+import contextlib
+import functools
 import json
 import logging
 import traceback
@@ -118,3 +119,33 @@ def run_job(name, job, *, connect, source):
             record(conn, "unhandled", "failed", source=source, reason=reason)
             record(conn, "job.failed", "failed", source=source, reason=reason, detail={"job": name})
             raise SystemExit(1) from exc
+
+
+def boundary(store, on_crash):
+    """Wrap a guard that Hermes calls on `pre_llm_call` (ARCHITECTURE.md section 2).
+
+    On any exception the guard raises, log it with its traceback, record `guard.crash` with the
+    exception as the reason, and return `on_crash(exc)`, the block that ends the turn: Hermes would
+    otherwise log the error and let the turn go ahead. `store()` gives the machine's name and a new
+    connection, or None for the connection when there is no store to write to; when it gives None or
+    raises, the record is logged with events.write_failed instead, and the block is still returned.
+    Only this row of section 2's table is built; the others arrive with their entry points.
+    """
+    def wrap(guard):
+        @functools.wraps(guard)
+        def call(*args, **kwargs):
+            try:
+                return guard(*args, **kwargs)
+            except Exception as exc:
+                logger.exception("guard %s crashed", guard.__qualname__)
+                reason = "".join(traceback.format_exception_only(exc)).strip()
+                try:
+                    source, conn = store()
+                except Exception:   # the turn's block must not depend on reaching the store (rule F5)
+                    logger.exception("no connection to record guard.crash")
+                    source, conn = "unknown", None
+                with conn or contextlib.nullcontext():   # closes the connection opened for this record
+                    record(conn, "guard.crash", "failed", source=source, reason=reason, session_id=kwargs.get("session_id"))
+                return on_crash(exc)
+        return call
+    return wrap
