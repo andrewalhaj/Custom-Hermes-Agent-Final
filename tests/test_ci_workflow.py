@@ -177,3 +177,17 @@ def test_tests_get_a_postgres_17_to_apply_migrations_to():
     assert "5432:5432" in service["ports"]
     assert job["env"]["TEST_DATABASE_URL"].startswith("postgresql://postgres:")
     assert job["env"]["TEST_DATABASE_URL"].endswith("@localhost:5432/postgres")
+
+
+HERMES_COMMIT = "3b421578588243f920886e6fe79a6faa87ea026e"   # tag v0.23.1
+
+
+def test_tests_run_on_hermes_v0_23_1_and_its_python():
+    steps = yaml.safe_load(WORKFLOW.read_text())["jobs"]["tests"]["steps"]
+    python = next(s for s in steps if s.get("uses", "").startswith("actions/setup-python"))
+    assert python["with"]["python-version"] == "3.14"
+    script = step_script("install Hermes v0.23.1 from its own lock file")
+    assert HERMES_COMMIT in script
+    assert "pip install --no-deps -r hermes-requirements.txt" in script
+    commands = [s.get("run", "") for s in steps]
+    assert commands.index(script) < commands.index("python -m pytest -q")

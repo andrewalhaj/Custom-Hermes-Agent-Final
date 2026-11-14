@@ -419,7 +419,17 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
-        with: { python-version: "3.12", cache: pip }
+        with: { python-version: "3.14", cache: pip }
+      - name: install Hermes v0.23.1 from its own lock file
+        shell: bash
+        run: |
+          # Hermes refuses to build a wheel and its pyproject pins conflict, so: its locked pins, then
+          # Hermes itself editable at the tag's commit, neither resolved again.
+          git clone --quiet --depth 1 --branch v0.23.1 https://github.com/NousResearch/hermes-agent "$RUNNER_TEMP/hermes-agent"
+          [ "$(git -C "$RUNNER_TEMP/hermes-agent" rev-parse HEAD)" = 3b421578588243f920886e6fe79a6faa87ea026e ] \
+            || { echo "tag v0.23.1 no longer points at the pinned commit"; exit 1; }
+          pip install --no-deps -r hermes-requirements.txt
+          pip install --no-deps -e "$RUNNER_TEMP/hermes-agent"
       - run: pip install -e ".[dev]"
       - run: ruff check .
       - name: no noqa that can silence the error-handling rules
