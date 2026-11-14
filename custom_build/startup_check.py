@@ -32,7 +32,6 @@ def load_problems():
 def unsafe_settings():
     """Hermes settings with a value the build does not support (`config.unsafe`)."""
     from hermes_cli.config import load_config_readonly
-    from hermes_cli.profiles import profiles_to_serve
     from tools.approval_context import _binary_approval_mode, _get_approval_mode
     from utils import is_truthy_value
 
@@ -47,10 +46,20 @@ def unsafe_settings():
         found.append("HERMES_YOLO_MODE is set")
     if not is_truthy_value((config.get("compression") or {}).get("in_place"), default=True):
         found.append("compression.in_place is false")
-    # Every installed profile: one gateway serves them all by default, and this check reads one (#63).
-    if len(profiles := profiles_to_serve(multiplex=True, include_standalone=True, include_parked=True)) > 1:
-        found.append(f"the host has {len(profiles)} Hermes profiles ({', '.join(name for name, _ in profiles)}), not one")
+    if len(profiles := installed_profiles()) > 1:
+        found.append(f"the host has {len(profiles)} Hermes profiles ({', '.join(profiles)}), not one")
     return found
+
+
+def installed_profiles():
+    """The names of every Hermes profile on this host, parked and standalone ones included.
+
+    One gateway serves every profile by default, while this check reads one profile's settings, so an
+    agent host has one profile (#63). Listed the way Hermes itself lists the profiles it can serve.
+    """
+    from hermes_cli.profiles import profiles_to_serve
+
+    return [name for name, _ in profiles_to_serve(multiplex=True, include_standalone=True, include_parked=True)]
 
 
 def run(ctx):
