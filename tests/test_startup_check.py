@@ -69,6 +69,8 @@ def _with(path, value):
     ("unattended mode allow", {"config": _with(("approvals", "unattended_mode"), "allow")}, "approvals.unattended_mode"),
     ("compression not in place", {"config": _with(("compression", "in_place"), False)}, "compression.in_place"),
     ("yolo variable set", {"env": {"HERMES_YOLO_MODE": "1"}}, "HERMES_YOLO_MODE"),
+    ("hook timeout below 30 seconds", {"config": _with(("plugins", "hook_callback_timeout"), 10)}, "plugins.hook_callback_timeout"),
+    ("hook timeout switched off", {"config": _with(("plugins", "hook_callback_timeout"), 0)}, "plugins.hook_callback_timeout"),
 ])
 def test_an_unsafe_setting_fails_with_config_unsafe(tmp_path, db, label, kwargs, setting):
     code, output, rows = run_check(tmp_path, db, **kwargs)
@@ -124,4 +126,10 @@ def test_host_plugin_isolation_leaves_no_check_to_pass(tmp_path, db):
     code, output, rows = run_check(tmp_path, db, config=_with(("plugins", "isolation"), "host"))
     assert code != 0, output
     assert "is not a `hermes` command" in output
+    assert rows == []
+
+
+def test_a_hook_timeout_of_30_seconds_or_more_passes(tmp_path, db):
+    code, output, rows = run_check(tmp_path, db, config=_with(("plugins", "hook_callback_timeout"), 45))
+    assert code == 0, output
     assert rows == []
