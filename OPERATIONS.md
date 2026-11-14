@@ -48,7 +48,7 @@ Every machine that runs the agent:
    | Setting | Value | Why |
    |---|---|---|
    | `memory.provider` | `custom_build` | Hermes runs one external memory provider, and this setting selects it.[2] The startup check fails otherwise. |
-   | `skills.write_approval` | `true` | Every change Hermes's skill-writing tool makes, in a turn or in its background review, is staged until a person approves it with `/skills approve`, so the agent never changes its own instructions unchecked (ARCHITECTURE.md section 5.3, #42).[3] |
+   | `skills.write_approval` | `true` | Every change Hermes's skill-writing tool makes, in a turn or in its background review, is staged until a person approves it with `/skills approve` (ARCHITECTURE.md section 5.3, #42). It holds that tool only; other tools that write files can still change a skill's files (#80). Unset means off, and the startup check does not read it yet (#81).[3] |
    | `memory.write_approval` | `true` | Every write to `MEMORY.md` and `USER.md` waits for a person's approval, so a wrong assumption is never saved unchecked. |
    | `compression.in_place` | `true` (default) | With `false`, compressing a transcript gives the conversation a new session id, and rows written before and after it no longer match (ARCHITECTURE.md section 4.1).[3] The startup check fails otherwise. |
    | `logging.max_size_mb`, `logging.backup_count` | Defaults (5, 3) or larger | Long enough to cover the period between daily reports |
