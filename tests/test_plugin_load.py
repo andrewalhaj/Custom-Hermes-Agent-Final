@@ -85,7 +85,7 @@ def test_ordinary_load_succeeds(tmp_path):
     assert ordinary_load_ok(report), report["entry"]
 
 
-def test_ordinary_load_registers_nothing_else_yet(tmp_path):
+def test_ordinary_load_registers_no_tools_hooks_slash_commands_or_middleware(tmp_path):
     entry = load(tmp_path, provider=False)["entry"]
     assert (entry["tools"], entry["hooks"], entry["commands"], entry["middleware"]) == (0, 0, 0, 0)
 
