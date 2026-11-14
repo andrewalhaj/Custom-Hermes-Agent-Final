@@ -9,6 +9,7 @@
 !/CONTRIBUTING.md
 !/OPERATIONS.md
 !/pyproject.toml
+!/hermes-requirements.txt
 !/tests/
 !/migrations/
 !/custom_build/
