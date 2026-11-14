@@ -157,3 +157,14 @@ def test_doctor_fails_a_plugin_whose_register_raises(tmp_path):
         encoding="utf-8")
     code, output = doctor(tmp_path, broken)
     assert code != 0, output
+
+
+def test_hermes_reads_the_plugins_packages_and_they_match_the_project():
+    import tomllib
+
+    from pm.plugin_declarations import read_python_declaration
+
+    declaration = read_python_declaration(PLUGIN)
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["dependencies"]
+    assert declaration.installs_packages
+    assert list(declaration.install_requirements) == project
