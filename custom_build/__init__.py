@@ -6,8 +6,6 @@ Both register the redaction patterns, so the provider never writes without them;
 load registers the provider, and only the ordinary load registers the `hermes custom-build` command.
 """
 
-import sys
-
 from agent.memory_provider import MemoryProvider
 
 # Supabase API key formats, which Hermes's redactor does not cover (CONTRIBUTING.md rule L4).
@@ -44,9 +42,9 @@ def register(ctx) -> None:
         ctx.register_memory_provider(CustomBuildProvider())
         return
 
-    def run_check(args) -> None:
+    def run_check(args) -> int:
         from . import startup_check
 
-        sys.exit(startup_check.run(ctx))
+        return startup_check.run(ctx)   # Hermes turns a non-zero return into the exit code
 
     ctx.register_cli_command("custom-build", "The custom build's commands", _add_subcommands, run_check)

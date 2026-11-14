@@ -18,17 +18,16 @@ UNATTENDED_MODES = ("cron_mode", "single_query_mode", "unattended_mode")
 
 
 def load_problems():
-    """What stops either of the plugin's two loads, as read from Hermes (`guard.not_loaded`)."""
-    from hermes_cli.plugins import get_plugin_manager
+    """What stops the provider load, as read from Hermes (`guard.not_loaded`).
+
+    The ordinary load needs no check here: when it fails, Hermes drops everything the plugin
+    registered, this subcommand included, so the check cannot run at all.
+    """
     from plugins.memory import load_memory_provider
 
-    problems = []
-    entry = next((p for p in get_plugin_manager().list_plugins() if p["name"] == "custom_build"), None)
-    if entry is None or entry["error"] or not entry["enabled"]:
-        problems.append(f"the ordinary load failed: {entry['error'] if entry else 'no plugin entry'}")
     if getattr(load_memory_provider("custom_build"), "name", None) != "custom_build":
-        problems.append("Hermes's memory-provider loader did not return the custom_build provider")
-    return problems
+        return ["Hermes's memory-provider loader did not return the custom_build provider"]
+    return []
 
 
 def unsafe_settings():
