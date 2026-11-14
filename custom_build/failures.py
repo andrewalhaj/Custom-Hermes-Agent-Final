@@ -51,9 +51,10 @@ def record(conn, code, result, *, source, reason=None, project=None, session_id=
     """Log one JSON line and write the matching memory.events row.
 
     Raises UnknownFailureCode for a code outside the catalog and ValueError for an unknown result,
-    before anything is logged or written. When the row cannot be written because the connection
-    failed (psycopg.OperationalError), the original line is already logged, and the loss is logged
-    at ERROR as events.write_failed (rule F5); nothing is returned either way.
+    before anything is logged or written. When the row cannot be written, because `conn` is None (no
+    store is configured) or the connection failed (psycopg.OperationalError), the original line is
+    already logged, and the loss is logged at ERROR as events.write_failed (rule F5); nothing is
+    returned either way.
     """
     if code not in CATALOG:
         raise UnknownFailureCode(code)
@@ -64,6 +65,9 @@ def record(conn, code, result, *, source, reason=None, project=None, session_id=
         "result": result, "reason": reason[:REASON_LIMIT] if reason else reason, "detail": detail or {},
     }
     logger.log(logging.WARNING if result in ("failed", "degraded") else logging.INFO, json.dumps(fields))
+    if conn is None:
+        _log_lost_write(fields, "no connection to the store")
+        return
     try:
         with conn.transaction():
             conn.execute(
@@ -72,10 +76,14 @@ def record(conn, code, result, *, source, reason=None, project=None, session_id=
                 (source, project, session_id, turn, code, result, fields["reason"], Jsonb(fields["detail"])),
             )
     except psycopg.OperationalError as exc:
-        logger.error(json.dumps({
-            "code": "events.write_failed", "source": source, "project": project, "session_id": session_id,
-            "turn": turn, "result": "failed", "reason": str(exc)[:REASON_LIMIT], "detail": {"lost_code": code},
-        }))
+        _log_lost_write(fields, str(exc))
+
+
+def _log_lost_write(fields, reason):
+    logger.error(json.dumps({
+        **fields, "code": "events.write_failed", "result": "failed", "reason": reason[:REASON_LIMIT],
+        "detail": {"lost_code": fields["code"]},
+    }))
 
 
 def run_job(name, job, *, connect, source):
