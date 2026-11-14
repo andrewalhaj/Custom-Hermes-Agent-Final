@@ -52,7 +52,7 @@ Hermes's developer guide says a memory provider can also load as an ordinary plu
 - **Prefetch blocks the turn.** Hermes waits for `prefetch()` for up to 8 seconds, then treats a timeout or an error as "no notes" and carries on. The provider therefore enforces its own deadline below 8 seconds. On failure it returns a "recall failed" note with its failure code instead of raising, because that is the only way the failure reaches the turn.
 - **There is no input for a second query.** `prefetch()` receives only the user's message. The action query (section 3.5) therefore runs from a `pre_llm_call` plugin. Hermes runs `pre_llm_call` before prefetch, bounds it with its own callback timeout (`plugins.hook_callback_timeout`, 30 seconds by default), and skips prefetch entirely for a turn that `pre_llm_call` blocks.[4]
 - **The project key comes from the session's working directory.** Both copies of the code (section 1) read it with Hermes's documented helper, `agent.runtime_cwd.resolve_agent_cwd()`, and turn it into a key the same way.[3][15] `initialize()` receives the directory as `cwd` only when the agent was built with one, and only as it was at that moment, so neither copy relies on it.[3][14] The key comes from the repository, so it is the same on every machine: the normalised URL of the repository's `origin` remote, or a project ID set in the repository's Hermes configuration when there is no remote. An absolute path is never used, because it differs between machines. A workspace that is not a repository has no project. Neither copy calls `os.getcwd()` itself.
-- **Every entry point goes through one boundary wrapper.** Hermes contains errors from hooks and providers, often silently (section 5.5). Each function Hermes calls is wrapped by a single shared wrapper in the failure module. On an unexpected exception it records the failure with its traceback (section 6), then does what that entry point requires:
+- **Every entry point goes through one boundary wrapper.** Hermes contains errors from hooks and providers, often silently (section 5.5). Each function Hermes calls is wrapped by a single shared wrapper in the failure module. On an unexpected exception it records the failure, with its traceback in the log (section 6.1), then does what that entry point requires:
 
   | Entry point | Recorded as | Then |
   |---|---|---|
@@ -351,8 +351,8 @@ Two SQL functions do the searching: `match_facts` and `match_transcript_chunks`.
 ### 4.3 Access and migrations
 
 - **The tables live in a schema the Supabase Data API does not expose**, so the project's API keys cannot reach them.
-- **Each machine connects with its own role.** That role can read, insert and update. It cannot delete rows or create, alter or drop anything. The privileges belong to two group roles that the migrations create and that cannot log in: `memory_agent`, which every machine's login role joins, and `memory_maintenance`, which the retention job's login role joins. Each table's migration grants them exactly what code uses: on `events`, select and insert for `memory_agent`, and select and delete for `memory_maintenance`. Login roles and their passwords are created outside the repository (OPERATIONS.md section 3).
-- **Row Level Security is on for every table, as a backstop.** With RLS on and no policy, Postgres denies every row to a role that does not own the table, so each machine's role gets explicit select, insert and update policies and no delete policy.[13]
+- **Each machine connects with its own role.** That role can read and insert, and update only the tables that take updates: `memory.events`, the one table so far, takes none. It cannot delete rows or create, alter or drop anything. The privileges belong to two group roles that the migrations create and that cannot log in: `memory_agent`, which every machine's login role joins, and `memory_maintenance`, which the retention job's login role joins. Each table's migration grants them exactly what code uses: on `events`, select and insert for `memory_agent`, and select and delete for `memory_maintenance`. Login roles and their passwords are created outside the repository (OPERATIONS.md section 3).
+- **Row Level Security is on for every table, as a backstop.** With RLS on and no policy, Postgres denies every row to a role that does not own the table, so each machine's role gets explicit select and insert policies, update policies only on tables that take updates, and no delete policy.[13]
 - **Schema changes are migration files in this repository**, reviewed through a pull request. Migrations only move forward; an applied migration is never edited.
 - **Data this repository did not create is not ours to change** (CONTRIBUTING.md rule C7). An export exists before any migration touches data.
 - **Retention.** `events` rows and session chunks are deleted after 90 days by a scheduled job running as the maintenance role (OPERATIONS.md section 1). Facts and digests are kept. The build's own recall then reaches older conversation only through them, and a session too short for a digest (section 3.6) only through its facts; Hermes's own `session_search` is unaffected. Misses worth keeping are copied into the eval set before then (section 3.8).
@@ -450,7 +450,7 @@ Hermes's memory tool enforces the size limits of `MEMORY.md` and `USER.md` itsel
   Hermes logs the first such error at WARNING and identical repeats at DEBUG, so a guard that keeps failing goes quiet in Hermes's own log.
 
   The plugin developer guide says in general that a hook callback that crashes is logged and skipped.[15] That does not describe `pre_tool_call`: in v0.23.1 a callback that raises or times out there produces a block, and for a raise the block names the callback.[14]
-- **Every enforcing guard fails closed, and every failure is recorded.** Each guard's entry point goes through the boundary wrapper (section 2), which records `guard.crash` with the traceback and then re-raises or blocks as the table in section 2 shows. Returning a block from `pre_llm_call` is what Nous recommends for policy hooks.[4] Recording happens in the wrapper on every occurrence, so it does not depend on Hermes logging a repeated error only once.
+- **Every enforcing guard fails closed, and every failure is recorded.** Each guard's entry point goes through the boundary wrapper (section 2), which records `guard.crash`, with the traceback in the log, and then re-raises or blocks as the table in section 2 shows. Returning a block from `pre_llm_call` is what Nous recommends for policy hooks.[4] Recording happens in the wrapper on every occurrence, so it does not depend on Hermes logging a repeated error only once.
 - **`transform_tool_result` is never used to enforce.** Hermes skips a callback that raises there, so a guard on it fails open. It is used only to annotate a tool result, and its failures are recorded by the wrapper like any other.
 
 ### 5.6 Known limits
@@ -479,7 +479,7 @@ Every point of failure has a name, and a failure, an empty result and a fallback
 
 The catalog is one module in the package. It lists every failure code, its severity and whether it is shown in the turn. A test fails the build if any handler or fallback emits a code that is not in it, or emits none.
 
-Two wrappers in the same module record what no handler caught. The boundary wrapper covers every entry point Hermes calls (section 2). The job wrapper covers every scheduled job: on an unexpected exception it records `unhandled` and `job.failed` with the traceback, then exits non-zero, so Hermes cron also sends its own error alert (OPERATIONS.md section 4). The startup check (section 5.5) runs through the job wrapper too: a crash in it is recorded as `unhandled` and `job.failed`, and the check exits non-zero. These two wrappers are the only code allowed to catch everything.
+Two wrappers in the same module record what no handler caught. The boundary wrapper covers every entry point Hermes calls (section 2). The job wrapper covers every scheduled job: on an unexpected exception it records `unhandled` and `job.failed`, then exits non-zero, so Hermes cron also sends its own error alert (OPERATIONS.md section 4). The startup check (section 5.5) runs through the job wrapper too: a crash in it is recorded as `unhandled` and `job.failed`, and the check exits non-zero. These two wrappers are the only code allowed to catch everything. Both log the traceback; the `events` row carries only the exception's type and message as its reason, because a traceback can carry content (CONTRIBUTING.md rule L5).
 
 Initial codes:
 
@@ -500,7 +500,7 @@ Initial codes:
 | `events.write_failed` | An `events` row could not be written; logged locally at ERROR |
 | `job.failed`, `job.missed`, `job.no_output` | A scheduled job failed or the startup check crashed; a scheduled job did not run, or took input and produced nothing |
 | `host.missing` | An agent host on the job-health check's list wrote no heartbeat in the last 24 hours |
-| `unhandled` | Anything not in the catalog, outside a guard. Recorded with its traceback by the boundary wrapper or the job wrapper. |
+| `unhandled` | Anything not in the catalog, outside a guard. Recorded by the boundary wrapper or the job wrapper, with its traceback in the log. |
 
 ### 6.2 Where a failure appears
 
