@@ -57,9 +57,9 @@ def record(conn, code, result, *, source, reason=None, project=None, session_id=
 
     Raises UnknownFailureCode for a code outside the catalog and ValueError for an unknown result,
     before anything is logged or written. When the row cannot be written, because `conn` is None (no
-    store is configured) or the connection failed (psycopg.OperationalError), the original line is
-    already logged, and the loss is logged at ERROR as events.write_failed (rule F5); nothing is
-    returned either way.
+    store is configured) or the store failed or refused the insert (any psycopg.Error), the original
+    line is already logged, and the loss is logged at ERROR as events.write_failed (rule F5); nothing
+    is returned either way.
     """
     if code not in CATALOG:
         raise UnknownFailureCode(code)
@@ -80,7 +80,7 @@ def record(conn, code, result, *, source, reason=None, project=None, session_id=
                 " values (%s, %s, %s, %s, %s, %s, %s, %s)",
                 (source, project, session_id, turn, code, result, fields["reason"], Jsonb(fields["detail"])),
             )
-    except psycopg.OperationalError as exc:
+    except psycopg.Error as exc:
         _log_lost_write(fields, str(exc))
 
 
