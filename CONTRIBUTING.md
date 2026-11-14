@@ -418,6 +418,7 @@ jobs:
       TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
     steps:
       - uses: actions/checkout@v7
+        with: { fetch-depth: 0 }   # the secret scan reads the whole history
       - uses: actions/setup-python@v7
         with: { python-version: "3.14", cache: pip }
       - name: install Hermes v0.23.1 from its own lock file
@@ -431,6 +432,19 @@ jobs:
           pip install --no-deps -r hermes-requirements.txt
           pip install --no-deps -e "$RUNNER_TEMP/hermes-agent"
       - run: pip install -e ".[dev]"
+      - name: install gitleaks 8.30.1, checked against its published checksum
+        shell: bash
+        run: |
+          curl -sSfL -o "$RUNNER_TEMP/gitleaks.tar.gz" \
+            https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  $RUNNER_TEMP/gitleaks.tar.gz" \
+            | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/gitleaks-bin"
+          tar -xzf "$RUNNER_TEMP/gitleaks.tar.gz" -C "$RUNNER_TEMP/gitleaks-bin" gitleaks
+          echo "$RUNNER_TEMP/gitleaks-bin" >> "$GITHUB_PATH"
+      - name: no secret in the repository's history
+        shell: bash
+        run: gitleaks git --redact --no-banner --exit-code 1 .
       - run: ruff check .
       - name: no noqa that can silence the error-handling rules
         shell: bash
