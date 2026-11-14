@@ -90,7 +90,7 @@ Before upgrading:
 3. Export the new tag's dependency pins into `hermes-requirements.txt` and change the pinned tag and commit in the CI workflow (CONTRIBUTING.md 8.2).
 4. Run the full test suite and the eval set on the new version before switching machines over. That includes the parts of the build that rest on Hermes behaviour the developer guide does not describe (ARCHITECTURE.md section 5.6).
 
-The same applies to every other direct dependency: read its release notes in its official documentation, below, and re-check what the documents state about it. Versions are pinned in `pyproject.toml`, `hermes-requirements.txt`, the CI workflow and section 2, not in this list. Hermes's own dependencies are Hermes's to track.
+The same applies to every other direct dependency: read its release notes in its official documentation, below, and re-check what the documents state about it. Versions are pinned in `pyproject.toml`, `custom_build/plugin.yaml`, `hermes-requirements.txt`, the CI workflow and section 2, not in this list. Hermes's own dependencies are Hermes's to track.
 
 - Hermes Agent: [documentation](https://hermes-agent.nousresearch.com/docs), [releases](https://github.com/NousResearch/hermes-agent/releases)
 - Python: [documentation](https://docs.python.org/3.14/)
