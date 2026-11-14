@@ -90,6 +90,24 @@ Before upgrading:
 3. Export the new tag's dependency pins into `hermes-requirements.txt` and change the pinned tag and commit in the CI workflow (CONTRIBUTING.md 8.2).
 4. Run the full test suite and the eval set on the new version before switching machines over. That includes the parts of the build that rest on Hermes behaviour the developer guide does not describe (ARCHITECTURE.md section 5.6).
 
+The same applies to every other direct dependency: read its release notes in its official documentation, below, and re-check what the documents state about it. Versions are pinned in `pyproject.toml`, `hermes-requirements.txt`, the CI workflow and section 2, not in this list. Hermes's own dependencies are Hermes's to track.
+
+- Hermes Agent: [documentation](https://hermes-agent.nousresearch.com/docs), [releases](https://github.com/NousResearch/hermes-agent/releases)
+- Python: [documentation](https://docs.python.org/3.14/)
+- psycopg: [documentation](https://www.psycopg.org/psycopg3/docs/)
+- PostgreSQL: [documentation](https://www.postgresql.org/docs/17/)
+- pgvector: [README](https://github.com/pgvector/pgvector)
+- Supabase: [documentation](https://supabase.com/docs)
+- TypeSafe (Jev): [documentation](https://docs.typesafe.ai)
+- Anthropic (Claude Haiku): [documentation](https://platform.claude.com/docs/en/home)
+- Ollama and `qwen3-embedding`: [documentation](https://docs.ollama.com/), [model page](https://ollama.com/library/qwen3-embedding)
+- GitHub Actions: [documentation](https://docs.github.com/en/actions), [`actions/checkout`](https://github.com/actions/checkout), [`actions/setup-python`](https://github.com/actions/setup-python)
+- ruff: [documentation](https://docs.astral.sh/ruff/)
+- pytest: [documentation](https://docs.pytest.org/)
+- setuptools (the build backend in `pyproject.toml`): [documentation](https://setuptools.pypa.io/)
+- PyYAML: [documentation](https://pyyaml.org/wiki/PyYAMLDocumentation)
+- LongMemEval (eval data): [dataset card](https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned)
+
 ## 6. Plugins from outside this repository
 
 **Third-party plugins.** None are installed. A third-party plugin runs inside Hermes with the same access as the agent, so any plugin added later is listed here with its pinned commit, what it can access, what it sends off the machine, and how it behaves when it fails.
