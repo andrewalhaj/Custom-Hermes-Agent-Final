@@ -10,8 +10,8 @@ import sys
 
 import psycopg
 
-from . import failures
-from .settings import DATABASE_URL, MACHINE_NAME, missing_settings
+from . import failures, settings
+from .settings import DATABASE_URL
 
 UNATTENDED_MODES = ("cron_mode", "single_query_mode", "unattended_mode")
 
@@ -53,11 +53,12 @@ def run(ctx):
     """Run every check; return the exit code: 0 when all pass, 1 otherwise."""
     from agent.secret_scope import get_secret
 
-    machine = ctx.get_config(MACHINE_NAME)
+    machine = settings.machine(ctx)
     url = get_secret(DATABASE_URL)
-    if missing := missing_settings(ctx):
-        failures.record(None, "config.missing", "failed", source=machine or "unknown", reason=", ".join(missing))
-        print(f"custom-build check failed: config.missing ({', '.join(missing)}); "
+    if missing := settings.missing_settings(ctx):
+        failures.record(None, "config.missing", "failed", source=machine, reason=", ".join(missing))
+        print(f"custom-build check failed: config.missing ({', '.join(missing)}): set each one as text, "
+              "quoting a value YAML would read as a number or date; "
               "not recorded in events: events.write_failed (no connection to the store)", file=sys.stderr)
         return 1
 
