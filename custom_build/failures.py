@@ -40,7 +40,11 @@ CATALOG = {
 }
 
 RESULTS = ("ok", "empty", "failed", "degraded")
-REASON_LIMIT = 500   # reasons are truncated, never full content (rule L5)
+REASON_LIMIT = 500
+# Postgres's and Supabase's pooler's texts for a refused login; psycopg gives no SQL state on connect.
+# shortcut: matches English server messages only, extend if a server runs another lc_messages.
+REFUSED_LOGIN = ("password authentication failed", "no pg_hba.conf entry", "pg_hba.conf rejects",
+                 "is not permitted to log in", "Tenant or user not found")   # reasons are truncated, never full content (rule L5)
 
 
 class UnknownFailureCode(ValueError):
@@ -98,8 +102,7 @@ def run_job(name, job, *, connect, source):
     try:
         conn = connect()
     except psycopg.OperationalError as exc:
-        # psycopg gives both cases the same class and no SQL state; Postgres's message tells them apart.
-        if "password authentication failed" in str(exc):
+        if any(text in str(exc) for text in REFUSED_LOGIN):
             record(None, "db.auth", "failed", source=source, reason=str(exc))
         else:
             record(None, "db.unreachable", "failed", source=source, reason=str(exc))

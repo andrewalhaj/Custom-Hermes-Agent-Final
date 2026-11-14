@@ -180,6 +180,10 @@ def test_job_wrapper_logs_an_unreachable_store_and_exits_non_zero(caplog):
 def test_job_wrapper_logs_a_refused_login_as_db_auth(db, caplog):
     caplog.set_level(logging.INFO, logger=failures.__name__)
     wrong = psycopg.conninfo.make_conninfo(db["agent"], password="not-the-password")
-    with pytest.raises(SystemExit):
+    with pytest.raises(SystemExit) as exit_info:
         failures.run_job("nightly", _never_runs, source="host-a", connect=lambda: psycopg.connect(wrong))
-    assert [line["code"] for _, line in _json_lines(caplog)] == ["db.auth", "events.write_failed"]
+    assert exit_info.value.code != 0
+    assert [(level, line["code"]) for level, line in _json_lines(caplog)] == [
+        (logging.WARNING, "db.auth"),
+        (logging.ERROR, "events.write_failed"),
+    ]
