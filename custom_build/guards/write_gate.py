@@ -97,9 +97,14 @@ def blocked_because():
 
 
 def check(ctx, rules, *, tool_name, args, session_id="", task_id="", **kwargs):
-    """The `pre_tool_call` hook in log mode: record a call on the list. It returns nothing, so the call goes ahead."""
+    """The `pre_tool_call` hook in log mode: record a call on the list. It returns nothing, so the call goes ahead.
+
+    What reads the call and the session runs here. Only the write to the store runs on a worker thread,
+    so a store that stops answering never holds the call past Hermes's deadline (ARCHITECTURE.md 5.5).
+    """
     if (found := find_rule(rules, tool_name, args, task_id)) is None:
         return
+    from agent.memory_provider import spawn_context_thread
     from agent.redact import redact_sensitive_text
 
     rule, target = found
@@ -107,13 +112,22 @@ def check(ctx, rules, *, tool_name, args, session_id="", task_id="", **kwargs):
     # The reason is what a maintainer judges a trigger by. Forced redaction, as before every write (rule L4),
     # and of credentials in a URL too, which Hermes leaves in by default and these commands often carry.
     reason = redact_sensitive_text(target, force=True, redact_url_credentials=True)
-    fields = {"source": machine, "session_id": session_id or None, "reason": reason}
-    with failures.store(machine, settings.connect) as conn:
-        tool = {"gen_ai.tool.name": tool_name}   # its OpenTelemetry name (rule L3)
-        if why := blocked_because():
-            failures.record(conn, "write_gate.would_block", "ok", **fields, detail={**tool, "rule": rule, "why": why})
+    event = {"source": machine, "session_id": session_id or None, "reason": reason, "tool": tool_name,
+             "rule": rule, "why": blocked_because()}
+    # Wrapped like the hook, so a crash on the worker is recorded as guard.crash too.
+    write = failures.boundary(lambda: machine, settings.connect, lambda exc: None)(write_event)
+    spawn_context_thread(write, name="custom_build.write_gate", kwargs=event).start()
+
+
+def write_event(*, source, session_id, reason, tool, rule, why):
+    """Write one of the gate's events to the store; runs on the worker thread `check` starts."""
+    fields = {"source": source, "session_id": session_id, "reason": reason}
+    detail = {"gen_ai.tool.name": tool, "rule": rule}   # the tool by its OpenTelemetry name (rule L3)
+    with failures.store(source, settings.connect) as conn:
+        if why:
+            failures.record(conn, "write_gate.would_block", "ok", **fields, detail={**detail, "why": why})
         else:
-            failures.record(conn, "write_gate.would_ask", "ok", **fields, detail={**tool, "rule": rule})
+            failures.record(conn, "write_gate.would_ask", "ok", **fields, detail=detail)
 
 
 def register(ctx):
