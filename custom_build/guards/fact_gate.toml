@@ -11,8 +11,9 @@ mode = "log"
 
 # Lookup tools: each returns something looked up in that turn, a page, a file, a command's result or a past
 # session (CONTRIBUTING.md section 2, goal 2). Counted only when post_tool_call reports them ok (#22, #31).
+# delegate_task counts because a subagent's own lookups carry its session and turn, not the parent's.
 # The memory search tool joins this list when the memory track ships it.
-lookups = ["web_search", "web_extract", "read_file", "search_files", "terminal", "session_search", "skill_view", "x_search"]
+lookups = ["web_search", "web_extract", "read_file", "search_files", "terminal", "session_search", "skill_view", "x_search", "delegate_task"]
 
 # Documentation lookups: vendor documentation is read on the web.
 documentation = ["web_search", "web_extract"]
