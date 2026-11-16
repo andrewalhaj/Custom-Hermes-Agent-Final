@@ -77,7 +77,7 @@ def register(ctx) -> None:
         return
 
     from . import failures, settings
-    from .guards import verify_gate, write_gate
+    from .guards import fact_gate, verify_gate, write_gate
 
     @failures.boundary(lambda: settings.machine(ctx), settings.connect, settings.crash_block)
     def check_turn(**kwargs):
@@ -87,6 +87,7 @@ def register(ctx) -> None:
     ctx.register_hook("pre_llm_call", check_turn)
     write_gate.register(ctx)
     verify_gate.register(ctx)
+    fact_gate.register(ctx)
 
     def run_command(args) -> int:
         from . import heartbeat, startup_check

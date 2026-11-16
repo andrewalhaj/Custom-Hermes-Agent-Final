@@ -1,0 +1,35 @@
+# The fact gate's mode and its lists (ARCHITECTURE.md sections 5.3 and 5.4, #133).
+# The lists are the first ones proposed in #133, each entry with its reason. They are tuned from a week of
+# log-mode events before the gate goes on. A change here is a pull request, with tests/test_fact_gate.py updated.
+
+# log: record each turn whose message asks a checkable question, as fact_gate.armed, and each armed turn
+#      whose reply has no lookup, or gives a procedure or diagnosis with no documentation lookup, as
+#      fact_gate.would_withhold. No reminder is added and nothing is withheld.
+# off: register no hook.
+# on: refused until the gate can enforce (5.4 item 6).
+mode = "log"
+
+# Lookup tools: each returns something looked up in that turn, a page, a file, a command's result or a past
+# session (CONTRIBUTING.md section 2, goal 2). Counted only when post_tool_call reports them ok (#22, #31).
+# The memory search tool joins this list when the memory track ships it.
+lookups = ["web_search", "web_extract", "read_file", "search_files", "terminal", "session_search", "skill_view", "x_search"]
+
+# Documentation lookups: vendor documentation is read on the web.
+documentation = ["web_search", "web_extract"]
+
+# Checkable questions: case-insensitive patterns on the user's message, tried in this order; the first that
+# matches names the turn. Each asks for a fact a tool can check and the agent would otherwise answer from memory.
+[questions]
+version = '''\b(?:which|what)\s+version\b|\blatest\s+(?:version|release)\b'''
+location = '''\bwhere\s+(?:is|are|does|do)\b'''   # before state: "where is X installed" asks a place
+state = '''\bis\s+(?:the\s+|my\s+|our\s+|it\s+)?[\w.-]+\s+(?:running|up|down|enabled|disabled|installed|set|configured|reachable)\b'''
+value = '''\bwhat\s+(?:is|are)\s+(?:the\s+)?(?:current\s+)?(?:value|setting|status|state|limit|default|size|price|cost)\b'''
+count = '''\bhow\s+(?:many|much)\b'''
+support = '''\bdoes\s+[\w.-]+\s+support\b'''
+date = '''\bwhen\s+(?:is|was|did|does|will)\b'''
+error = '''(?s)(?=.*\?)(?=.*\b(?:error|exception|traceback|fail(?:s|ed|ing|ure)?)\b)'''   # a question naming a failure
+
+# A reply that needs a documentation lookup too: case-insensitive patterns on an armed turn's reply.
+[needs_documentation]
+procedure = '''(?m)^\s*(?:step\s+)?2[.):]\s'''   # a second numbered step
+diagnosis = '''\b(?:root cause|the cause is|is caused by|this happens because|the problem is)\b'''
