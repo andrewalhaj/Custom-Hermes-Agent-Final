@@ -100,7 +100,8 @@ def check(ctx, rules, *, tool_name, args, session_id="", task_id="", **kwargs):
     """The `pre_tool_call` hook in log mode: record a call on the list. It returns nothing, so the call goes ahead.
 
     What reads the call and the session runs here. Only the write to the store runs on a worker thread,
-    so a store that stops answering never holds the call past Hermes's deadline (ARCHITECTURE.md 5.5).
+    so a store that stops answering does not hold the call past Hermes's deadline (ARCHITECTURE.md 5.5).
+    The one exception is a crash in this hook, which the boundary wrapper records here (#117).
     """
     if (found := find_rule(rules, tool_name, args, task_id)) is None:
         return
