@@ -25,9 +25,10 @@ def add(fact):
 
 
 def waiting():
-    """Every queued fact, oldest first, as (row id, Fact, attempts so far)."""
+    """Every queued fact, fewest attempts first, then oldest, as (row id, Fact, attempts so far), so a fact
+    the judge keeps refusing moves behind the others."""
     with _open() as db:
-        rows = db.execute("select id, fact, attempts from queued order by id").fetchall()
+        rows = db.execute("select id, fact, attempts from queued order by attempts, id").fetchall()
     return [(row_id, Fact(**json.loads(text)), attempts) for row_id, text, attempts in rows]
 
 
