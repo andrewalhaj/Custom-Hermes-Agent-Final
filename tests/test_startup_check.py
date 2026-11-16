@@ -79,6 +79,9 @@ def _with(path, value):
     ("skill writes not approved", {"config": _with(("skills", "write_approval"), False)}, "skills.write_approval"),
     ("skill write approval unset", {"config": {**safe_config(), "skills": {}}}, "skills.write_approval"),
     ("secret redaction off", {"config": _with(("security", "redact_secrets"), False)}, "security.redact_secrets"),
+    # The gateway exports the key over the variable (gateway/run.py), so its child processes redact nothing.
+    ("redaction off in config, on by variable", {"config": _with(("security", "redact_secrets"), False),
+                                                 "env": {"HERMES_REDACT_SECRETS": "true"}}, "security.redact_secrets"),
     ("approvals off, unquoted", {"raw_config": "approvals:\n  mode: off\n"}, "approvals.mode"),
     ("cron mode approve", {"config": _with(("approvals", "cron_mode"), "approve")}, "approvals.cron_mode"),
     ("single-query mode yes", {"config": _with(("approvals", "single_query_mode"), "yes")}, "approvals.single_query_mode"),
