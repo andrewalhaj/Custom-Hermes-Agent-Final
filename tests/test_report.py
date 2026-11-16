@@ -12,7 +12,7 @@ import sys
 
 import psycopg
 
-from tests.test_heartbeat import hermes, make_home
+from tests.test_heartbeat import hermes, make_home, run_under_cron
 from tests.test_job_health import recorded
 from tests.test_plugin_load import FAKE_SECRET
 
@@ -106,3 +106,10 @@ def test_the_report_redacts_what_it_sends(tmp_path, db):
     report = pathlib.Path(path).read_text(encoding="utf-8")
     assert "db.auth" in report
     assert FAKE_SECRET not in report and FAKE_SECRET not in result.stdout
+
+
+def test_hermes_cron_runs_the_report_from_its_scripts_folder_and_delivers_it(tmp_path, db):
+    seed(db, ran("job.succeeded", "host-a", 1, {"job": "job-health"}))
+    answer, run = run_under_cron(tmp_path, make_home(tmp_path, db), "report", "0 7 * * *")
+    assert "Ran now: succeeded" in answer, answer
+    assert "All clear" in run, run   # what Hermes delivers to the job's target
