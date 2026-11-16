@@ -32,7 +32,7 @@ class CustomBuildProvider(MemoryProvider):
     def is_available(self) -> bool:
         return True
 
-    @failures.boundary(_machine, settings.connect, provider=True)
+    @failures.boundary(_machine, settings.connect, failures.PROVIDER)
     def initialize(self, session_id: str, **kwargs) -> None:
         """Check the embedding build, recording a failed check with its code (#65 keeps is_available() out)."""
         self.embedder = embedding.Embedder(embedding.OLLAMA_URL)

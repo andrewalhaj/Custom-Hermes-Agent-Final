@@ -236,7 +236,7 @@ def test_boundary_passes_a_normal_answer_through_without_opening_a_connection():
 def test_boundary_records_a_provider_crash_as_unhandled_and_re_raises(db, caplog):
     caplog.set_level(logging.INFO, logger=failures.__name__)
     method = failures.boundary(_host_a, lambda: psycopg.connect(db["agent"], autocommit=True),
-                               provider=True)(_guard_that_crashes)
+                               failures.PROVIDER)(_guard_that_crashes)
     with pytest.raises(KeyError):
         method(session_id="s1")
     rows = _rows(db["owner"])
@@ -248,7 +248,7 @@ def test_boundary_records_a_provider_crash_as_unhandled_and_re_raises(db, caplog
 def test_boundary_re_raises_a_provider_crash_with_no_store(caplog):
     caplog.set_level(logging.INFO, logger=failures.__name__)
     with pytest.raises(KeyError):
-        failures.boundary(_host_a, lambda: None, provider=True)(_guard_that_crashes)()
+        failures.boundary(_host_a, lambda: None, failures.PROVIDER)(_guard_that_crashes)()
     assert _codes(caplog) == [(logging.WARNING, "unhandled"), (logging.ERROR, "events.write_failed")]
 
 
