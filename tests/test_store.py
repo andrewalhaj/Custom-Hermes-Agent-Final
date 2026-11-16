@@ -152,3 +152,16 @@ def test_an_extracted_fact_never_supersedes_one_stored_on_purpose(conn, ollama, 
     assert outcome["superseded"] is None
     assert _live(conn) == [(STORED,), (new,)]
     assert typesafe.requests == []
+
+
+def test_a_digest_is_stored_as_one_and_never_supersedes_a_fact(conn, ollama, typesafe):
+    # #155: a digest is not compared with facts, so even a near-identical one leaves them live, unasked.
+    digest = "The session moved the mini's gateway to the hermes user.\n\nOpen items:\n- Restart the gateway."
+    ollama.vectors = {STORED: BASE, digest: _at(0.95)}
+    _store(conn, ollama, typesafe, STORED)
+    outcome = _store(conn, ollama, typesafe, digest, kind="digest", origin="digest", basis="assistant_inferred")
+    assert outcome["superseded"] is None
+    assert _live(conn) == [(STORED,), (digest,)]
+    assert typesafe.requests == []
+    row = conn.execute("select kind, origin, basis from memory.facts where id = %s", (outcome["stored"],)).fetchone()
+    assert row == ("digest", "digest", "assistant_inferred")
