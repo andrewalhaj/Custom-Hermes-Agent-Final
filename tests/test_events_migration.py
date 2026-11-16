@@ -104,12 +104,13 @@ def test_the_policies_are_exactly_these(db):
         ("events_agent_insert", "INSERT", ["memory_agent"]),
         ("events_agent_select", "SELECT", ["memory_agent"]),
         ("events_maintenance_delete", "DELETE", ["memory_maintenance"]),
+        ("events_maintenance_insert", "INSERT", ["memory_maintenance"]),   # retention records its run (0004)
         ("events_maintenance_select", "SELECT", ["memory_maintenance"]),
     ]
 
 
 @pytest.mark.parametrize("statement", [
-    "insert into memory.events (source, code, result) values ('test-host', 'job.failed', 'ok')",
+    "insert into memory.events (source, code, result) values ('test-host', 'job.failed', 'ok')",   # only retention's row
     "update memory.events set reason = 'x'",
     "alter table memory.events add column extra text",
     "truncate memory.events",
