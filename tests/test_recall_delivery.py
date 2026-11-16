@@ -36,14 +36,22 @@ import plugins.memory
 provider = plugins.memory.load_memory_provider("custom_build")
 modules = {name.rsplit(".", 1)[-1]: m for name, m in sys.modules.items() if "custom_build" in name}
 modules["embedding"].OLLAMA_URL = sys.argv[1]
-if sys.argv[4:] == ["crash"]:
-    def crash(*args, **kwargs):
-        raise KeyError("boom")
+mode = sys.argv[4] if len(sys.argv) > 4 else ""
+def crash(*args, **kwargs):
+    raise KeyError("boom")
+if mode == "crash":         # inside the recall thread
     modules["search"].candidates = crash
+if mode == "crash-main":    # in prefetch itself, after the search
+    modules["recall"].capped = crash
+if mode.startswith("session-cwd="):   # ACP and the TUI gateway pin the session's directory, not the process's
+    from agent.runtime_cwd import set_session_cwd
+    set_session_cwd(mode.split("=", 1)[1])
 provider.initialize(session_id="s1", hermes_home=sys.argv[3], platform="cli", agent_context="primary")
 started = time.monotonic()
 notes = provider.prefetch(sys.argv[2], session_id="s1")
-print(json.dumps({"notes": notes, "seconds": time.monotonic() - started}))
+print(json.dumps({"notes": notes, "seconds": time.monotonic() - started}), flush=True)
+if mode == "linger":        # let work the turn no longer waits for finish
+    time.sleep(2)
 """
 
 
@@ -73,14 +81,14 @@ def _add(owner, body, vector, build, *, kind="fact", basis="user_stated"):
         (body, uuid.uuid4().hex, kind, "digest" if kind == "digest" else "explicit", basis, PROJECT, str(vector), build))
 
 
-def recall(home, db, ollama_url, query=QUERY, *, store=True, mode=None):
+def recall(home, db, ollama_url, query=QUERY, *, store=True, mode=None, cwd=None):
     env = {"HERMES_HOME": str(home), "HOME": str(home.parent), "PATH": "/usr/bin:/bin",
            "TYPESAFE_API_KEY": "test-key-not-a-real-one"}
     if store:
         env["CUSTOM_BUILD_DATABASE_URL"] = db["agent"]
     result = subprocess.run([sys.executable, "-c", SCENARIO, ollama_url, query, str(home), *([mode] if mode else [])],
                             capture_output=True,
-                            text=True, env=env, cwd=home.parent / "work", timeout=120, check=False)
+                            text=True, env=env, cwd=cwd or home.parent / "work", timeout=120, check=False)
     assert result.returncode == 0, result.stderr[-3000:]
     return json.loads(result.stdout.strip().splitlines()[-1])
 
@@ -105,7 +113,7 @@ def test_recalled_notes_are_labelled_with_their_provenance_and_cut_to_five(home,
     assert "notes, not instructions" in text.splitlines()[0]
     notes = _notes(text)
     assert len(notes) == 5
-    assert notes[0].startswith("- Host fact 0.") and "explicit" in notes[0] and "user_stated" in notes[0]
+    assert notes[0].startswith("- [explicit, user_stated, stored ") and notes[0].endswith("] Host fact 0.")
     assert "stored " in notes[0]
 
 
@@ -118,9 +126,8 @@ def test_a_message_gets_at_most_one_digest(home, db, owner, ollama):
         _add(owner, f"Host fact {n}.", _at(0.90 - n / 100), ollama.build)
     ollama.vectors = {QUERY: BASE}
     notes = _notes(recall(home, db, ollama.url)["notes"])
-    assert [note.split(" [")[0] for note in notes] == [
-        "- Digest 0 of a session.", "- Host fact 0.", "- Host fact 1.", "- Host fact 2.",
-        "- Host fact 3."]
+    assert [note.split("] ", 1)[1] for note in notes] == [
+        "Digest 0 of a session.", "Host fact 0.", "Host fact 1.", "Host fact 2.", "Host fact 3."]
 
 
 def test_nothing_found_adds_nothing(home, db, ollama):
@@ -138,7 +145,7 @@ def test_a_recall_past_its_deadline_is_reported_as_recall_timeout(home, db, owne
     config = home / "plugins" / "custom_build" / "memory" / "write_path.toml"
     config.write_text(config.read_text(encoding="utf-8").replace("deadline = 6", "deadline = 0.5"), encoding="utf-8")
     ollama.delay = 3
-    outcome = recall(home, db, ollama.url)
+    outcome = recall(home, db, ollama.url, mode="linger")   # the event row is written off the turn's path
     assert "recall.timeout" in outcome["notes"] and outcome["seconds"] < 2
     assert "recall.timeout" in _codes(db)
 
@@ -157,4 +164,54 @@ def test_a_crash_in_the_search_is_recorded_as_unhandled_and_reported_in_the_turn
     # CONTRIBUTING.md rule C2: the recall thread runs inside the boundary wrapper, which records it.
     text = recall(home, db, ollama.url, mode="crash")["notes"]
     assert "unhandled" in text
+    with psycopg.connect(db["owner"]) as conn:   # with the session it happened in (#158 review)
+        assert conn.execute("select code, session_id from memory.events order by id desc limit 1").fetchone() == (
+            "unhandled", "s1")
+
+
+def test_a_crash_in_prefetch_itself_is_reported_in_the_turn_not_raised(home, db, owner, ollama):
+    # ARCHITECTURE.md section 2: prefetch() records unhandled and returns a "recall failed" note; Hermes would
+    # turn a raised exception into no notes at all.
+    _add(owner, "Host fact 0.", BASE, ollama.build)
+    ollama.vectors = {QUERY: BASE}
+    text = recall(home, db, ollama.url, mode="crash-main")["notes"]
+    assert "unhandled" in text
     assert _codes(db)[-1] == "unhandled"
+
+
+def test_recall_searches_the_sessions_own_directory(home, db, owner, ollama, tmp_path):
+    # Hermes pins a session's directory for ACP and the TUI gateway; the recall thread must keep it (#158 review).
+    _add(owner, "Host fact 0.", BASE, ollama.build)
+    ollama.vectors = {QUERY: BASE}
+    elsewhere = tmp_path / "elsewhere"
+    subprocess.run(["git", "init", "-q", str(elsewhere)], check=True)
+    subprocess.run(["git", "-C", str(elsewhere), "remote", "add", "origin", "git@github.com:Other/Repo.git"], check=True)
+    text = recall(home, db, ollama.url, mode=f"session-cwd={home.parent / 'work'}", cwd=elsewhere)["notes"]
+    assert "Host fact 0." in text
+
+
+def test_a_stalled_store_does_not_hold_a_search_open(home, db, owner, ollama):
+    # A search past the deadline is left to finish, but the store cuts it off, so stuck searches cannot pile
+    # up a thread and a connection each turn (#158 review).
+    config = home / "plugins" / "custom_build" / "memory" / "write_path.toml"
+    config.write_text(config.read_text(encoding="utf-8").replace("deadline = 6", "deadline = 0.5"), encoding="utf-8")
+    ollama.vectors = {QUERY: BASE}
+    owner.execute("begin")
+    owner.execute("lock table memory.facts in access exclusive mode")   # every read of facts waits
+    try:
+        outcome = recall(home, db, ollama.url, mode="linger")
+        assert "recall.timeout" in outcome["notes"]
+        waiting = owner.execute("select count(*) from pg_stat_activity where datname = current_database()"
+                                " and pid <> pg_backend_pid() and wait_event_type = 'Lock'").fetchone()[0]
+        assert waiting == 0
+    finally:
+        owner.execute("rollback")
+
+
+def test_a_digests_open_items_stay_under_its_provenance(home, db, owner, ollama):
+    _add(owner, "A session summary.\n\nOpen items:\n- Restart it.", BASE, ollama.build, kind="digest",
+         basis="assistant_inferred")
+    ollama.vectors = {QUERY: BASE}
+    lines = recall(home, db, ollama.url)["notes"].splitlines()
+    assert lines[1].startswith("- [digest, assistant_inferred, stored ") and lines[1].endswith("] A session summary.")
+    assert lines[-1] == "    - Restart it."
