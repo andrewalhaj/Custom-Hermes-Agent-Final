@@ -43,8 +43,18 @@ if scenario == "crash":
         raise KeyError("boom")
     loaded[0].find_rule = crash
 
+def settle():
+    # The plugin records on worker threads: let a call's recording finish, so rows keep the calls' order.
+    for thread in threading.enumerate():
+        if thread.name.startswith("custom_build."):
+            thread.join(float(os.environ.get("JOIN_TIMEOUT", "30")))
+
 def run():
-    return [resolve_pre_tool_block(tool, args, session_id=session, task_id="t1") for tool, args in calls]
+    blocks = []
+    for tool, args in calls:
+        blocks.append(resolve_pre_tool_block(tool, args, session_id=session, task_id="t1"))
+        settle()
+    return blocks
 
 if scenario == "one-shot":
     # How a `hermes -z` run marks its turn: nobody can answer, so Hermes approves without asking.
@@ -53,10 +63,6 @@ if scenario == "one-shot":
         blocks = run()
 else:
     blocks = run()
-# Let any recording the plugin left running finish before the rows are read.
-for thread in threading.enumerate():
-    if thread.name.startswith("custom_build."):
-        thread.join(float(os.environ.get("JOIN_TIMEOUT", "30")))
 print(json.dumps({"entry": entry, "blocks": blocks}))
 """
 
