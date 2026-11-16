@@ -47,4 +47,4 @@ command = '''(?<![\w.-])(?:pip3?|pipx|uv|npm|pnpm|yarn|bun|apt|apt-get|dnf|yum|z
 command = '''\bsystemctl\b'''
 
 [rules.other_hosts]   # terminal commands that reach other hosts: remote shells and copies, web requests, git remotes
-command = '''(?<![\w.-])(?:ssh|ssh-copy-id|scp|sftp|rsync|mosh|telnet|ftp|nc|ncat|netcat|socat|curl|wget|gh)(?![\w-])|(?<![\w.-])git(?:\s+-\S+(?:\s+[^-\s]\S*)?)*\s+(?:clone|fetch|pull|push|ls-remote|submodule)(?![\w-])'''
+command = '''(?<![\w.-])(?:ssh|ssh-copy-id|scp|sftp|rsync|mosh|telnet|ftp|nc|ncat|netcat|socat|curl|wget|gh)(?=\s|$)|(?<![\w.-])git(?:\s+-\S+(?:\s+(?:'[^']*'|"[^"]*"|[^-\s'"]\S*))?)*\s+(?:clone|fetch|pull|push|ls-remote|submodule|remote\s+update)(?![\w-])'''
