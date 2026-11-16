@@ -23,11 +23,11 @@ def compose(conn, machine):
     """Print the report for Hermes to deliver, then record its success; return whether every row was written."""
     from agent.redact import redact_sensitive_text
 
-    written = []
-    if not conn.execute("select 1 from memory.events where code = 'job.succeeded' and detail->>'job' = 'job-health'"
-                        f" and at > now() - interval '{DAY}' limit 1").fetchone():
-        # The job-health check cannot report its own absence, so the report does (OPERATIONS.md section 4).
-        written.append(failures.record(conn, "job.missed", "failed", source=machine, detail={"job": "job-health"}))
+    # The job-health check cannot report its own absence, so the report does (OPERATIONS.md section 4).
+    checked = conn.execute("select 1 from memory.events where code = 'job.succeeded' and detail->>'job' = 'job-health'"
+                           f" and at > now() - interval '{DAY}' limit 1").fetchone()
+    if not checked and not failures.record(conn, "job.missed", "failed", source=machine, detail={"job": "job-health"}):
+        return False   # the day's record is incomplete: print nothing, so Hermes alerts (events.write_failed)
     rows = conn.execute("select code, source, at, reason, detail, session_id from memory.events"
                         f" where result in ('failed', 'degraded') and at > now() - interval '{DAY}'"
                         " order by code, source, at desc").fetchall()
@@ -40,8 +40,6 @@ def compose(conn, machine):
     else:
         print(redact_sensitive_text(f"All clear for {day}: no failures in the last 24 hours. Ran: {_ran(conn)}.",
                                     force=True))
-    if not all(written):   # a lost finding means the report is incomplete; jobs.run reports events.write_failed
-        return False
     return failures.record(conn, "job.succeeded", "ok", source=machine,
                            detail={"job": "daily-report", "input": len(rows), "output": 1})
 
