@@ -577,4 +577,4 @@ The rules are L1–L5 in CONTRIBUTING.md.
 - [15] [Build a Hermes plugin (Hermes Agent developer guide)](https://hermes-agent.nousresearch.com/docs/developer-guide/plugins)
 - [16] Hermes v0.23.1 source, plugin loading: `agent/prompt_builder.py`, `hermes_cli/plugin_isolation.py`, `hermes_cli/plugins.py`, `hermes_cli/plugins_cmd_install.py`, `hermes_cli/plugins_content.py`, `hermes_cli/plugins_discovery.py`, `hermes_cli/plugins_ledger.py`, `hermes_cli/plugins_loader.py`, `hermes_cli/plugins_manifest.py`, `plugins/memory/__init__.py`, `plugins/plugin_storage.py`
 - [17] [xiaowu0162/longmemeval-cleaned (Hugging Face dataset card)](https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned)
-- [18] [pg_cron: schedule recurring jobs in Postgres (Supabase documentation)](https://supabase.com/docs/guides/database/extensions/pg_cron)
+- [18] [Cron quickstart: scheduling jobs with pg_cron (Supabase documentation)](https://supabase.com/docs/guides/cron/quickstart)
