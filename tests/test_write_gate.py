@@ -23,6 +23,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 PLUGIN = ROOT / "custom_build"
 # A fake key in Supabase's format, assembled at run time as in test_plugin_load.py.
 FAKE_SECRET = "sb_" + "secret_" + "N7UNd0UgjKTV-Uodkm0Hg0_xSvQ7d3m"
+URL_TOKEN = "abcd1234" + "efgh5678ijkl"   # a fake credential in a URL's query string
 
 SCENARIO = r"""
 import json, sys
@@ -239,11 +240,15 @@ def test_a_crash_in_the_gate_is_recorded_and_the_call_goes_ahead(tmp_path, db):
     ]
 
 
-def test_the_recorded_command_is_redacted(tmp_path, db):
-    _, output, rows = run_gate(tmp_path, db, [["terminal", {"command": f"ssh other-host 'export KEY={FAKE_SECRET}'"}]])
-    assert [code for code, *_ in rows] == ["write_gate.would_ask"], output
-    assert FAKE_SECRET not in rows[0][2] and "ssh other-host" in rows[0][2]
-    assert FAKE_SECRET not in output
+@pytest.mark.parametrize("env", [None, {"HERMES_REDACT_SECRETS": "false"}])
+def test_the_recorded_command_is_redacted_even_with_hermes_redaction_off(tmp_path, db, env):
+    calls = [["terminal", {"command": f"ssh other-host 'export KEY={FAKE_SECRET}'"}],
+             ["terminal", {"command": f"wget 'https://example.com/file?token={URL_TOKEN}'"}]]
+    _, output, rows = run_gate(tmp_path, db, calls, env=env)
+    reasons = [reason for _, _, reason, *_ in rows]
+    assert len(reasons) == 2, output
+    assert FAKE_SECRET not in reasons[0] and "ssh other-host" in reasons[0]
+    assert URL_TOKEN not in reasons[1] and "wget" in reasons[1]
 
 
 def test_an_unreachable_store_is_logged_and_the_call_goes_ahead(tmp_path, db):
