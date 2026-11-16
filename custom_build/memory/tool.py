@@ -52,7 +52,7 @@ def mirror(action, content, metadata, *, machine, session_id, turn, embedder, ju
     already committed the write, so nothing is returned to it.
     """
     body = redact_sensitive_text(str(content), force=True)
-    key = project.key(resolve_agent_cwd())
+    key = None   # built-in memory is one file per profile, so its facts belong to no project (#142)
     fields = {"source": machine, "project": key, "session_id": session_id, "turn": turn}
 
     def work(conn):
