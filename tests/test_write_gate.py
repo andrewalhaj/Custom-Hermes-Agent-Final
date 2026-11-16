@@ -11,8 +11,11 @@ import contextlib
 import json
 import pathlib
 import shutil
+import socket
+import struct
 import subprocess
 import sys
+import threading
 import tomllib
 
 import psycopg
@@ -26,7 +29,7 @@ FAKE_SECRET = "sb_" + "secret_" + "N7UNd0UgjKTV-Uodkm0Hg0_xSvQ7d3m"
 URL_TOKEN = "abcd1234" + "efgh5678ijkl"   # a fake credential in a URL's query string
 
 SCENARIO = r"""
-import json, sys
+import json, os, sys, threading
 from hermes_cli.plugins import discover_plugins, get_plugin_manager, resolve_pre_tool_block
 
 discover_plugins()
@@ -50,6 +53,10 @@ if scenario == "one-shot":
         blocks = run()
 else:
     blocks = run()
+# Let any recording the plugin left running finish before the rows are read.
+for thread in threading.enumerate():
+    if thread.name.startswith("custom_build."):
+        thread.join(float(os.environ.get("JOIN_TIMEOUT", "30")))
 print(json.dumps({"entry": entry, "blocks": blocks}))
 """
 
@@ -298,3 +305,44 @@ def test_a_stalled_store_is_logged_and_the_call_goes_ahead(tmp_path, db):
     assert report["blocks"] == [None, None], output
     assert rows == []
     assert '"lost_code": "write_gate.would_ask"' in output, output
+
+
+@contextlib.contextmanager
+def silent_store():
+    """A server that accepts any login and then never answers, as a pooler with no free connection,
+    or a network that drops the path after the login, would. Gives its connection string."""
+    server = socket.create_server(("127.0.0.1", 0))
+    done = threading.Event()
+
+    def answer_the_login(conn):
+        with conn:
+            while len(header := conn.recv(8, socket.MSG_WAITALL)) == 8:
+                length, code = struct.unpack("!ii", header)
+                conn.recv(length - 8, socket.MSG_WAITALL)
+                if code in (80877103, 80877104):   # a request for SSL or GSS encryption: refused
+                    conn.sendall(b"N")
+                    continue
+                # The startup message: AuthenticationOk, then ReadyForQuery. Nothing after it is answered.
+                conn.sendall(b"R" + struct.pack("!ii", 8, 0) + b"Z" + struct.pack("!i", 5) + b"I")
+                done.wait()
+                return
+
+    def accept():
+        with contextlib.suppress(OSError):   # the server closes when the test ends
+            while True:
+                threading.Thread(target=answer_the_login, args=(server.accept()[0],), daemon=True).start()
+
+    threading.Thread(target=accept, daemon=True).start()
+    try:
+        yield f"postgresql://u:p@127.0.0.1:{server.getsockname()[1]}/x"
+    finally:
+        done.set()
+        server.close()
+
+
+def test_a_store_that_stops_answering_after_the_login_does_not_hold_the_call(tmp_path, db):
+    # The record's statement bound runs on the server, so it cannot help here; the hook must not wait.
+    calls = [["terminal", {"command": "systemctl restart x"}], ["terminal", {"command": "ls"}]]
+    with silent_store() as url:
+        report, output, _ = run_gate(tmp_path, db, calls, database_url=url, hook_timeout=10, env={"JOIN_TIMEOUT": "1"})
+    assert report["blocks"] == [None, None], output
