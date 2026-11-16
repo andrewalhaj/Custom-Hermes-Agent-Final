@@ -1,0 +1,15 @@
+# The write path's pattern filter for facts stored on purpose (ARCHITECTURE.md sections 3.3 and 3.6).
+# A change here is a pull request with eval-set numbers from before and after (CONTRIBUTING.md rule C8).
+
+# Characters, after surrounding whitespace is dropped.
+min_length = 10
+
+# Text that narrates instead of stating a fact: how the agent felt, or what it is about to do.
+# Matched case-insensitively, anywhere in the text. The self-reference patterns come from the memory
+# system this build replaces; the intent patterns are new.
+narration = [
+  '\bI (felt|feel|sensed|thought I|found myself|noticed myself|caught myself)\b',
+  '\bI was (feeling|struggling|overwhelmed|panicking)\b',
+  '\b(my own methodology|my instincts?|my gut)\b',
+  '''^\s*(let me|let's|I will|I'll|I am going to|I'm going to|now I|next I)\b''',
+]
