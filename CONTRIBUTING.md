@@ -344,10 +344,10 @@ Every point of failure is loud and distinguishable. The mechanism, including the
 
 - **F1. Every failure has a named code from the catalog.** A handler or fallback emits one. There is no bare "error".
 - **F2. Failed, empty and degraded are different results.** A failure is never returned as an empty result, and a fallback or a retry that succeeded is recorded as degraded, never as plain success.
-- **F3. Every occurrence is logged and recorded.** Each one is logged at WARNING or above and written to the `events` table, through the one recording helper in the failure module. Errors that reach a Hermes entry point, a scheduled job or the startup check are recorded by the boundary wrapper or the job wrapper (ARCHITECTURE.md sections 2 and 6.1), so code never relies on Hermes, which logs a repeated error only once.
+- **F3. Every occurrence is logged and recorded.** Each one is logged at WARNING or above and written to the `events` table, through the one recording helper in the failure module. Errors that reach a Hermes entry point, a scheduled job on a host or the startup check are recorded by the boundary wrapper or the job wrapper (ARCHITECTURE.md sections 2 and 6.1), so code never relies on Hermes, which logs a repeated error only once. Retention runs inside the database instead: a failed run rolls back, and shows up as `job.missed` at the next job-health check (ARCHITECTURE.md section 6.2).
 - **F4. A failure that changed the answer is shown in the turn.** Every failure, shown or not, appears in the daily failure report.
 - **F5. Recording a failure must not lose it.** If the `events` row cannot be written, the failure is logged locally at ERROR with `events.write_failed`.
-- **F6. The catalog is enforced.** A test fails the build if a handler or fallback emits no code or a code not in the catalog. A failure that is not in the catalog is a bug, recorded, with its traceback in the log: inside Hermes by the boundary wrapper, and in a scheduled job or the startup check by the job wrapper, which records it and then exits non-zero (ARCHITECTURE.md section 6.1).
+- **F6. The catalog is enforced.** A test fails the build if a handler or fallback emits no code or a code not in the catalog. A failure that is not in the catalog is a bug, recorded, with its traceback in the log: inside Hermes by the boundary wrapper, and in a scheduled job on a host or the startup check by the job wrapper, which records it and then exits non-zero (ARCHITECTURE.md section 6.1).
 
 ## 7. Logging rules
 

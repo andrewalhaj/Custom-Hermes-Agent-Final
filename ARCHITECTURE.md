@@ -106,11 +106,13 @@ flowchart LR
 | Built-in memory | Standing rules and preferences | Not searched. It is in every prompt.[6] |
 | Facts | Short facts and decisions, and one digest per long session | By meaning and by exact words, then reranked |
 | Sessions | What was said in past conversations in the last 90 days, cut into chunks | By meaning and by exact words, on questions about past work |
-| References | Long write-ups and procedures | By meaning and by exact words |
+| References | Long write-ups and procedures; none at first | By meaning and by exact words |
 
 Facts go in the facts store. Long procedures and write-ups are references. What was said is in sessions. How to do a task is a skill.
 
-The sessions store is kept only while the eval set (section 3.8) shows it adds recall over Hermes's built-in `session_search`, which already searches every past session by full text.
+The sessions store is built only after the eval set (section 3.8) shows it adds recall over Hermes's built-in `session_search`, which already searches every past session by full text, and is kept only while it does; #17's open questions are settled then.
+
+There are no references at first, as there are no skills: the store is added when there is a set of documents to search, and #3 is decided then.
 
 ### 3.2 Embedding
 
@@ -219,8 +221,8 @@ Hermes caps the context that one `pre_llm_call` hook adds to a turn at 10,000 ch
 
 Still open, each tracked in its own issue:
 
-- Whether reference chunks move into the shared store, decided with eval-set numbers once the facts store exists (#3).
-- Where the memory provider reads each message's uid, and what happens to a session chunk when its uid appears on more than one row, its text changes or the message has none, to a branch's copied history, and to facts drawn from messages a rewind removed (#17).
+- Whether reference chunks move into the shared store, decided with eval-set numbers once there is a set of documents to search (#3).
+- Where the memory provider reads each message's uid, and what happens to a session chunk when its uid appears on more than one row, its text changes or the message has none, to a branch's copied history, and to facts drawn from messages a rewind removed, settled when the sessions store is built (section 3.1) (#17).
 - How the build detects a gateway session that runs without it: one created in safe mode, or with the profile's settings ignored (#23).
 - Whether a search by the picked action finds what a search by a freely written one would, and whether a low-probability pick should count (#26).
 
@@ -246,6 +248,7 @@ No ranking change ships without numbers from the eval set.
 - LongMemEval-S is not committed: its data file is about 280 MB. The eval runner downloads the cleaned release's S file at a pinned revision and checks it against a recorded hash before it runs. It is MIT-licensed.[17]
 - The rest of the eval set lives in this repository as data files, reviewed through pull requests like code. Each question records its project and the expected fact or chunk IDs. A question copied from a real miss is reworded so that it holds no deployment values (CONTRIBUTING.md section 3). It expects facts, not session chunks, because chunks are deleted after 90 days (section 4.3), so real misses measure the facts store only; LongMemEval-S measures the sessions store.
 - Reports give recall@5, MRR and an abstention score.
+- The eval set runs on a maintainer's machine with a GPU, on the pinned embedding build checked by its digest, against its own throwaway Postgres. It never touches the shared store (OPERATIONS.md section 2).
 
 ## 4. The memory store
 
@@ -351,11 +354,11 @@ Two SQL functions do the searching: `match_facts` and `match_transcript_chunks`.
 ### 4.3 Access and migrations
 
 - **The tables live in a schema the Supabase Data API does not expose**, so the project's API keys cannot reach them.
-- **Each machine connects with its own role.** That role can read and insert, and update only the tables that take updates: `memory.events`, the one table so far, takes none. It cannot delete rows or create, alter or drop anything. The privileges belong to two group roles that the migrations create and that cannot log in: `memory_agent`, which every machine's login role joins, and `memory_maintenance`, which the retention job's login role joins. Each table's migration grants them exactly what code uses: on `events`, select and insert for `memory_agent`, and select and delete for `memory_maintenance`. Login roles and their passwords are created outside the repository (OPERATIONS.md section 3).
+- **Each machine connects with its own role.** That role can read and insert, and update only the tables that take updates: `memory.events`, the one table so far, takes none. It cannot delete rows or create, alter or drop anything. The privileges belong to two group roles that the migrations create and that cannot log in: `memory_agent`, which every machine's login role joins, and `memory_maintenance`, which no host's login role joins. Each table's migration grants them exactly what code uses: on `events`, select and insert for `memory_agent`, and select and delete for `memory_maintenance`, for retention (below). Login roles and their passwords are created outside the repository (OPERATIONS.md section 3).
 - **Row Level Security is on for every table, as a backstop.** With RLS on and no policy, Postgres denies every row to a role that does not own the table, so each machine's role gets explicit select and insert policies, update policies only on tables that take updates, and no delete policy.[13]
 - **Schema changes are migration files in this repository**, reviewed through a pull request. Migrations only move forward; an applied migration is never edited.
 - **Data this repository did not create is not ours to change** (CONTRIBUTING.md rule C7). An export exists before any migration touches data.
-- **Retention.** `events` rows and session chunks are deleted after 90 days by a scheduled job running as the maintenance role (OPERATIONS.md section 1). Facts and digests are kept. The build's own recall then reaches older conversation only through them, and a session too short for a digest (section 3.6) only through its facts; Hermes's own `session_search` is unaffected. Misses worth keeping are copied into the eval set before then (section 3.8).
+- **Retention.** `events` rows and session chunks are deleted after 90 days by a database function that a migration adds and Supabase's `pg_cron` runs daily, so no host holds a login that can delete. That migration revokes the right to run the function from PUBLIC, so a machine's login cannot call it, and settles which role the function runs as, with the grants and row policies that role needs to delete old rows and record each run. Each run records a success event; a missing one is reported as `job.missed` (OPERATIONS.md section 4).[18] Facts and digests are kept. The build's own recall then reaches older conversation only through them, and a session too short for a digest (section 3.6) only through its facts; Hermes's own `session_search` is unaffected. Misses worth keeping are copied into the eval set before then (section 3.8).
 
 ## 5. Guards
 
@@ -410,10 +413,12 @@ The reminder alone is not enough, because the model can ignore it as it ignores 
 
 What counts as a checkable question, a question about past work, a managed file or setting, and a sensitive action is defined in each guard's configuration file in this repository, as patterns and lists. Changing one is a pull request like any code change, with the guard's tests updated.
 
+The write gate's first list of sensitive actions (#80): writes into the skills folder by any tool; writes to Hermes's own `config.yaml` and `.env` and to the plugin's folder; and terminal commands that install packages, run `systemctl`, or reach other hosts.
+
 The guards rest on Hermes mechanisms that the table does not name:
 
 - **The fact gate, the recall gate and the verify gate count a tool from `post_tool_call`**, and only when its `status` is `ok`. A lookup reported with any other status, such as `error` or `blocked`, does not count. The verify gate keeps its record of what a session has read in the plugin's local state (section 2).
-- **The write gate asks through Hermes's own approval gate**, by returning the `approve` directive from `pre_tool_call`. The request goes to a person; Hermes's model-based approval is not on this path. Hermes blocks the call when the person denies it, when the gate errors or times out, and when nobody can answer: in a scheduled run under the default `approvals.cron_mode: deny`, and in any other non-interactive context apart from the bypasses in section 5.6.[14] Each request carries a `rule_key` for the one action pattern it matched, so a person's "always" answer covers that pattern and not the whole tool; without a key, Hermes keys the answer on the tool.[4][14] The write gate records each request it sends in `events`. A person's answer arrives after the guard has returned, so it is recorded from Hermes's `post_approval_response` hook, and every "always" answer is listed in the daily report (OPERATIONS.md section 4). When the gate decides without asking, no approval hook fires: a call approved from an earlier answer shows as the request followed by `post_tool_call` with a status other than `blocked`, and a blocked call as `post_tool_call` with the status `blocked`. Before it asks, the write gate checks whether yolo or an approval bypass is on, using both of Hermes's checks: one for yolo, including a one-shot run, and one for an approval bypass, including `approvals.mode` switched to `off` while Hermes runs. If either reports a bypass, the gate blocks the call itself instead of asking (section 5.6).[14]
+- **The write gate asks through Hermes's own approval gate**, by returning the `approve` directive from `pre_tool_call`. The request goes to a person; Hermes's model-based approval is not on this path. Hermes blocks the call when the person denies it, when the gate errors or times out, and when nobody can answer: in a scheduled run under the default `approvals.cron_mode: deny`, and in any other non-interactive context apart from the bypasses in section 5.6.[14] Each request carries a `rule_key` for the one action pattern it matched, so a person's "always" answer covers that pattern and not the whole tool; without a key, Hermes keys the answer on the tool.[4][14] The write gate records each request it sends in `events`. A person's answer arrives after the guard has returned, so it is recorded from Hermes's `post_approval_response` hook, and every "always" answer is listed in the daily report (OPERATIONS.md section 4). When the gate decides without asking, no approval hook fires: a call approved from an earlier answer shows as the request followed by `post_tool_call` with a status other than `blocked`, and a blocked call as `post_tool_call` with the status `blocked`. Before it asks, the write gate checks whether yolo or an approval bypass is on, using both of Hermes's checks: one for yolo, including a one-shot run, and one for an approval bypass, including `approvals.mode` switched to `off` while Hermes runs. If either reports a bypass, the gate blocks the call itself instead of asking (section 5.6).[14] It also blocks outright when any of the three unattended approval modes reads as `approve` (#80).
 
 - **The skill tool's writes wait for a person.** Hermes's own skill-writing tool, `skill_manage`, stays on: Hermes switches tools off only by toolset, and the `skills` toolset that holds it also lets the agent read skills. Hermes's `skills.write_approval` setting is on (OPERATIONS.md section 3), so every change that tool makes, any of its six actions, in a turn or in Hermes's background review, is staged until a person approves it with `/skills approve`, as a write to `MEMORY.md` or `USER.md` waits under `memory.write_approval` (#42).[14] The setting holds that tool only: other tools that write files, such as the terminal, can still change a skill's files (#80).
 
@@ -426,7 +431,7 @@ Hermes's memory tool enforces the size limits of `MEMORY.md` and `USER.md` itsel
 3. **Count the tool by name once it has run**, from `post_tool_call` with the status `ok`, including tools called inside a batch.
 4. **Enforce at the output.** Block the call or withhold the reply.
 5. **Record every decision.** Each arm, block, withhold and approval is logged and written to `events`.
-6. **Ship in log mode first.** Each guard has three modes: `on`, `log` (detect and record only) and `off`. Read the records for false triggers, then enforce.
+6. **Ship in log mode first.** Each guard has three modes: `on`, `log` (detect and record only) and `off`, set in the guard's configuration file in this repository, so a mode changes only through a reviewed pull request. A guard moves from `log` to `on` after a week of real use; its pull request cites the guard's counts from `events`, with the triggers the maintainer judged false.
 
 ### 5.5 Failure behaviour
 
@@ -434,7 +439,7 @@ Hermes's memory tool enforces the size limits of `MEMORY.md` and `USER.md` itsel
 
   - the provider loads, and every guard's hooks are registered (`guard.not_loaded`); a failed ordinary load leaves no subcommand to run (below);
   - the build's two settings are present (`config.missing`): the machine's name, `plugins.entries.custom_build.settings.machine_name` in `config.yaml`, and the store's connection string, the secret `CUSTOM_BUILD_DATABASE_URL` in the profile's `.env`. A setting whose value is not text with more than whitespace in it, such as an unquoted number or date, counts as missing (#71). With either missing there is nowhere to record, so the check logs the code and `events.write_failed`;
-  - Hermes's own settings have the values the build depends on (`config.unsafe`): `memory.provider` is `custom_build`; `approvals.mode` is not `off`; `approvals.cron_mode`, `approvals.single_query_mode` and `approvals.unattended_mode` read as `deny`, because Hermes treats several other spellings as approve; `HERMES_YOLO_MODE` is not set; `compression.in_place` is `true`; `plugins.hook_callback_timeout` is 30 seconds or more (#69); and the host has one Hermes profile (#63).[14]
+  - Hermes's own settings have the values the build depends on (`config.unsafe`): `memory.provider` is `custom_build`; `approvals.mode` is not `off`; `approvals.cron_mode`, `approvals.single_query_mode` and `approvals.unattended_mode` read as `deny`, because Hermes treats several other spellings as approve; `HERMES_YOLO_MODE` is not set; `compression.in_place` is `true`; `plugins.hook_callback_timeout` is 30 seconds or more (#69); the host has one Hermes profile (#63), `gateway.auto_multiplex_migration` reads as false and `gateway.multiplex_profiles`, or `GATEWAY_MULTIPLEX_PROFILES`, does not read as true (#85); and `memory.write_approval` and `skills.write_approval` read as on, and redaction is on by both `security.redact_secrets` and `HERMES_REDACT_SECRETS` (#81).[14]
 
   Plugin isolation is enforced by the check's absence: under `host`, Hermes registers no subcommand for the plugin, so `hermes custom-build check` does not exist, exits non-zero, and the service does not start Hermes. The same happens when the ordinary load fails, because Hermes then drops everything the plugin registered, or when the plugin is not enabled. Nothing can be recorded in `events` then, and the host is caught by its missing heartbeat (section 6.3).
 
@@ -472,7 +477,8 @@ Hermes's memory tool enforces the size limits of `MEMORY.md` and `USER.md` itsel
   - the person earlier answered "for this session" or "always" for the same rule, which is the whole tool unless the guard names a narrower rule;
   - an unattended context has its mode set to `approve` (`approvals.cron_mode`, `approvals.single_query_mode`, `approvals.unattended_mode`; each defaults to `deny`).
 
-  The build answers each. The startup check fails on `approvals.mode: off`, on any of the three unattended modes that does not read as `deny`, and on `HERMES_YOLO_MODE` (section 5.5). During a turn, the write gate blocks outright when Hermes reports yolo or an approval bypass for the session. That also covers yolo turned on by the `--yolo` flag on the command that starts the gateway, or restored from an earlier `/yolo`, neither of which the startup check can see. An earlier answer covers only one action pattern, and every "always" answer is reported (section 5.3). Not covered: one of the three unattended modes switched to `approve` while Hermes runs, which the startup check cannot see and the write gate does not check.[14]
+  The build answers each. The startup check fails on `approvals.mode: off`, on any of the three unattended modes that does not read as `deny`, and on `HERMES_YOLO_MODE` (section 5.5). During a turn, the write gate blocks outright when Hermes reports yolo or an approval bypass for the session. That also covers yolo turned on by the `--yolo` flag on the command that starts the gateway, or restored from an earlier `/yolo`, neither of which the startup check can see. An earlier answer covers only one action pattern, and every "always" answer is reported (section 5.3). One of the three unattended modes switched to `approve` while Hermes runs, which the startup check cannot see, is caught by the write gate, which blocks outright when any of them reads as `approve` (section 5.3, #80).[14]
+- The write gate matches terminal commands by pattern, so a script that writes a file through its own code is not seen.
 
 ## 6. Failure handling
 
@@ -482,7 +488,7 @@ Every point of failure has a name, and a failure, an empty result and a fallback
 
 The catalog is one module in the package. It lists every failure code, its severity and whether it is shown in the turn. It also lists the events that are not failures, such as `host.heartbeat`, because the recording helper takes only codes in the catalog (CONTRIBUTING.md rules L3 and F6). A test fails the build if any handler or fallback emits a code that is not in it, or emits none.
 
-Two wrappers in the same module record what no handler caught. The boundary wrapper covers every entry point Hermes calls (section 2). The job wrapper covers every scheduled job: on an unexpected exception it records `unhandled` and `job.failed`, then exits non-zero, so Hermes cron also sends its own error alert (OPERATIONS.md section 4). The startup check (section 5.5) runs through the job wrapper too: a crash in it is recorded as `unhandled` and `job.failed`, and the check exits non-zero. These two wrappers are the only code allowed to catch everything. Both log the traceback; the `events` row carries only the exception's type and message as its reason, because a traceback can carry content (CONTRIBUTING.md rule L5).
+Two wrappers in the same module record what no handler caught. The boundary wrapper covers every entry point Hermes calls (section 2). The job wrapper covers every scheduled job that runs on a host: on an unexpected exception it records `unhandled` and `job.failed`, then exits non-zero, so Hermes cron also sends its own error alert (OPERATIONS.md section 4). The startup check (section 5.5) runs through the job wrapper too: a crash in it is recorded as `unhandled` and `job.failed`, and the check exits non-zero. These two wrappers are the only code allowed to catch everything. Both log the traceback; the `events` row carries only the exception's type and message as its reason, because a traceback can carry content (CONTRIBUTING.md rule L5).
 
 Initial codes:
 
@@ -517,6 +523,8 @@ Initial codes:
 
 A retry that succeeds is recorded as `degraded` with its retry count, so a flaky dependency shows up as a trend before it becomes an outage.
 
+Retention is an exception to the first two rows. It runs inside the database, so a failed run rolls back: its error is in `pg_cron`'s run history, and `events` shows it as `job.missed` at the next job-health check (section 4.3).
+
 ### 6.3 Absence checks
 
 Some failures raise nothing. A daily check flags any scheduled job other than the heartbeat with no fresh success (`job.missed`), and any job that processed input but produced no output for more than one run (`job.no_output`). The daily report is itself checked by its absence: a day with no report is treated as a failure (OPERATIONS.md section 4). A failed startup check is recorded in `events`, so it reaches the daily report when the host can reach the store. A host that cannot reach the store, or does not run at all, is caught by its absence: a heartbeat job on every agent host writes one `host.heartbeat` event every 6 hours, so one late or missed beat does not flag a live host (#43), and the job-health check, which has the list of agent hosts in its configuration, records `host.missing` for any host with no heartbeat in the last 24 hours.
@@ -533,6 +541,7 @@ Hermes owns logging for everything that runs inside it.[14]
 What Hermes does not provide, and the build adds:
 
 - **Supabase API key formats.** Hermes's redactor has no pattern for `sb_secret_` or `sb_publishable_` keys, so the build registers them through `register_redaction_patterns`.
+- **The build's own redaction is forced.** Before anything is stored or sent, the build calls Hermes's redactor with `force=True`, which applies even on a host where `security.redact_secrets` is off (#81).[14]
 - **Redaction outside logs.** Hermes redacts log lines, and the messages, queries, transcripts and tool arguments it hands a memory provider.[14] The build redacts every value itself before it is written to the store or sent off the host, whatever Hermes did before.
 - **Structure.** Hermes's lines are plain text. Each event the build logs is one line whose message is a single JSON object, written by one helper in the failure module that both logs the line and writes the `events` row, so the two always use the same fields.
 - **Durability.** Logs rotate and live on one machine. Decisions and failures also go to `events`, which every machine shares.
@@ -558,3 +567,4 @@ The rules are L1–L5 in CONTRIBUTING.md.
 - [15] [Build a Hermes plugin (Hermes Agent developer guide)](https://hermes-agent.nousresearch.com/docs/developer-guide/plugins)
 - [16] Hermes v0.23.1 source, plugin loading: `agent/prompt_builder.py`, `hermes_cli/plugin_isolation.py`, `hermes_cli/plugins.py`, `hermes_cli/plugins_cmd_install.py`, `hermes_cli/plugins_content.py`, `hermes_cli/plugins_discovery.py`, `hermes_cli/plugins_ledger.py`, `hermes_cli/plugins_loader.py`, `hermes_cli/plugins_manifest.py`, `plugins/memory/__init__.py`, `plugins/plugin_storage.py`
 - [17] [xiaowu0162/longmemeval-cleaned (Hugging Face dataset card)](https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned)
+- [18] [pg_cron: schedule recurring jobs in Postgres (Supabase documentation)](https://supabase.com/docs/guides/database/extensions/pg_cron)
