@@ -32,7 +32,16 @@ $$;
 
 -- Postgres grants execute to PUBLIC on a new function; no machine's login may run this one.
 revoke execute on function memory.retain_events() from public;
--- A new owner needs create on the schema only while it takes the function; the role keeps no create.
+-- Supabase's postgres is no superuser: to hand the function to a role it created it must be able to SET
+-- ROLE to it, and that role needs create on the schema, for the change only (Supabase knowledge base,
+-- "Can't revoke a role membership granted by supabase_admin"). Neither is kept. As the new owner, the
+-- role grants execute to the login applying this migration (Supabase's postgres), which schedules the
+-- pg_cron job that runs it.
 grant create on schema memory to memory_maintenance;
+grant memory_maintenance to current_user with set true, inherit false;
 alter function memory.retain_events() owner to memory_maintenance;
+set role memory_maintenance;
+grant execute on function memory.retain_events() to session_user;
+reset role;
+revoke memory_maintenance from current_user;
 revoke create on schema memory from memory_maintenance;

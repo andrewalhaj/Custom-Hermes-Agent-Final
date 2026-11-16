@@ -95,6 +95,8 @@ def test_a_role_like_supabases_postgres_can_apply_retention_then_run_it(db):
                 conn.execute(sql.SQL("select {}.retain_events()").format(sql.Identifier(schema)))
                 ran = conn.execute(sql.SQL("select detail from {}.events where code = 'job.succeeded'").format(
                     sql.Identifier(schema))).fetchall()
+                kept = conn.execute("select pg_has_role(current_user, %s, 'set'), pg_has_role(current_user, %s, 'usage'),"
+                                    " has_schema_privilege(%s, %s, 'create')", (maint, maint, maint, schema)).fetchone()
         finally:
             admin.execute(sql.SQL("drop schema if exists {} cascade").format(sql.Identifier(schema)))
             admin.execute(sql.SQL("revoke create on database {} from {}").format(sql.Identifier(dbname),
@@ -102,3 +104,4 @@ def test_a_role_like_supabases_postgres_can_apply_retention_then_run_it(db):
             for role in (agent, maint, applier):
                 admin.execute(sql.SQL("drop role if exists {}").format(sql.Identifier(role)))
     assert ran == [({"job": "retention", "input": 0, "output": 0},)]
+    assert kept == (False, False, False)   # the applier cannot act as the role, nor the role create, afterwards
