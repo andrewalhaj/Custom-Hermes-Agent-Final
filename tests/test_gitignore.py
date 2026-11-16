@@ -51,6 +51,7 @@ VISIBLE = [
     ".githooks/pre-commit",
     "custom_build/guards/write_gate.py",
     "custom_build/guards/write_gate.toml",
+    "custom_build/guards/verify_gate.toml",
 ]
 
 
