@@ -6,40 +6,16 @@ none in the last 24 hours as host.missing. Each run also records guard.bypassed,
 session that ran without the build: one started in safe mode or with the profile's settings ignored (#23).
 """
 
-import sys
-
-from . import failures, settings
+from . import failures, jobs
 
 
 def run(ctx):
-    """Record one host.heartbeat event, then any session that ran without the build; return the exit code, 0 or 1.
+    """Record one host.heartbeat event, then any session that ran without the build; return the exit code.
 
-    It prints nothing when it succeeds, so Hermes cron delivers nothing. Every failure exits non-zero, so
-    Hermes cron delivers its error alert, and prints one line to stderr that the alert carries, naming
-    the failure code and where its details are (#64):
-    - a missing setting is config.missing, logged with events.write_failed, as in the startup check;
-    - a connection that fails to open is db.auth or db.unreachable, logged by the job wrapper;
-    - a row the store does not take is events.write_failed;
-    - a crash is unhandled and job.failed, recorded by the job wrapper; so is a state.db Hermes cannot
-      open or read, after the heartbeat itself is recorded.
+    Run as every job is (`jobs.run`). A state.db Hermes cannot open or read is a crash, recorded as
+    unhandled and job.failed after the heartbeat itself is recorded.
     """
-    machine = settings.machine(ctx)
-    if missing := settings.missing_store_settings(ctx):
-        names = ", ".join(missing)
-        failures.record(None, "config.missing", "failed", source=machine, reason=names)
-        print(f"custom-build heartbeat failed: config.missing ({names}); not recorded in events: "
-              "events.write_failed (no connection to the store)", file=sys.stderr)
-        return 1
-    try:
-        written = failures.run_job("heartbeat", lambda conn: beat(conn, machine), connect=settings.connect, source=machine)
-    except SystemExit as stop:
-        print(f"custom-build heartbeat failed: {failures.exit_note(stop)}", file=sys.stderr)
-        raise
-    if not written:
-        print("custom-build heartbeat failed: events.write_failed (the store did not take the heartbeat); "
-              "the details are in Hermes's errors.log", file=sys.stderr)
-        return 1
-    return 0
+    return jobs.run(ctx, "heartbeat", beat)
 
 
 def beat(conn, machine):

@@ -93,7 +93,7 @@ Every machine that runs the agent:
 |---|---|---|---|
 | Retention | Daily | Deletes `events` rows and session chunks older than 90 days. Misses worth keeping are copied into the eval set before then (ARCHITECTURE.md section 3.8). Runs inside the database: a function a migration adds, scheduled by Supabase's `pg_cron`, so no host holds a login that can delete (ARCHITECTURE.md section 4.3). `pg_cron` 1.6.4 is available on the project but not yet installed.[9] | A run records a success event; a missing one is `job.missed` |
 | Heartbeat | Every 6 hours, on every agent host (#43) | Writes one `host.heartbeat` event, and records `guard.bypassed`, once, for each local session started in safe mode or with the profile's settings ignored, which ran with no part of the build, or whose launch policy it cannot read (ARCHITECTURE.md section 5.6, #23) | Exits non-zero, so Hermes sends its error alert, which names the code: `config.missing`, `db.auth` or `db.unreachable`, `events.write_failed`, or `unhandled` and `job.failed`. A heartbeat that never runs is caught by the job-health check |
-| Job-health check | Daily, before the report | Flags any job with no fresh success (`job.missed`) and any job that took input but produced nothing for more than one run (`job.no_output`), and records `host.missing` for any machine in `<agent-hosts>` with no heartbeat in the last 24 hours (ARCHITECTURE.md section 6.3). A host's missing heartbeat is reported as `host.missing` only, not also as `job.missed`. | Reported by the report's absence |
+| Job-health check | Daily, before the report | Flags any job with no fresh success (`job.missed`) and any job that took input but produced nothing for more than one run (`job.no_output`), and records `host.missing` for any machine in `<agent-hosts>` with no heartbeat in the last 24 hours (ARCHITECTURE.md section 6.3). A host's missing heartbeat is reported as `host.missing` only, not also as `job.missed`. A job counts as having run when it records `job.succeeded`, naming itself; the check records one too. Its list of jobs starts empty and gains the report and retention as they are built (#134). | A failed run exits non-zero, so Hermes sends its error alert, which names the code, as the heartbeat's does. A day it does not run at all records no `job.succeeded` for it, for the report to notice |
 | Daily failure report | Daily at 07:00, the job host's local time | Sends the day's failures from `events`, grouped by code and machine, the sessions recorded as `guard.bypassed` among them, and every "always" answer given to the write gate that day, as a dated Markdown file to `<operators-channel>`. With nothing to report it sends a one-line all-clear that names the jobs that ran. | A missing report |
 
 Every job other than retention runs through the job wrapper (ARCHITECTURE.md section 6.1), so a crash is recorded in `events` as `unhandled` and `job.failed` before the job exits non-zero.
@@ -109,6 +109,13 @@ Every job other than retention is a `hermes custom-build <job>` subcommand, ship
 3. `hermes cron run <job-id>`, with the id step 2 printed, runs it at once rather than 6 hours later and prints `Ran now: succeeded`; `events` then holds a `host.heartbeat` row with the host's name.
 
 A run that succeeds prints nothing, so Hermes sends nothing; a failed run sends Hermes's error alert to `<operators-channel>`.[1] The alert carries the start of the line the job printed, which names the failure code; the whole line is in the run's record under `cron/output/` in the Hermes home.
+
+**Setting up the job-health check** on the job host, in its Hermes home (#134):
+
+1. Set `plugins.entries.custom_build.settings.agent_hosts` in `config.yaml` to the list of every `<machine-name>` in `<agent-hosts>`. Without it, or with an entry that is not a name, the check stops with `config.missing`.
+2. Copy `plugins/custom_build/scripts/custom-build-job-health.py` into `scripts/`.
+3. `hermes cron create "45 6 * * *" --name custom-build-job-health --script custom-build-job-health.py --no-agent --deliver <operators-channel>`, so it runs before the 07:00 report on the same clock.
+4. `hermes cron run <job-id>` runs it once now; `events` then holds a `job.succeeded` row naming `job-health`.
 
 The report runs as a Hermes script-only cron job (`--no-agent`): it uses no model, and Hermes delivers the script's output to the configured target. A script that exits non-zero or times out makes Hermes deliver an error alert instead.[1]
 
