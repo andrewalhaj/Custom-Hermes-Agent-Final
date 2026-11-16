@@ -118,7 +118,8 @@ def test_grants_exactly_what_code_uses(db):
             " where attrelid = 'memory.facts'::regclass and attacl is not null order by 1, 2, 3"
         ).fetchall()
     assert tables == [("memory_agent", "INSERT", False), ("memory_agent", "SELECT", False)]
-    assert columns == [("superseded_by", "memory_agent", "UPDATE", False)]
+    assert columns == [("retired_at", "memory_agent", "UPDATE", False), ("retired_reason", "memory_agent", "UPDATE", False),
+                       ("superseded_by", "memory_agent", "UPDATE", False)]   # retiring, from 0003 (#142)
 
 
 def test_row_level_security_is_on(db):
@@ -148,6 +149,14 @@ def test_agent_can_store_and_find_a_fact_by_its_words(db):
     assert found == [(fact_id,)]
 
 
+def test_agent_can_retire_a_fact_with_its_reason(db):
+    # 0003 (#142): a fact removed from built-in memory is retired, never deleted.
+    with psycopg.connect(db["agent"]) as conn:
+        fact = _insert(conn)
+        assert conn.execute("update memory.facts set retired_at = now(), retired_reason = 'removed from built-in memory'"
+                            " where id = %s", (fact,)).rowcount == 1
+
+
 def test_agent_can_mark_a_fact_superseded(db):
     with psycopg.connect(db["agent"]) as conn:
         old, new = _insert(conn), _insert(conn)
@@ -162,7 +171,6 @@ def test_superseded_by_must_name_a_stored_fact(db):
 @pytest.mark.parametrize("statement", [
     "delete from memory.facts",
     "update memory.facts set body = 'rewritten'",
-    "update memory.facts set retired_at = now(), retired_reason = 'x'",
     "update memory.facts set last_verified_at = now()",
     "truncate memory.facts",
     "alter table memory.facts add column extra text",
