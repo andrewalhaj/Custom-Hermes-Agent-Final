@@ -108,6 +108,23 @@ def _record_lost_connection(exc, source):
         record(None, "db.unreachable", "failed", source=source, reason=str(exc))
 
 
+@contextlib.contextmanager
+def store(source, connect):
+    """Give a new connection from `connect()` to record on, and close it on leaving.
+
+    Gives None when `connect()` gives None (no store is configured) or the connection fails to open,
+    which is logged as `db.auth` (the server refused the login) or `db.unreachable`, as in `run_job`.
+    `record()` then logs what it is given with events.write_failed.
+    """
+    try:
+        conn = connect()
+    except psycopg.OperationalError as exc:
+        _record_lost_connection(exc, source)
+        conn = None
+    with conn or contextlib.nullcontext():
+        yield conn
+
+
 def run_job(name, job, *, connect, source):
     """Run job(conn) on a fresh connection; on any exception record it and exit non-zero.
 
