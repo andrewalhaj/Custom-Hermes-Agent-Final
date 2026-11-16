@@ -60,13 +60,13 @@ class UnknownFailureCode(ValueError):
 
 
 def record(conn, code, result, *, source, reason=None, project=None, session_id=None, turn=None, detail=None):
-    """Log one JSON line and write the matching memory.events row.
+    """Log one JSON line and write the matching memory.events row; return True when the row was written.
 
     Raises UnknownFailureCode for a code outside the catalog and ValueError for an unknown result,
     before anything is logged or written. When the row cannot be written, because `conn` is None (no
     store is configured) or the store failed or refused the insert (any psycopg.Error), the original
-    line is already logged, and the loss is logged at ERROR as events.write_failed (rule F5); nothing
-    is returned either way.
+    line is already logged, the loss is logged at ERROR as events.write_failed (rule F5), and False is
+    returned, for a caller whose row is its whole job.
     """
     if code not in CATALOG:
         raise UnknownFailureCode(code)
@@ -79,7 +79,7 @@ def record(conn, code, result, *, source, reason=None, project=None, session_id=
     logger.log(logging.WARNING if result in ("failed", "degraded") else logging.INFO, json.dumps(fields))
     if conn is None:
         _log_lost_write(fields, "no connection to the store")
-        return
+        return False
     try:
         with conn.transaction():
             conn.execute(
@@ -89,6 +89,8 @@ def record(conn, code, result, *, source, reason=None, project=None, session_id=
             )
     except psycopg.Error as exc:
         _log_lost_write(fields, str(exc))
+        return False
+    return True
 
 
 def _log_lost_write(fields, reason):
