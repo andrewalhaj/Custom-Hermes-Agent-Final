@@ -31,7 +31,7 @@ from hermes_cli.plugins import discover_plugins, get_plugin_manager, resolve_pre
 
 discover_plugins()
 entry = next((p for p in get_plugin_manager().list_plugins() if p["name"] == "custom_build"), None)
-scenario, calls = sys.argv[1], json.loads(sys.argv[2])
+scenario, calls, session = sys.argv[1], json.loads(sys.argv[2]), sys.argv[3]
 if scenario == "crash":
     # The ordinary load's copy of the gate; its hook looks the function up at each call.
     loaded = [m for name, m in sys.modules.items() if name.endswith("custom_build.guards.write_gate")]
@@ -41,7 +41,7 @@ if scenario == "crash":
     loaded[0].find_rule = crash
 
 def run():
-    return [resolve_pre_tool_block(tool, args, session_id="s1", task_id="t1") for tool, args in calls]
+    return [resolve_pre_tool_block(tool, args, session_id=session, task_id="t1") for tool, args in calls]
 
 if scenario == "one-shot":
     # How a `hermes -z` run marks its turn: nobody can answer, so Hermes approves without asking.
@@ -55,7 +55,7 @@ print(json.dumps({"entry": entry, "blocks": blocks}))
 
 
 def run_gate(tmp_path, db, calls, *, mode="log", scenario="plain", approvals=None, env=None, database_url=True,
-             hook_timeout=None, during=None, config_link=False):
+             hook_timeout=None, during=None, config_link=False, session="s1"):
     """Run each call through Hermes's pre_tool_call dispatch; return (report, Hermes's output, events rows).
 
     `during` is a context manager held while the calls run, such as a lock on memory.events. With
@@ -83,8 +83,8 @@ def run_gate(tmp_path, db, calls, *, mode="log", scenario="plain", approvals=Non
     if database_url:
         environment["CUSTOM_BUILD_DATABASE_URL"] = db["agent"] if database_url is True else database_url
     with during or contextlib.nullcontext():
-        result = subprocess.run([sys.executable, "-c", SCENARIO, scenario, json.dumps(calls)], capture_output=True,
-                                text=True, env=environment, cwd=tmp_path, timeout=120, check=False)
+        result = subprocess.run([sys.executable, "-c", SCENARIO, scenario, json.dumps(calls), session],
+                                capture_output=True, text=True, env=environment, cwd=tmp_path, timeout=120, check=False)
     assert result.returncode == 0, result.stderr[-2000:]
     report = json.loads(result.stdout.strip().splitlines()[-1])
     output = result.stderr + "".join(p.read_text(encoding="utf-8") for p in sorted((home / "logs").glob("*.log")))
@@ -238,6 +238,12 @@ def test_a_crash_in_the_gate_is_recorded_and_the_call_goes_ahead(tmp_path, db):
     assert [(code, result, reason, source, session) for code, result, reason, _, source, session in rows] == [
         ("guard.crash", "failed", "KeyError: 'boom'", "host-a", "s1"),
     ]
+
+
+def test_a_crash_in_a_call_with_no_session_records_no_session(tmp_path, db):
+    report, output, rows = run_gate(tmp_path, db, [["terminal", {"command": "ls"}]], scenario="crash", session="")
+    assert report["blocks"] == [None], output
+    assert [(code, session) for code, *_, session in rows] == [("guard.crash", None)], output
 
 
 @pytest.mark.parametrize("env", [None, {"HERMES_REDACT_SECRETS": "false"}])
