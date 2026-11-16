@@ -32,6 +32,8 @@ CATALOG = {
     "guard.bypassed": "A local session ran in safe mode or with the profile's settings ignored, or its launch policy cannot be read",
     "extract.error": "The extraction model failed or answered something other than a list of facts",
     "extract.refused": "The extraction model's provider refused the account: logged out, billing, or forbidden",
+    "digest.error": "The digest model failed or answered something other than a digest",
+    "digest.refused": "The digest model's provider refused the account: logged out, billing, or forbidden",
     "write_gate.would_ask": "Not a failure: in log mode, the write gate saw a call on its list that on would send for approval",
     "write_gate.would_block": "Not a failure: in log mode, the write gate saw a call on its list that on would block outright",
     "verify_gate.would_block": "Not a failure: in log mode, a call would change a listed file or setting the session never read",
@@ -70,6 +72,8 @@ SEVERITY = {
     "guard.bypassed": "high",
     "extract.error": "medium",
     "extract.refused": "high",   # the subscription's alert for Anthropic enforcement (#148)
+    "digest.error": "medium",
+    "digest.refused": "high",   # the same alert, for the digest call (#155)
     "config.unsafe": "high",
     "config.missing": "high",
     "redact.failed": "high",

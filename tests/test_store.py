@@ -152,3 +152,37 @@ def test_an_extracted_fact_never_supersedes_one_stored_on_purpose(conn, ollama, 
     assert outcome["superseded"] is None
     assert _live(conn) == [(STORED,), (new,)]
     assert typesafe.requests == []
+
+
+def test_a_digest_is_stored_as_one_and_never_supersedes_a_fact(conn, ollama, typesafe):
+    # #155: a digest is not compared with facts, so even a near-identical one leaves them live, unasked.
+    digest = "The session moved the mini's gateway to the hermes user.\n\nOpen items:\n- Restart the gateway."
+    ollama.vectors = {STORED: BASE, digest: _at(0.95)}
+    _store(conn, ollama, typesafe, STORED)
+    outcome = _store(conn, ollama, typesafe, digest, kind="digest", origin="digest", basis="assistant_inferred")
+    assert outcome["superseded"] is None
+    assert _live(conn) == [(STORED,), (digest,)]
+    assert typesafe.requests == []
+    row = conn.execute("select kind, origin, basis from memory.facts where id = %s", (outcome["stored"],)).fetchone()
+    assert row == ("digest", "digest", "assistant_inferred")
+
+
+def _digest(conn, ollama, typesafe, body, *, turn, written):
+    return _store(conn, ollama, typesafe, body, kind="digest", origin="digest", basis="assistant_inferred",
+                  source_turn=turn, written_at=f"2026-11-16T{written}:00+00:00")
+
+
+def test_a_digest_written_earlier_never_replaces_the_sessions_later_one(conn, ollama, typesafe):
+    # #156, decided B: a queued older digest must not replace the one written after it.
+    _digest(conn, ollama, typesafe, "The digest written at 10:05.", turn=7, written="10:05")
+    outcome = _digest(conn, ollama, typesafe, "The digest written at 10:00.", turn=7, written="10:00")
+    assert outcome == {"dropped": "a later digest of the session is live"}
+    assert _live(conn) == [("The digest written at 10:05.",)]
+
+
+def test_a_later_digest_replaces_the_sessions_earlier_one_even_at_a_lower_turn(conn, ollama, typesafe):
+    # #156 review: a resumed session counts its turns again from its compressed history, so turns go down.
+    earlier = _digest(conn, ollama, typesafe, "The digest at eviction, turn 42.", turn=42, written="10:00")["stored"]
+    outcome = _digest(conn, ollama, typesafe, "The digest at the real end, turn 8.", turn=8, written="11:00")
+    assert outcome["superseded"] == earlier
+    assert _live(conn) == [("The digest at the real end, turn 8.",)]

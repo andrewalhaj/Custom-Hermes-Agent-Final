@@ -50,7 +50,8 @@ print(json.dumps({
     "provider": provider.name if isinstance(provider, MemoryProvider) else None,
     "ordinary_provider_calls": ordinary_provider_calls,
     "redacted": redact_sensitive_text(text),
-    "aux_tasks": {key: entry["defaults"] for key, entry in get_plugin_manager()._aux_tasks.items()},
+    "aux_tasks": {key: {**entry["defaults"], "inherit_from": entry["inherit_from"]}
+                  for key, entry in get_plugin_manager()._aux_tasks.items()},
 }))
 """
 
@@ -179,3 +180,8 @@ def test_ordinary_load_registers_the_extraction_task_on_the_claude_subscription(
     # block can still override the route.
     defaults = load(tmp_path, provider=False)["aux_tasks"]["custom_build_extraction"]
     assert (defaults["provider"], defaults["model"]) == ("claude-subscription-directsdk-experimental", "haiku")
+
+
+def test_ordinary_load_registers_the_digest_task_on_the_extraction_route(tmp_path):
+    # #155: the digest model is the extraction model (OPERATIONS.md section 2); one override moves both.
+    assert load(tmp_path, provider=False)["aux_tasks"]["custom_build_digest"]["inherit_from"] == "custom_build_extraction"

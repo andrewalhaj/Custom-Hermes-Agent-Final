@@ -34,6 +34,12 @@ def keep_answers(fact, source, *, url, key, model, timeout):
                     url=url, key=key, model=model, timeout=timeout)
 
 
+def digest_answers(digest, *, url, key, model, timeout):
+    """The judge's probability for the digest gate's question (#155)."""
+    return _answers({"digest": digest}, write_path.load()["digest"]["questions"], url=url, key=key, model=model,
+                    timeout=timeout)
+
+
 def _answers(state, wording, *, url, key, model, timeout):
     questions = {name: {"type": "noul", **question} for name, question in wording.items()}
     body = json.dumps({"model": model, "state": state, "questions": questions}).encode()
@@ -64,5 +70,11 @@ def supersedes(answers):
 def keeps(answers):
     """The decision on an extracted fact, in code: the gate drops it at a drop score (1 - "worth keeping") of
     `drop_score` or higher, and the support check needs "supported" at `support_threshold` or higher (3.6)."""
-    limits = write_path.load()["extraction"]
-    return 1 - answers["worth_keeping"] < limits["drop_score"] and answers["supported"] >= limits["support_threshold"]
+    config = write_path.load()
+    return (1 - answers["worth_keeping"] < config["gate"]["drop_score"]
+            and answers["supported"] >= config["extraction"]["support_threshold"])
+
+
+def keeps_digest(answers):
+    """The decision on a digest, in code: the gate drops it at a drop score of `drop_score` or higher (3.6)."""
+    return 1 - answers["worth_keeping"] < write_path.load()["gate"]["drop_score"]

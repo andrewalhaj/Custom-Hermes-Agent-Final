@@ -168,6 +168,8 @@ def test_the_catalog_holds_the_architecture_codes():
         "guard.bypassed",
         "extract.error",
         "extract.refused",
+        "digest.error",
+        "digest.refused",
         "write_gate.would_ask",
         "write_gate.would_block",
         "verify_gate.would_block",

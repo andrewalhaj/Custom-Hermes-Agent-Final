@@ -4,12 +4,14 @@ A failure the tool expects is recorded with its code and returned in an `error` 
 stored fact (CONTRIBUTING.md rule C3); Hermes then reports the call with the status `error`.
 """
 
+import datetime
+
 import psycopg
 from agent.redact import redact_sensitive_text
 from agent.runtime_cwd import resolve_agent_cwd
 
 from .. import failures
-from . import embedding, extraction, judge, project, queue, store, write_path
+from . import digest, embedding, extraction, judge, project, queue, store, write_path
 
 BASES = ("user_stated", "tool_observed", "assistant_inferred")
 TIMEOUT = 5   # seconds for each answer from Ollama while a fact is stored
@@ -101,6 +103,45 @@ def extract(user_content, messages, *, machine, session_id, turn, embedder, judg
     _with_store(machine, session_id, connect, work)
 
 
+def write_digest(messages, *, machine, session_id, turn, embedder, judge_at, connect):
+    """Write the session's digest (3.3, #155): the digest model, then the judge's gate, then the store
+    function, as kind and origin `digest`, replacing the session's earlier digest (#156). A session gets one when
+    it is long, or when it already has one: after an in-place compression its transcript is short again."""
+    if not session_id:
+        return
+    has = _with_store(machine, session_id, connect, lambda conn: store.live_digest(conn, session_id) is not None)
+    if not isinstance(has, bool):
+        return   # the store could not be reached (recorded)
+    if not has and not digest.is_long(messages):
+        return
+    fields = {"source": machine, "project": project.key(resolve_agent_cwd()), "session_id": session_id, "turn": turn}
+    failure, body = None, None
+    written_at = datetime.datetime.now(datetime.UTC).isoformat()   # orders the session's digests (#156)
+    try:   # with no connection open: the call can take as long as its auxiliary timeout
+        body = _redact_forced(digest.write(digest.transcript(messages)))
+    except (extraction.ExtractRefused, extraction.ExtractError) as exc:
+        failure = exc
+
+    def work(conn):
+        if isinstance(failure, extraction.ExtractRefused):
+            failures.record(conn, "digest.refused", "failed", reason=str(failure), **fields)
+            return
+        if failure:
+            failures.record(conn, "digest.error", "failed", reason=str(failure), **fields)
+            return
+        # The weakest basis of its inputs: the transcript holds the agent's replies (3.3 rule 6).
+        fact = store.Fact(body=body, basis="assistant_inferred", project=fields["project"], source=machine,
+                          session_id=session_id, source_turn=turn, origin="digest", kind="digest",
+                          written_at=written_at)
+        _save(conn, fact, embedder=embedder, judge_at=judge_at)
+
+    _with_store(machine, session_id, connect, work)
+
+
+def _redact_forced(text):
+    return redact_sensitive_text(text, force=True)
+
+
 def _update(conn, fields, change, *args):
     """change(conn, *args) in a savepoint, a refused or failed update recorded as db.query or db.unreachable."""
     try:
@@ -141,7 +182,7 @@ def attempt(conn, fact, *, embedder, judge_at):
     """store.store(), with each failure it expects recorded under its code and returned as {"error": code}."""
     fields = {"source": fact.source, "project": fact.project, "session_id": fact.session_id, "turn": fact.source_turn}
     try:
-        if fact.gate is not None:   # an extracted fact: its gate first, unless the same text is already live
+        if fact.gate is not None or fact.kind == "digest":   # gated: unless the same text is already live
             if existing := store.identical(conn, fact.project, fact.body):
                 return {"already_stored": existing}
             if not _kept(fact, judge_at):
@@ -168,10 +209,12 @@ def attempt(conn, fact, *, embedder, judge_at):
 
 
 def _kept(fact, judge_at):
-    """The gate on an extracted fact: worth keeping, and supported by its source turn. Raises the judge's errors."""
-    answers = judge.keep_answers(fact.body, fact.gate, url=judge_at.url, key=judge_at.key, model=judge_at.model,
-                                 timeout=judge.DEADLINE)
-    return judge.keeps(answers)
+    """The judge's gate: a digest on worth keeping; an extracted fact on that and on its source turn's support.
+    Raises the judge's errors."""
+    reach = {"url": judge_at.url, "key": judge_at.key, "model": judge_at.model, "timeout": judge.DEADLINE}
+    if fact.kind == "digest":
+        return judge.keeps_digest(judge.digest_answers(fact.body, **reach))
+    return judge.keeps(judge.keep_answers(fact.body, fact.gate, **reach))
 
 
 def retry_queued(conn, *, embedder, judge_at):
