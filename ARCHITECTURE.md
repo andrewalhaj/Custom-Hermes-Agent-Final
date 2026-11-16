@@ -480,7 +480,7 @@ Every point of failure has a name, and a failure, an empty result and a fallback
 
 ### 6.1 The failure catalog
 
-The catalog is one module in the package. It lists every failure code, its severity and whether it is shown in the turn. A test fails the build if any handler or fallback emits a code that is not in it, or emits none.
+The catalog is one module in the package. It lists every failure code, its severity and whether it is shown in the turn. It also lists the events that are not failures, such as `host.heartbeat`, because the recording helper takes only codes in the catalog (CONTRIBUTING.md rules L3 and F6). A test fails the build if any handler or fallback emits a code that is not in it, or emits none.
 
 Two wrappers in the same module record what no handler caught. The boundary wrapper covers every entry point Hermes calls (section 2). The job wrapper covers every scheduled job: on an unexpected exception it records `unhandled` and `job.failed`, then exits non-zero, so Hermes cron also sends its own error alert (OPERATIONS.md section 4). The startup check (section 5.5) runs through the job wrapper too: a crash in it is recorded as `unhandled` and `job.failed`, and the check exits non-zero. These two wrappers are the only code allowed to catch everything. Both log the traceback; the `events` row carries only the exception's type and message as its reason, because a traceback can carry content (CONTRIBUTING.md rule L5).
 
@@ -503,6 +503,7 @@ Initial codes:
 | `events.write_failed` | An `events` row could not be written; logged locally at ERROR |
 | `job.failed`, `job.missed`, `job.no_output` | A scheduled job failed or the startup check crashed; a scheduled job did not run, or took input and produced nothing |
 | `host.missing` | An agent host on the job-health check's list wrote no heartbeat in the last 24 hours |
+| `host.heartbeat` | Not a failure: the heartbeat job on an agent host writes one every 6 hours (section 6.3) |
 | `unhandled` | Anything not in the catalog, outside a guard. Recorded by the boundary wrapper or the job wrapper, with its traceback in the log. |
 
 ### 6.2 Where a failure appears
