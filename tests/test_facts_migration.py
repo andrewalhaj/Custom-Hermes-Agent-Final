@@ -105,17 +105,20 @@ def test_memory_holds_exactly_the_events_and_facts_tables(db):
 
 
 def test_grants_exactly_what_code_uses(db):
+    # Read from the catalog's own lists, which also show MAINTAIN, grant options and PUBLIC, unlike
+    # information_schema.
     with psycopg.connect(db["owner"]) as conn:
         tables = conn.execute(
-            "select grantee, privilege_type from information_schema.role_table_grants"
-            " where table_schema = 'memory' and table_name = 'facts' and grantee like 'memory%' order by 1, 2"
+            "select a.grantee::regrole::text, a.privilege_type, a.is_grantable from pg_class c, aclexplode(c.relacl) a"
+            " where c.oid = 'memory.facts'::regclass and a.grantee <> c.relowner order by 1, 2"
         ).fetchall()
-        updates = conn.execute(
-            "select grantee, column_name from information_schema.column_privileges where table_schema = 'memory'"
-            " and table_name = 'facts' and grantee like 'memory%' and privilege_type = 'UPDATE' order by 1, 2"
+        columns = conn.execute(
+            "select attname, a.grantee::regrole::text, a.privilege_type, a.is_grantable"
+            " from pg_attribute, aclexplode(attacl) a"
+            " where attrelid = 'memory.facts'::regclass and attacl is not null order by 1, 2, 3"
         ).fetchall()
-    assert tables == [("memory_agent", "INSERT"), ("memory_agent", "SELECT")]
-    assert updates == [("memory_agent", "superseded_by")]
+    assert tables == [("memory_agent", "INSERT", False), ("memory_agent", "SELECT", False)]
+    assert columns == [("superseded_by", "memory_agent", "UPDATE", False)]
 
 
 def test_row_level_security_is_on(db):
