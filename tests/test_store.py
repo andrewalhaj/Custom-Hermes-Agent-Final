@@ -174,7 +174,7 @@ def _digest(conn, ollama, typesafe, body, *, turn, written):
 
 def test_a_digest_written_earlier_never_replaces_the_sessions_later_one(conn, ollama, typesafe):
     # #156, decided B: a queued older digest must not replace the one written after it.
-    later = _digest(conn, ollama, typesafe, "The digest written at 10:05.", turn=7, written="10:05")["stored"]
+    _digest(conn, ollama, typesafe, "The digest written at 10:05.", turn=7, written="10:05")
     outcome = _digest(conn, ollama, typesafe, "The digest written at 10:00.", turn=7, written="10:00")
     assert outcome == {"dropped": "a later digest of the session is live"}
     assert _live(conn) == [("The digest written at 10:05.",)]
