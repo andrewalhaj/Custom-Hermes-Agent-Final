@@ -35,5 +35,6 @@ def check(conn, machine, hosts):
                             " order by at desc limit 2", (job,)).fetchall()
         if len(last) == 2 and all(d.get("input", 0) > 0 and d.get("output") == 0 for (d,) in last):
             written.append(failures.record(conn, "job.no_output", "failed", source=machine, detail={"job": job}))
-    written.append(failures.record(conn, "job.succeeded", "ok", source=machine, detail={"job": "job-health"}))
-    return all(written)
+    if not all(written):   # a run that lost a finding has not succeeded; jobs.run reports events.write_failed
+        return False
+    return failures.record(conn, "job.succeeded", "ok", source=machine, detail={"job": "job-health"})
