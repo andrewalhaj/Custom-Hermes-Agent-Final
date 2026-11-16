@@ -136,6 +136,24 @@ def test_an_install_from_a_lock_file_is_an_install(tmp_path, db):
     assert [(detail["rule"], reason) for _, _, reason, detail, _, _ in rows] == [("install", c) for c in commands], output
 
 
+def test_more_commands_on_the_list_are_recorded(tmp_path, db):
+    commands = {
+        "hermes -p default config set approvals.mode off": "config",   # a flag before the subcommand
+        "hermes tools disable terminal": "config",
+        "hermes mcp add filesystem": "config",
+        "hermes setup": "config",
+        "pnpm i left-pad": "install",
+        "ssh-copy-id other-host": "other_hosts",
+    }
+    _, output, rows = run_gate(tmp_path, db, [["terminal", {"command": c}] for c in commands])
+    assert [(reason, detail["rule"]) for _, _, reason, detail, _, _ in rows] == list(commands.items()), output
+
+
+def test_a_git_verb_inside_a_commit_message_is_off_the_list(tmp_path, db):
+    _, output, rows = run_gate(tmp_path, db, [["terminal", {"command": "git commit -m 'pull in the fix'"}]])
+    assert rows == [], output
+
+
 def test_a_command_naming_a_path_in_the_users_home_records_it(tmp_path, db):
     report, output, rows = run_gate(tmp_path, db, [["terminal", {"command": "rm -r ~/home/skills/note-taking"}]])
     assert report["blocks"] == [None], output
