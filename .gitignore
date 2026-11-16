@@ -27,6 +27,9 @@
 !/migrations/*.sql
 
 /custom_build/*
+!/custom_build/memory/
+/custom_build/memory/*
+!/custom_build/memory/*.py
 !/custom_build/*.py
 !/custom_build/plugin.yaml
 
