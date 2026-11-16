@@ -34,15 +34,20 @@ def load_problems():
 
 def unsafe_settings():
     """Hermes settings with a value the build does not support (`config.unsafe`)."""
+    from agent.redact import _redact_enabled
     from hermes_cli.config import load_config_readonly
     from hermes_cli.plugins import _resolve_hook_callback_timeout
     from tools.approval_context import _binary_approval_mode, _get_approval_mode
+    from tools.write_approval import write_approval_enabled
     from utils import is_truthy_value
 
     config = load_config_readonly() or {}
     found = []
     if (config.get("memory") or {}).get("provider") != "custom_build":
         found.append("memory.provider is not custom_build")
+    found += [f"{part}.write_approval is off" for part in ("memory", "skills") if not write_approval_enabled(part)]
+    if not _redact_enabled():
+        found.append("security.redact_secrets (or HERMES_REDACT_SECRETS) is off")
     if _get_approval_mode() == "off":
         found.append("approvals.mode is off")
     if (timeout := _resolve_hook_callback_timeout()) < HOOK_TIMEOUT_FLOOR:
