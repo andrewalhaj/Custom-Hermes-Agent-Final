@@ -87,7 +87,8 @@ def _codes(db):
 @pytest.mark.parametrize("target", ["memory", "user"])
 def test_an_approved_entry_is_stored_as_a_fact_the_user_stated(home, db, ollama, typesafe, target):
     mirror(home, db, ollama.url, typesafe.url, [["add", target, RULE, {}]])
-    assert _facts(db) == [(RULE, "user_stated", "explicit", "github.com/Owner/Repo", "host-a", "s1", 4, True, None)]
+    # No project: built-in memory is one file per profile, not per repository (maintainer, #142).
+    assert _facts(db) == [(RULE, "user_stated", "explicit", None, "host-a", "s1", 4, True, None)]
 
 
 def test_a_short_entry_is_stored_too(home, db, ollama, typesafe):
