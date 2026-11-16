@@ -17,7 +17,7 @@ DAY = "24 hours"   # the window the report covers, ending when it runs
 
 def run(ctx):
     """Send the day's report; return the exit code, as every job does (`jobs.run`)."""
-    return jobs.run(ctx, "report", compose)
+    return jobs.run(ctx, "daily-report", compose)
 
 
 def compose(conn, machine):
@@ -36,7 +36,8 @@ def compose(conn, machine):
     if rows:
         path = _write(day, machine, rows, redact_sensitive_text)
         codes = len({row[0] for row in rows})
-        print(redact_sensitive_text(f"Failure report for {day}: {len(rows)} failures under {codes} codes.", force=True))
+        summary = f"Failure report for {day}: {_count(len(rows), 'failure')} under {_count(codes, 'code')}."
+        print(redact_sensitive_text(summary, force=True))
         print(f"MEDIA:{path}")
     else:
         print(redact_sensitive_text(f"All clear for {day}: no failures in the last 24 hours. Ran: {_ran(conn)}.",
@@ -57,7 +58,7 @@ def _ran(conn):
 
 def _write(day, machine, rows, redact):
     """Write the failures, grouped by code then machine, to failures-<day>.md; return its path."""
-    from gateway.platforms.base import DOCUMENT_CACHE_DIR
+    from gateway.platforms.base import cache_document_from_bytes
 
     lines = [f"# Failure report, {day}", "",
              f"The last 24 hours of `events`, read on {machine}: {len(rows)} failures.", ""]
@@ -73,12 +74,14 @@ def _write(day, machine, rows, redact):
             lines.append(f"| {source} | {len(group)} | {latest[2]:%Y-%m-%d %H:%M %Z} | {_cell(latest[3])} | "
                          f"{_cell(', '.join(names))} |")
         lines.append("")
-    path = DOCUMENT_CACHE_DIR / f"failures-{day}.md"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(redact("\n".join(lines), force=True), encoding="utf-8")   # it leaves the host (rule L4)
-    return path
+    # Hermes's own writer for its document cache, which its media policy accepts; it leaves the host (rule L4).
+    return cache_document_from_bytes(redact("\n".join(lines), force=True).encode("utf-8"), f"failures-{day}.md")
 
 
 def _cell(text):
     """A value as one Markdown table cell."""
     return re.sub(r"[\r\n]+", " ", text or "").replace("\\", "\\\\").replace("|", "\\|")
+
+
+def _count(n, word):
+    return f"{n} {word}" if n == 1 else f"{n} {word}s"
