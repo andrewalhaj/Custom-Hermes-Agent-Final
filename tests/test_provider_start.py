@@ -40,7 +40,7 @@ print(json.dumps({"raised": raised, "build": provider.embedder.build}))
 """
 
 
-def start(tmp_path, db, ollama_url, *, database_url=True, mode="plain"):
+def start(tmp_path, db, ollama_url, *, database_url=True, mode="plain", proxy=None):
     """Load the provider and run initialize(); return (what it raised, its log output, events rows).
 
     What it raised is a dict with `raised` and the embedder's checked `build`."""
@@ -52,6 +52,8 @@ def start(tmp_path, db, ollama_url, *, database_url=True, mode="plain"):
     env = {"HERMES_HOME": str(home), "HOME": str(tmp_path), "PATH": "/usr/bin:/bin"}
     if database_url:
         env["CUSTOM_BUILD_DATABASE_URL"] = db["agent"] if database_url is True else database_url
+    if proxy:
+        env["http_proxy"] = env["HTTP_PROXY"] = proxy
     result = subprocess.run([sys.executable, "-c", SCENARIO, ollama_url, mode, str(home)], capture_output=True,
                             text=True, env=env, cwd=tmp_path, timeout=120, check=False)
     assert result.returncode == 0, result.stderr[-2000:]
@@ -120,4 +122,11 @@ def test_a_refused_login_is_logged_as_db_auth(tmp_path, db, ollama):
     report, output, rows = start(tmp_path, db, ollama.url, database_url=wrong)
     assert report["raised"] is None
     assert _codes(output) == ["db.auth", "events.write_failed"]
+    assert rows == []
+
+
+def test_ollama_is_reached_directly_even_with_a_proxy_in_the_environment(tmp_path, db, ollama, ollama_down):
+    # Ollama is on this machine: its requests, with the text they embed, never go through a proxy.
+    report, output, rows = start(tmp_path, db, ollama.url, proxy=ollama_down)
+    assert report == {"raised": None, "build": ollama.build}, output
     assert rows == []
