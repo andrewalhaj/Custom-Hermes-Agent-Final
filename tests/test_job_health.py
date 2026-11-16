@@ -111,3 +111,4 @@ def test_a_finding_the_store_refuses_fails_the_check(tmp_path, db):
     result = hermes(tmp_path, with_hosts(make_home(tmp_path, db), ["host-b"]), "custom-build", "job-health")
     assert result.returncode != 0, result.stdout + result.stderr   # so Hermes cron delivers its error alert
     assert "events.write_failed" in result.stderr, result.stderr
+    assert recorded(db) == []   # a run that lost a finding does not count as having run
