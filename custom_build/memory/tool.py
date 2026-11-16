@@ -76,7 +76,6 @@ def recall_notes(query, *, machine, session_id, turn, embedder, connect):
         return ""   # 3.5 point 1: only an empty message is skipped
     limits = write_path.load()["recall"]
     box = {}
-    key = project.key(resolve_agent_cwd())
 
     # The recall thread is a Hermes entry point's work too: the boundary wrapper records a crash in it as
     # unhandled (CONTRIBUTING.md rule C2), with its session, and the turn is told below.
@@ -92,8 +91,8 @@ def recall_notes(query, *, machine, session_id, turn, embedder, connect):
     if worker.is_alive():   # the store cuts the search off at the same deadline; the turn does not wait for it
         record = spawn_context_thread(_with_store, name="custom_build-recall-timeout", args=(
             machine, session_id, connect, lambda conn: failures.record(
-                conn, "recall.timeout", "failed", source=machine, project=key, session_id=session_id, turn=turn,
-                reason=f"no answer within {limits['deadline']} seconds")))
+                conn, "recall.timeout", "failed", source=machine, project=project.key(resolve_agent_cwd()),
+                session_id=session_id, turn=turn, reason=f"no answer within {limits['deadline']} seconds")))
         record.start()   # off the turn's path: opening a connection to record it must not pass Hermes's 8 seconds
         return recall.failed("recall.timeout")
     if "outcome" not in box:   # it raised, and the boundary wrapper recorded it
@@ -122,6 +121,10 @@ def _searched(query, *, machine, session_id, turn, embedder, connect, wanted, de
         except embedding.ModelMismatch as exc:
             failures.record(conn, "embed.model_mismatch", "failed", reason=str(exc), **fields)
             return {"error": "embed.model_mismatch"}
+        except psycopg.errors.QueryCanceled:
+            # The store cancelled a recall statement at the deadline: prefetch has already told the turn and
+            # recorded recall.timeout. It is an OperationalError too, but the store was reached (#158 review).
+            return {"error": "recall.timeout"}
         except psycopg.OperationalError as exc:
             failures.record(conn, "db.unreachable", "failed", reason=str(exc), **fields)
             return {"error": "db.unreachable"}

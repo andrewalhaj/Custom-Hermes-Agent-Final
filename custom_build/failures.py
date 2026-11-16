@@ -244,7 +244,9 @@ def boundary(source, connect, on_crash):
     On any exception the guard raises, log it with its traceback, record `guard.crash` with the
     exception's type and message as the reason, and return `on_crash(exc)`: for a guard on
     `pre_llm_call`, the block that ends the turn, which Hermes would otherwise let go ahead; for a
-    guard in log mode, None, so the call goes ahead. `source()` names the machine and `connect()`
+    guard in log mode, None, so the call goes ahead. A provider method passes PROVIDER instead, and
+    prefetch() and the work it runs pass Returns(value): both record `unhandled`, not `guard.crash`;
+    PROVIDER then re-raises, and Returns returns `value(exc)`. `source()` names the machine and `connect()`
     opens a connection for the record, or gives None when there is no store. A connection that fails
     to open is logged as `db.auth` or `db.unreachable`, as in `run_job`; with no connection, or an
     insert the store refuses, the record is logged with events.write_failed, and `on_crash(exc)` is
