@@ -23,6 +23,7 @@ def safe_config():
     return {
         "memory": {"provider": "custom_build"},
         "plugins": {"enabled": ["custom_build"], "entries": {"custom_build": {"settings": {"machine_name": "host-a"}}}},
+        "gateway": {"auto_multiplex_migration": False},
     }
 
 
@@ -82,6 +83,8 @@ def _with(path, value):
     ("yolo variable set", {"env": {"HERMES_YOLO_MODE": "1"}}, "HERMES_YOLO_MODE"),
     ("hook timeout below 30 seconds", {"config": _with(("plugins", "hook_callback_timeout"), 10)}, "plugins.hook_callback_timeout"),
     ("hook timeout switched off", {"config": _with(("plugins", "hook_callback_timeout"), 0)}, "plugins.hook_callback_timeout"),
+    ("profiles added while running", {"config": _with(("gateway", "auto_multiplex_migration"), True)}, "gateway.auto_multiplex_migration"),
+    ("profile migration unset", {"config": {**safe_config(), "gateway": {}}}, "gateway.auto_multiplex_migration"),
 ])
 def test_an_unsafe_setting_fails_with_config_unsafe(tmp_path, db, label, kwargs, setting):
     code, output, rows = run_check(tmp_path, db, **kwargs)
