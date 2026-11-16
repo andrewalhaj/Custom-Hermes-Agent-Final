@@ -21,17 +21,19 @@ def run(ctx):
 
 
 def check(conn, machine, hosts):
-    """Record each missing host and job finding, then this run's success; return whether that was written."""
+    """Record each missing host and job finding, then this run's success; return whether every row was written."""
+    written = []
     for host in hosts:
         if not conn.execute("select 1 from memory.events where code = 'host.heartbeat' and source = %s"
                             " and at > now() - interval '24 hours' limit 1", (host,)).fetchone():
-            failures.record(conn, "host.missing", "failed", source=machine, detail={"host": host})
+            written.append(failures.record(conn, "host.missing", "failed", source=machine, detail={"host": host}))
     for job in JOBS:
         if not conn.execute("select 1 from memory.events where code = 'job.succeeded' and detail->>'job' = %s"
                             " and at > now() - interval '24 hours' limit 1", (job,)).fetchone():
-            failures.record(conn, "job.missed", "failed", source=machine, detail={"job": job})
+            written.append(failures.record(conn, "job.missed", "failed", source=machine, detail={"job": job}))
         last = conn.execute("select detail from memory.events where code = 'job.succeeded' and detail->>'job' = %s"
                             " order by at desc limit 2", (job,)).fetchall()
         if len(last) == 2 and all(d.get("input", 0) > 0 and d.get("output") == 0 for (d,) in last):
-            failures.record(conn, "job.no_output", "failed", source=machine, detail={"job": job})
-    return failures.record(conn, "job.succeeded", "ok", source=machine, detail={"job": "job-health"})
+            written.append(failures.record(conn, "job.no_output", "failed", source=machine, detail={"job": job}))
+    written.append(failures.record(conn, "job.succeeded", "ok", source=machine, detail={"job": "job-health"}))
+    return all(written)
