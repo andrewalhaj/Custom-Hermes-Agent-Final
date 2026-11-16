@@ -142,7 +142,7 @@ def _record_job_crash(conn, name, source, exc):
     record(conn, "job.failed", "failed", source=source, reason=reason, detail={"job": name})
 
 
-def boundary(source, connect, on_crash):
+def boundary(source, connect, on_crash=None, *, provider=False):
     """Wrap a guard that Hermes calls on `pre_llm_call` (ARCHITECTURE.md section 2).
 
     On any exception the guard raises, log it with its traceback, record `guard.crash` with the
@@ -151,8 +151,9 @@ def boundary(source, connect, on_crash):
     and `connect()` opens a connection for the record, or gives None when there is no store. A
     connection that fails to open is logged as `db.auth` or `db.unreachable`, as in `run_job`; with no
     connection, or an insert the store refuses, the record is logged with events.write_failed, and the
-    block is still returned. Only this row of section 2's table is built; the others arrive with their
-    entry points.
+    block is still returned. A provider method (`provider=True`) records `unhandled` instead, and with no
+    `on_crash` the exception is re-raised once recorded. The other rows of section 2's table arrive with
+    their entry points.
     """
     def wrap(guard):
         @functools.wraps(guard)
@@ -171,7 +172,12 @@ def boundary(source, connect, on_crash):
                 except Exception:   # the turn's block must not depend on reaching the store (rule F5)
                     logger.exception("no connection to record guard.crash")
                 with conn or contextlib.nullcontext():   # closes the connection opened for this record
-                    record(conn, "guard.crash", "failed", source=machine, reason=reason, session_id=kwargs.get("session_id"))
+                    if provider:
+                        record(conn, "unhandled", "failed", source=machine, reason=reason, session_id=kwargs.get("session_id"))
+                    else:
+                        record(conn, "guard.crash", "failed", source=machine, reason=reason, session_id=kwargs.get("session_id"))
+                if on_crash is None:
+                    raise
                 return on_crash(exc)
         return call
     return wrap
