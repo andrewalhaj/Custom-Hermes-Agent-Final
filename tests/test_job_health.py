@@ -123,3 +123,10 @@ def test_a_day_the_report_did_not_run_is_recorded_as_missed(tmp_path, db):
     result = hermes(tmp_path, with_hosts(make_home(tmp_path, db), ["host-a"]), "custom-build", "job-health")
     assert result.returncode == 0, result.stdout + result.stderr
     assert ("job.missed", "failed", "host-a", {"job": "daily-report"}) in recorded(db)
+
+
+def test_a_day_retention_did_not_run_is_recorded_as_missed(tmp_path, db):
+    seed(db, ("host.heartbeat", "host-a", 1, {}), ("job.succeeded", "database", 26, {"job": "retention"}))
+    result = hermes(tmp_path, with_hosts(make_home(tmp_path, db), ["host-a"]), "custom-build", "job-health")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert ("job.missed", "failed", "host-a", {"job": "retention"}) in recorded(db)
