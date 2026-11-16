@@ -36,10 +36,6 @@ def unsafe_settings():
     """Hermes settings with a value the build does not support (`config.unsafe`)."""
     from hermes_cli.config import load_config_readonly
     from hermes_cli.gateway_migrate_guards import auto_migration_opted_out
-    from hermes_cli.gateway_multiplex_mode import (
-        explicit_multiplex_flag,
-        settled_explicit_flag,
-    )
     from hermes_cli.plugins import _resolve_hook_callback_timeout
     from hermes_constants import get_default_hermes_root
     from tools.approval_context import _binary_approval_mode, _get_approval_mode
@@ -63,9 +59,8 @@ def unsafe_settings():
     # The check runs only at start; with this on, a running gateway also serves a profile added later (#85).
     if not auto_migration_opted_out(get_default_hermes_root()):
         found.append("gateway.auto_multiplex_migration is not false")
-    # Read the way boot reads it: true serves every profile from start, and the opt-out is never consulted.
-    if settled_explicit_flag(explicit_multiplex_flag(get_default_hermes_root())):
-        found.append("gateway.multiplex_profiles (or GATEWAY_MULTIPLEX_PROFILES) is true")
+    if serves_every_profile_from_start():
+        found.append("gateway.multiplex_profiles (or GATEWAY_MULTIPLEX_PROFILES) reads as true")
     return found
 
 
@@ -78,6 +73,18 @@ def installed_profiles():
     from hermes_cli.profiles import profiles_to_serve
 
     return [name for name, _ in profiles_to_serve(multiplex=True, include_standalone=True, include_parked=True)]
+
+
+def serves_every_profile_from_start():
+    """True when the gateway would serve every profile from start, which skips the opt-out above (#85).
+
+    Read the way the gateway's boot reads it (`gateway/run.py`): its config, merged from the legacy
+    `gateway.json`, `config.yaml` with its managed overlay, and `GATEWAY_MULTIPLEX_PROFILES`.
+    """
+    from gateway.config import load_gateway_config
+    from hermes_cli.gateway_multiplex_mode import settled_explicit_flag
+
+    return bool(settled_explicit_flag(load_gateway_config().multiplex_profiles))
 
 
 def run(ctx):
