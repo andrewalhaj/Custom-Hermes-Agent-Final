@@ -16,7 +16,7 @@ LIVE = "superseded_by is null and retired_at is null"   # the facts index's pred
 
 @dataclasses.dataclass(frozen=True)
 class Fact:
-    """A fact to store, already redacted: stored on purpose (`explicit`) or `extracted`."""
+    """A fact to store, already redacted: stored on purpose (`explicit`), `extracted`, or a session's `digest`."""
     body: str
     basis: str
     project: str | None
@@ -24,6 +24,7 @@ class Fact:
     session_id: str | None
     source_turn: int | None
     origin: str = "explicit"
+    kind: str = "fact"   # or "digest", whose origin is "digest" (the table's check)
     gate: dict | None = None   # an extracted fact's source turn, which the judge checks it against first
 
 
@@ -51,16 +52,17 @@ def store(conn, fact, *, embedder, judge, timeout):
     if existing := _identical(conn, fact.project, digest):
         return {"already_stored": existing}
     [vector] = embedder.embed(conn, [fact.body], timeout=timeout)
-    nearest = _nearest(conn, fact.project, str(vector))
+    # A digest is never compared with facts, so it never supersedes one (#155).
+    nearest = _nearest(conn, fact.project, str(vector)) if fact.kind == "fact" else None
     # Rule 5 (3.3): an extracted fact never supersedes one stored on purpose.
     protected = nearest and fact.origin == "extracted" and nearest[3] == "explicit"
     old = _replaced(nearest[:3], fact.body, judge) if nearest and not protected else None
     with conn.transaction():
         row = conn.execute(
             "insert into memory.facts (body, body_hash, kind, origin, basis, project, source, session_id, source_turn,"
-            " embedding, embedding_model) values (%s, %s, 'fact', %s, %s, %s, %s, %s, %s, %s, %s)"
+            " embedding, embedding_model) values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
             f" on conflict (project, body_hash) where {LIVE} do nothing returning id",
-            (fact.body, digest, fact.origin, fact.basis, fact.project, fact.source, fact.session_id, fact.source_turn,
+            (fact.body, digest, fact.kind, fact.origin, fact.basis, fact.project, fact.source, fact.session_id, fact.source_turn,
              str(vector), embedder.build),
         ).fetchone()
         if row is None:   # the same text was stored since the check above
