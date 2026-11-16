@@ -138,12 +138,6 @@ def run_job(name, job, *, connect, source):
             raise SystemExit(1) from exc
 
 
-def _record_job_crash(conn, name, source, exc):
-    reason = "".join(traceback.format_exception_only(exc)).strip()
-    record(conn, "unhandled", "failed", source=source, reason=reason)
-    record(conn, "job.failed", "failed", source=source, reason=reason, detail={"job": name})
-
-
 def exit_note(stop):
     """Name what run_job recorded before it raised `stop`, and where, for a caller's stderr (#64)."""
     if isinstance(stop.__cause__, psycopg.OperationalError):
@@ -151,6 +145,12 @@ def exit_note(stop):
         return (f"{code}; not recorded in events: events.write_failed (no connection to the store); "
                 "the details are in Hermes's errors.log")
     return "unhandled and job.failed; the traceback is in Hermes's errors.log"
+
+
+def _record_job_crash(conn, name, source, exc):
+    reason = "".join(traceback.format_exception_only(exc)).strip()
+    record(conn, "unhandled", "failed", source=source, reason=reason)
+    record(conn, "job.failed", "failed", source=source, reason=reason, detail={"job": name})
 
 
 def boundary(source, connect, on_crash):
