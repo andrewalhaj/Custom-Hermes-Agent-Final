@@ -256,7 +256,7 @@ def test_a_call_on_would_block_outright_is_recorded_and_goes_ahead(tmp_path, db,
 def test_off_registers_no_hook_and_records_nothing(tmp_path, db):
     report, output, rows = run_gate(tmp_path, db, [["terminal", {"command": "systemctl restart x"}]], mode="off")
     assert report["entry"]["error"] is None, output
-    assert report["entry"]["hooks"] == 4   # the per-turn settings check and the verify gate's three
+    assert report["entry"]["hooks"] == 7   # the per-turn settings check, and the verify and fact gates' three each
     assert report["blocks"] == [None]
     assert rows == []
 

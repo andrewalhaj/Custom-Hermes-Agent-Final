@@ -188,7 +188,7 @@ def test_off_registers_no_hook_and_records_nothing(tmp_path, db):
                                                                            "old_string": "a", "new_string": "b"}]],
                                     mode="off")
     assert report["entry"]["error"] is None, output
-    assert report["entry"]["hooks"] == 2   # the settings check and the write gate only
+    assert report["entry"]["hooks"] == 5   # the settings check, the write gate and the fact gate's three
     assert rows == []
 
 
