@@ -30,11 +30,13 @@ def _at(cosine):
     return [cosine, math.sqrt(1 - cosine ** 2)] + [0.0] * 2558
 
 
-def _add(owner, body, vector, *, project="p1", kind="fact", superseded=False, retired=False):
+def _add(owner, body, vector, *, project="p1", kind="fact", superseded=False, retired=False,
+         model="qwen3-embedding:4b@test"):
     fact = owner.execute(
         "insert into memory.facts (body, body_hash, kind, origin, basis, project, source, embedding, embedding_model)"
-        " values (%s, %s, %s, %s, 'user_stated', %s, 'host-a', %s, 'qwen3-embedding:4b@test') returning id",
-        (body, uuid.uuid4().hex, kind, "digest" if kind == "digest" else "explicit", project, str(vector))).fetchone()[0]
+        " values (%s, %s, %s, %s, 'user_stated', %s, 'host-a', %s, %s) returning id",
+        (body, uuid.uuid4().hex, kind, "digest" if kind == "digest" else "explicit", project, str(vector),
+         model)).fetchone()[0]
     if superseded:
         owner.execute("update memory.facts set superseded_by = %s where id = %s",
                       (_add(owner, body + " (newer)", _at(0.0), project=project), fact))
@@ -113,7 +115,8 @@ def test_the_pool_bounds_each_list(db, owner):
 
 def test_search_returns_the_wanted_number_with_provenance(db, owner, ollama):
     for n in range(8):
-        _add(owner, f"The gateway fact {n}.", _at(0.99 - n / 100))
+        word = "gateway" if n == 0 else "host"   # one word match, so word ranks do not tie
+        _add(owner, f"The {word} fact {n}.", _at(0.99 - n / 100), model=ollama.build)   # the embedder checks it
     ollama.vectors = {"gateway": BASE}
     with psycopg.connect(db["agent"]) as conn:
         results = search.search(conn, embedding.Embedder(ollama.url), "gateway", "p1", wanted=5, timeout=2)
@@ -163,8 +166,8 @@ def _codes(db):
 
 
 def test_the_tool_searches_the_sessions_project(home, db, owner, ollama):
-    _add(owner, "The gateway runs as hermes.", BASE, project="github.com/Owner/Repo")
-    _add(owner, "Another project's gateway.", BASE, project="github.com/Other/Repo")
+    _add(owner, "The gateway runs as hermes.", BASE, project="github.com/Owner/Repo", model=ollama.build)
+    _add(owner, "Another project's gateway.", BASE, project="github.com/Other/Repo", model=ollama.build)
     ollama.vectors = {"gateway": BASE}
     outcome = tool(home, db, ollama.url, "gateway")
     assert [r["body"] for r in outcome["results"]] == ["The gateway runs as hermes."]
