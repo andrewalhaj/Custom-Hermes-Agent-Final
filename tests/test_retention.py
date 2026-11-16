@@ -105,3 +105,23 @@ def test_a_role_like_supabases_postgres_can_apply_retention_then_run_it(db):
                 admin.execute(sql.SQL("drop role if exists {}").format(sql.Identifier(role)))
     assert ran == [({"job": "retention", "input": 0, "output": 0},)]
     assert kept == (False, False, False)   # the applier cannot act as the role, nor the role create, afterwards
+
+
+def test_retention_refuses_to_apply_under_a_switched_role(db):
+    # A login that switched to the applying role first (as Supabase's CLI login can, to postgres) would give
+    # execute to itself and leave the switched-to role able to act as memory_maintenance: refuse instead.
+    tag = uuid.uuid4().hex[:8]
+    applier, login = f"apply_{tag}", f"login_{tag}"
+    with psycopg.connect(db["owner"], autocommit=True) as admin:
+        admin.execute(sql.SQL("create role {} nologin createrole").format(sql.Identifier(applier)))
+        admin.execute(sql.SQL("create role {} login password 'x' in role {}").format(sql.Identifier(login),
+                                                                                     sql.Identifier(applier)))
+        try:
+            with psycopg.connect(psycopg.conninfo.make_conninfo(db["owner"], user=login, password="x"),
+                                 autocommit=True) as conn:
+                conn.execute(sql.SQL("set role {}").format(sql.Identifier(applier)))
+                with pytest.raises(psycopg.errors.RaiseException, match="SET ROLE"):
+                    conn.execute((MIGRATIONS / "0004_memory_events_retention.sql").read_text(encoding="utf-8"))
+        finally:
+            for role in (login, applier):
+                admin.execute(sql.SQL("drop role if exists {}").format(sql.Identifier(role)))
