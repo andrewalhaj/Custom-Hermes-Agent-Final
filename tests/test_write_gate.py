@@ -209,10 +209,11 @@ def test_a_command_naming_a_path_from_where_it_runs_records_it(tmp_path, db):
 def test_a_command_naming_a_linked_config_records_it(tmp_path, db):
     home = tmp_path / "home"
     calls = [["terminal", {"command": "sed -i s/a/b/ ~/home/config.yaml"}],
-             ["terminal", {"command": f"sed -i s/a/b/ {home}/config.yaml"}]]
+             ["terminal", {"command": f"sed -i s/a/b/ {home}/config.yaml"}],
+             ["terminal", {"command": f"sed -i s/a/b/ {tmp_path}/dotfiles/hermes-config.yaml"}]]   # the file it links to
     report, output, rows = run_gate(tmp_path, db, calls, config_link=True)
-    assert report["blocks"] == [None, None], output
-    assert [(code, detail["rule"]) for code, _, _, detail, _, _ in rows] == [("write_gate.would_ask", "config")] * 2, output
+    assert report["blocks"] == [None] * 3, output
+    assert [(code, detail["rule"]) for code, _, _, detail, _, _ in rows] == [("write_gate.would_ask", "config")] * 3, output
 
 
 def test_a_call_off_the_list_records_nothing(tmp_path, db):
