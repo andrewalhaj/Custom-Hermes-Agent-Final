@@ -137,6 +137,22 @@ def test_an_install_from_a_lock_file_is_an_install(tmp_path, db):
     assert [(detail["rule"], reason) for _, _, reason, detail, _, _ in rows] == [("install", c) for c in commands], output
 
 
+def test_a_relative_path_resolves_from_the_sessions_directory_as_hermes_resolves_it(tmp_path, db):
+    # The process runs elsewhere, so only Hermes's own resolution finds the Hermes home's config.yaml.
+    home = tmp_path / "home"
+    _, output, rows = run_gate(tmp_path, db, [["write_file", {"path": "config.yaml", "content": "x"}]],
+                               env={"TERMINAL_CWD": str(home)})
+    assert [(detail["rule"], reason) for _, _, reason, detail, _, _ in rows] == [
+        ("config", str((home / "config.yaml").resolve()))], output
+
+
+def test_a_patch_whose_later_file_is_on_the_list_is_recorded(tmp_path, db):
+    skill = tmp_path / "home" / "skills" / "note-taking" / "SKILL.md"
+    patch = f"*** Begin Patch\n*** Update File: notes.txt\n@@\n-a\n+b\n*** Add File: {skill}\n+x\n*** End Patch"
+    _, output, rows = run_gate(tmp_path, db, [["patch", {"mode": "patch", "patch": patch}]])
+    assert [(detail["rule"], reason) for _, _, reason, detail, _, _ in rows] == [("skills", str(skill.resolve()))], output
+
+
 def test_more_commands_on_the_list_are_recorded(tmp_path, db):
     commands = {
         "hermes -p default config set approvals.mode off": "config",   # a flag before the subcommand
