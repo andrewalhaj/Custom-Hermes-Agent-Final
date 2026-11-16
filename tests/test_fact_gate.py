@@ -218,3 +218,23 @@ def test_a_turn_that_delegates_its_lookup_counts_as_looked_up(tmp_path, db):
              ["reply", "s1", "u1", "There are 42."]]
     _, output, rows = run_gate(tmp_path, db, steps)
     assert [code for code, _, _ in events(rows)] == ["fact_gate.armed"], output
+
+
+def test_a_long_message_is_matched_in_linear_time():
+    # A pasted log reaches pre_llm_call whole; a pattern that rescans it at every position holds the GIL.
+    import time
+
+    from custom_build.guards import fact_gate
+
+    config = fact_gate.load_config()
+    for message in ("a " * 100_000 + "?", "x" * 200_000):
+        started = time.monotonic()
+        fact_gate.armed_by(config, message)
+        assert time.monotonic() - started < 1, len(message)
+
+
+def test_is_or_does_inside_a_sentence_does_not_arm_the_turn(tmp_path, db):
+    statements = ["That is entirely up to you.", "My mind is all set, thanks",
+                  "The function is not running fast enough, can you optimise it", "Your argument does not support that."]
+    _, output, rows = run_gate(tmp_path, db, [["turn", "s1", f"u{n}", text] for n, text in enumerate(statements)])
+    assert rows == [], output
