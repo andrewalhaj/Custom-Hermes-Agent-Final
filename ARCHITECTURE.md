@@ -416,6 +416,8 @@ What counts as a checkable question, a question about past work, a managed file 
 
 The verify gate's first list (#124): Hermes's `config.yaml` and `.env`, the plugin's folder, and the built-in memory files `MEMORY.md` and `USER.md`; and the settings in OPERATIONS.md section 3, items 3 and 4. A file is changed by `write_file`, `patch` or a terminal command that names it and writes, and read by `read_file` or a terminal command that names it without writing; a setting is changed by `hermes config set` or `unset`, and read by `hermes config get` or `show`. Hermes's memory tool is not counted as a change: `memory.write_approval` stages its writes. A session's reads are kept in the plugin's local state for the 100 most recently active sessions.
 
+The fact gate's first lists (#133): a checkable question is one of eight named patterns on the user's message (a version, a place, a state, a value, a count, support, a date, or a failure in a question); a lookup is `web_search`, `web_extract`, `read_file`, `search_files`, `terminal`, `session_search`, `skill_view` or `x_search`, and a documentation lookup is `web_search` or `web_extract`; a reply needs a documentation lookup too when it gives a numbered procedure or a diagnosis. The memory search tool joins the lookups when it ships.
+
 The write gate's first list of sensitive actions (#80): writes into the skills folder by any tool; writes to Hermes's own `config.yaml` and `.env` and to the plugin's folder; and terminal commands that install packages, run `systemctl`, or reach other hosts. The gate reads a `write_file` or `patch` call by the paths the tool will write, and a terminal command by pattern (section 5.6), so "any tool" means those three. Hermes's skill tool, `skill_manage`, is held by `skills.write_approval` instead (the last item of the list below).
 
 The guards rest on Hermes mechanisms that the table does not name:
@@ -507,6 +509,7 @@ Initial codes:
 | `guard.crash`, `guard.not_loaded` | A guard raised during a turn (recorded instead of `unhandled`), or the startup check found a guard's hooks or the provider not loaded, or the memory provider found, when it started, that the guards had not loaded |
 | `write_gate.would_ask`, `write_gate.would_block` | Not failures: in `log` mode, the write gate saw a call on its list that `on` would send to a person for approval, or would block outright (section 5.3) |
 | `verify_gate.would_block`, `verify_gate.would_withhold` | Not failures: in `log` mode, a call would change a listed file or setting the session never read, or a reply stated a listed file's contents the session never read (section 5.3) |
+| `fact_gate.armed`, `fact_gate.would_withhold` | Not failures: in `log` mode, the user asked a checkable question, or its reply had no lookup, or gave a procedure or diagnosis with no documentation lookup (section 5.3) |
 | `config.unsafe` | The startup check found a Hermes setting with a value the build does not support (section 5.5) |
 | `config.missing` | A setting the build needs is missing or invalid: the startup check fails, a scheduled job stops, and inside Hermes every turn is blocked (section 5.5) |
 | `redact.failed` | The redactor raised; the text is not stored or sent |
