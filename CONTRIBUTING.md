@@ -410,7 +410,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:   # a throwaway server the tests apply the migrations to; its password is not a secret
-        image: postgres:17
+        image: pgvector/pgvector:0.8.0-pg17@sha256:40b404964359299eefdd5f8518facf1886c562848cf4de13b6eaf91cb70c2b87   # Postgres 17 with pgvector 0.8.0, as the store has (#96)
         env: { POSTGRES_PASSWORD: postgres }
         ports: ["5432:5432"]
         options: >-
