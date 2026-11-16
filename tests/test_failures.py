@@ -65,6 +65,17 @@ def test_a_lost_events_write_is_logged_as_events_write_failed(db, caplog):
     ]
 
 
+@pytest.mark.parametrize("login, written", [("agent", True), ("maint", False), (None, False)])
+def test_record_says_whether_it_wrote_the_row(db, login, written):
+    # The maintenance login cannot insert into events, and with no connection there is no store (#106).
+    conn = psycopg.connect(db[login], autocommit=True) if login else None
+    try:
+        assert failures.record(conn, "db.query", "failed", source="host-a") is written
+    finally:
+        if conn:
+            conn.close()
+
+
 def _crashing_job(conn):
     raise RuntimeError("boom")
 
@@ -120,6 +131,11 @@ def test_job_wrapper_returns_quietly_when_the_job_succeeds(db):
                      connect=lambda: psycopg.connect(db["agent"], autocommit=True))
     assert ran == [True]
     assert _rows(db["agent"]) == []
+
+
+def test_job_wrapper_returns_what_the_job_returns(db):
+    assert failures.run_job("nightly", lambda conn: 42, source="host-a",
+                            connect=lambda: psycopg.connect(db["agent"], autocommit=True)) == 42
 
 
 # The catalog test (F6): every literal code passed to record() anywhere in the package is in the catalog.

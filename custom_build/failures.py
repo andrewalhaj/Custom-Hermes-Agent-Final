@@ -60,13 +60,13 @@ class UnknownFailureCode(ValueError):
 
 
 def record(conn, code, result, *, source, reason=None, project=None, session_id=None, turn=None, detail=None):
-    """Log one JSON line and write the matching memory.events row.
+    """Log one JSON line and write the matching memory.events row; return True when the row was written.
 
     Raises UnknownFailureCode for a code outside the catalog and ValueError for an unknown result,
     before anything is logged or written. When the row cannot be written, because `conn` is None (no
     store is configured) or the store failed or refused the insert (any psycopg.Error), the original
-    line is already logged, and the loss is logged at ERROR as events.write_failed (rule F5); nothing
-    is returned either way.
+    line is already logged, the loss is logged at ERROR as events.write_failed (rule F5), and False is
+    returned, for a caller whose row is its whole job.
     """
     if code not in CATALOG:
         raise UnknownFailureCode(code)
@@ -79,7 +79,7 @@ def record(conn, code, result, *, source, reason=None, project=None, session_id=
     logger.log(logging.WARNING if result in ("failed", "degraded") else logging.INFO, json.dumps(fields))
     if conn is None:
         _log_lost_write(fields, "no connection to the store")
-        return
+        return False
     try:
         with conn.transaction():
             conn.execute(
@@ -89,6 +89,8 @@ def record(conn, code, result, *, source, reason=None, project=None, session_id=
             )
     except psycopg.Error as exc:
         _log_lost_write(fields, str(exc))
+        return False
+    return True
 
 
 def _log_lost_write(fields, reason):
@@ -107,7 +109,7 @@ def _record_lost_connection(exc, source):
 
 
 def run_job(name, job, *, connect, source):
-    """Run job(conn) on a fresh connection; on any exception record it and exit non-zero.
+    """Run job(conn) on a fresh connection and return what it returns; on any exception record it and exit non-zero.
 
     The crash is recorded as `unhandled`, with the traceback in the log line and the exception's type
     and message as the reason, then as `job.failed` naming the job. SystemExit(1) follows, so the
@@ -127,13 +129,22 @@ def run_job(name, job, *, connect, source):
         raise SystemExit(1) from exc
     with conn:
         try:
-            job(conn)
+            return job(conn)
         except Exception as exc:
             logger.exception("job %s crashed", name)
             if not conn.closed:   # a lost connection reads as closed; record() then logs events.write_failed
                 conn.rollback()   # leave the job's open or aborted transaction, so the records below commit
             _record_job_crash(conn, name, source, exc)
             raise SystemExit(1) from exc
+
+
+def exit_note(stop):
+    """Name what run_job recorded before it raised `stop`, and where, for a caller's stderr (#64)."""
+    if isinstance(stop.__cause__, psycopg.OperationalError):
+        code = "db.auth" if refused_login(stop.__cause__) else "db.unreachable"
+        return (f"{code}; not recorded in events: events.write_failed (no connection to the store); "
+                "the details are in Hermes's errors.log")
+    return "unhandled and job.failed; the traceback is in Hermes's errors.log"
 
 
 def _record_job_crash(conn, name, source, exc):
