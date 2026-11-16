@@ -35,13 +35,14 @@ from hermes_cli.plugins import discover_plugins, get_plugin_manager, resolve_pre
 discover_plugins()
 entry = next((p for p in get_plugin_manager().list_plugins() if p["name"] == "custom_build"), None)
 scenario, calls, session = sys.argv[1], json.loads(sys.argv[2]), sys.argv[3]
-if scenario == "crash":
-    # The ordinary load's copy of the gate; its hook looks the function up at each call.
+if scenario in ("crash", "worker-crash"):
+    # The ordinary load's copy of the gate; the hook looks each function up at each call. "crash" breaks
+    # the hook itself, "worker-crash" the write on the worker thread.
     loaded = [m for name, m in sys.modules.items() if name.endswith("custom_build.guards.write_gate")]
     assert len(loaded) == 1, sorted(n for n in sys.modules if "custom_build" in n)
     def crash(*args, **kwargs):
         raise KeyError("boom")
-    loaded[0].find_rule = crash
+    setattr(loaded[0], "find_rule" if scenario == "crash" else "write_event", crash)
 
 def settle():
     # The plugin records on worker threads: let a call's recording finish, so rows keep the calls' order.
@@ -271,6 +272,16 @@ def test_a_crash_in_the_gate_is_recorded_and_the_call_goes_ahead(tmp_path, db):
     assert [(code, result, reason, source, session) for code, result, reason, _, source, session in rows] == [
         ("guard.crash", "failed", "KeyError: 'boom'", "host-a", "s1"),
     ]
+
+
+def test_a_crash_on_the_worker_is_recorded_and_the_call_goes_ahead(tmp_path, db):
+    # Unwrapped, a crash on the worker would reach only Python's thread exception hook, on stderr.
+    calls = [["terminal", {"command": "systemctl restart x"}]]
+    report, output, rows = run_gate(tmp_path, db, calls, scenario="worker-crash")
+    assert report["blocks"] == [None], output
+    assert [(code, result, reason, source, session) for code, result, reason, _, source, session in rows] == [
+        ("guard.crash", "failed", "KeyError: 'boom'", "host-a", "s1"),
+    ], output
 
 
 def test_a_crash_in_a_call_with_no_session_records_no_session(tmp_path, db):
