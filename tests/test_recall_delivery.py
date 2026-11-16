@@ -6,6 +6,7 @@ prefetch() as Hermes does before a turn. Facts are written as the owner with cho
 fixture answers the query's vector.
 """
 
+import datetime
 import json
 import math
 import pathlib
@@ -220,3 +221,48 @@ def test_a_digests_open_items_stay_under_its_provenance(home, db, owner, ollama)
     lines = recall(home, db, ollama.url)["notes"].splitlines()
     assert lines[1].startswith("- [digest, assistant_inferred, stored ") and lines[1].endswith("] A session summary.")
     assert lines[-1] == "    - Restart it."
+
+
+# Questions about past and open work (4a-iii, ARCHITECTURE.md 3.5 points 3-4).
+PAST = "What did we decide last time"
+OPEN = "What is left to do"
+
+
+def test_a_question_about_past_work_gets_eight_notes(home, db, owner, ollama):
+    for n in range(10):
+        _add(owner, f"Host fact {n}.", _at(0.99 - n / 100), ollama.build)
+    ollama.vectors = {PAST: BASE}
+    assert len(_notes(recall(home, db, ollama.url, PAST)["notes"])) == 8
+
+
+def _digest(owner, body, build, *, days_ago, project=PROJECT, superseded=False):
+    created = datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=days_ago)
+    row = owner.execute(
+        "insert into memory.facts (body, body_hash, kind, origin, basis, project, source, embedding, embedding_model,"
+        " created_at) values (%s, %s, 'digest', 'digest', 'assistant_inferred', %s, 'host-a', %s, %s, %s) returning id",
+        (body, uuid.uuid4().hex, project, str(_at(0.1)), build, created)).fetchone()[0]
+    if superseded:
+        owner.execute("update memory.facts set superseded_by = id where id = %s", (row,))
+
+
+def test_a_question_about_open_work_returns_the_newest_digests_open_items(home, db, owner, ollama):
+    _add(owner, "Host fact nearest by meaning.", BASE, ollama.build)   # not a similarity search: never returned
+    _digest(owner, "Oldest.\n\nOpen items:\n- Item from four days ago.", ollama.build, days_ago=4)
+    _digest(owner, "Third.\n\nOpen items:\n- Item from three days ago.", ollama.build, days_ago=3)
+    _digest(owner, "Second.\n\nOpen items:\n- Item A from two days ago.\n- Item B from two days ago.",
+            ollama.build, days_ago=2)
+    _digest(owner, "Newest, nothing open.", ollama.build, days_ago=1)
+    _digest(owner, "Replaced.\n\nOpen items:\n- A replaced digest's item.", ollama.build, days_ago=0, superseded=True)
+    _digest(owner, "Other project.\n\nOpen items:\n- Another project's item.", ollama.build, days_ago=0,
+            project="github.com/Other/Repo")
+    ollama.vectors = {OPEN: BASE}
+    notes = _notes(recall(home, db, ollama.url, OPEN)["notes"])
+    assert [note.split("] ", 1)[1] for note in notes] == [
+        "Item A from two days ago.", "Item B from two days ago.", "Item from three days ago."]
+    assert notes[0].startswith("- [digest, assistant_inferred, stored ")
+
+
+def test_a_question_about_open_work_with_nothing_open_adds_nothing(home, db, owner, ollama):
+    _digest(owner, "A session with nothing left open.", ollama.build, days_ago=1)
+    ollama.vectors = {OPEN: BASE}
+    assert recall(home, db, ollama.url, OPEN)["notes"] == ""
