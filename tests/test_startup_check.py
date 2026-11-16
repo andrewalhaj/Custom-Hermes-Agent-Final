@@ -24,6 +24,7 @@ def safe_config():
         "memory": {"provider": "custom_build", "write_approval": True},
         "skills": {"write_approval": True},
         "plugins": {"enabled": ["custom_build"], "entries": {"custom_build": {"settings": {"machine_name": "host-a"}}}},
+        "gateway": {"auto_multiplex_migration": False},
     }
 
 
@@ -90,6 +91,10 @@ def _with(path, value):
     ("yolo variable set", {"env": {"HERMES_YOLO_MODE": "1"}}, "HERMES_YOLO_MODE"),
     ("hook timeout below 30 seconds", {"config": _with(("plugins", "hook_callback_timeout"), 10)}, "plugins.hook_callback_timeout"),
     ("hook timeout switched off", {"config": _with(("plugins", "hook_callback_timeout"), 0)}, "plugins.hook_callback_timeout"),
+    ("profiles added while running", {"config": _with(("gateway", "auto_multiplex_migration"), True)}, "gateway.auto_multiplex_migration"),
+    ("profile migration unset", {"config": {**safe_config(), "gateway": {}}}, "gateway.auto_multiplex_migration"),
+    # With it true the gateway serves every profile from start and never reads the opt-out above.
+    ("profiles served from start", {"config": _with(("gateway", "multiplex_profiles"), True)}, "gateway.multiplex_profiles"),
 ])
 def test_an_unsafe_setting_fails_with_config_unsafe(tmp_path, db, label, kwargs, setting):
     code, output, rows = run_check(tmp_path, db, **kwargs)
@@ -206,3 +211,14 @@ def test_a_second_profile_fails_with_config_unsafe(tmp_path, db):
     assert code != 0, output
     assert [(c, r) for c, r, _, _ in rows] == [("config.unsafe", "failed")], output
     assert "profile" in rows[0][2] and "second" in rows[0][2]
+
+
+def test_a_managed_multiplex_flag_fails_with_config_unsafe(tmp_path, db):
+    # Boot reads the flag from the managed overlay and gateway.json too, not only from config.yaml (#85).
+    managed = tmp_path / "managed"
+    managed.mkdir()
+    (managed / "config.yaml").write_text(yaml.safe_dump({"gateway": {"multiplex_profiles": True}}), encoding="utf-8")
+    code, output, rows = run_check(tmp_path, db, env={"HERMES_MANAGED_DIR": str(managed)})
+    assert code != 0, output
+    assert [(c, r, s) for c, r, _, s in rows] == [("config.unsafe", "failed", "host-a")], output
+    assert "gateway.multiplex_profiles" in rows[0][2]

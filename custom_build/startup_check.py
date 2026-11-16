@@ -36,7 +36,9 @@ def unsafe_settings():
     """Hermes settings with a value the build does not support (`config.unsafe`)."""
     from agent.redact import _redact_enabled
     from hermes_cli.config import load_config_readonly
+    from hermes_cli.gateway_migrate_guards import auto_migration_opted_out
     from hermes_cli.plugins import _resolve_hook_callback_timeout
+    from hermes_constants import get_default_hermes_root
     from tools.approval_context import _binary_approval_mode, _get_approval_mode
     from tools.write_approval import write_approval_enabled
     from utils import TRUTHY_STRINGS, is_truthy_value
@@ -61,6 +63,11 @@ def unsafe_settings():
         found.append("compression.in_place is false")
     if len(profiles := installed_profiles()) > 1:
         found.append(f"the host has {len(profiles)} Hermes profiles ({', '.join(profiles)}), not one")
+    # The check runs only at start; with this on, a running gateway also serves a profile added later (#85).
+    if not auto_migration_opted_out(get_default_hermes_root()):
+        found.append("gateway.auto_multiplex_migration is not false")
+    if serves_every_profile_from_start():
+        found.append("gateway.multiplex_profiles (or GATEWAY_MULTIPLEX_PROFILES) reads as true")
     return found
 
 
@@ -73,6 +80,18 @@ def installed_profiles():
     from hermes_cli.profiles import profiles_to_serve
 
     return [name for name, _ in profiles_to_serve(multiplex=True, include_standalone=True, include_parked=True)]
+
+
+def serves_every_profile_from_start():
+    """True when the gateway would serve every profile from start, which skips the opt-out above (#85).
+
+    Read the way the gateway's boot reads it (`gateway/run.py`): its config, merged from the legacy
+    `gateway.json`, `config.yaml` with its managed overlay, and `GATEWAY_MULTIPLEX_PROFILES`.
+    """
+    from gateway.config import load_gateway_config
+    from hermes_cli.gateway_multiplex_mode import settled_explicit_flag
+
+    return bool(settled_explicit_flag(load_gateway_config().multiplex_profiles))
 
 
 def run(ctx):
