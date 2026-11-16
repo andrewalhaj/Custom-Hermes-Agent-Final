@@ -85,6 +85,8 @@ def _with(path, value):
     ("hook timeout switched off", {"config": _with(("plugins", "hook_callback_timeout"), 0)}, "plugins.hook_callback_timeout"),
     ("profiles added while running", {"config": _with(("gateway", "auto_multiplex_migration"), True)}, "gateway.auto_multiplex_migration"),
     ("profile migration unset", {"config": {**safe_config(), "gateway": {}}}, "gateway.auto_multiplex_migration"),
+    # With it true the gateway serves every profile from start and never reads the opt-out above.
+    ("profiles served from start", {"config": _with(("gateway", "multiplex_profiles"), True)}, "gateway.multiplex_profiles"),
 ])
 def test_an_unsafe_setting_fails_with_config_unsafe(tmp_path, db, label, kwargs, setting):
     code, output, rows = run_check(tmp_path, db, **kwargs)
