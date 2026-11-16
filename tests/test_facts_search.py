@@ -75,9 +75,11 @@ def test_a_fact_found_both_ways_ranks_above_one_found_by_meaning_alone(db, owner
 
 
 def test_a_fact_found_by_words_alone_is_returned(db, owner):
+    _add(owner, "The mini runs Ubuntu 24.04.", BASE)                    # the two rows the meaning list holds
+    _add(owner, "The mini has no GPU.", _at(0.99))
     _add(owner, "The gateway on the mini restarts nightly.", _at(0.0))
-    rows = _search(db, "gateway", pool=1)   # the pool holds one row by meaning; it is the only fact
-    assert [row[0] for row in rows] == ["The gateway on the mini restarts nightly."]
+    rows = _search(db, "gateway", pool=2)
+    assert ("The gateway on the mini restarts nightly.", None, 1) in rows   # #158 review: not also by meaning
 
 
 def test_any_of_the_querys_words_matches(db, owner):
@@ -177,3 +179,48 @@ def test_the_tool_reports_an_embedding_failure_never_an_empty_result(home, db, o
     outcome = tool(home, db, ollama_down, "gateway")
     assert outcome == {"error": "embed.unavailable"}
     assert _codes(db)[-1] == "embed.unavailable"
+
+
+@pytest.mark.parametrize("change", ["revoke execute on function {f} from memory_agent", "drop function {f}"])
+def test_the_tool_records_a_refused_search_as_db_query(home, db, owner, ollama, change):
+    # A store whose grant is missing, or without 0005 at all: the error and its event row (#158 review).
+    owner.execute(change.format(f="memory.search_facts(public.halfvec, text, text, integer, integer)"))
+    ollama.vectors = {"gateway": BASE}
+    assert tool(home, db, ollama.url, "gateway") == {"error": "db.query"}
+    assert _codes(db) == ["db.query"]
+
+
+def test_0005_applies_as_a_login_that_is_not_a_superuser(db, owner):
+    # #158 review: Supabase's postgres is not a superuser, and a function-level setting of pgvector's
+    # hnsw.iterative_scan is refused before the extension's library is loaded in the session.
+    role, password = f"mig_{uuid.uuid4().hex[:8]}", uuid.uuid4().hex
+    owner.execute("drop function memory.search_facts(public.halfvec, text, text, integer, integer)")
+    owner.execute(f"create role {role} login password '{password}'")
+    try:
+        owner.execute(f"grant usage, create on schema memory to {role}; grant select on memory.facts to {role}")
+        dsn = psycopg.conninfo.make_conninfo(db["owner"], user=role, password=password)
+        with psycopg.connect(dsn, autocommit=True) as fresh:   # a new session: no pgvector library loaded yet
+            fresh.execute((ROOT / "migrations" / "0005_memory_facts_search.sql").read_text(encoding="utf-8"))
+    finally:
+        owner.execute(f"drop owned by {role}; drop role {role}")
+
+
+def test_the_meaning_search_can_use_the_vector_index(db, owner):
+    # #158 review: a plan made once with generic parameters never chose the HNSW index.
+    # Enough rows that the planner weighs the index against a scan with its own costs, as in a real store.
+    owner.execute(
+        "insert into memory.facts (body, body_hash, kind, origin, basis, project, source, embedding, embedding_model)"
+        " select 'Fact ' || n, md5(n::text), 'fact', 'explicit', 'user_stated', 'p1', 'host-a',"
+        " ('[' || (0.99 - n * 0.0001) || ',' || sqrt(1 - (0.99 - n * 0.0001) ^ 2) || repeat(',0', 2558) || ']')::halfvec,"
+        " 'qwen3-embedding:4b@test' from generate_series(1, 4000) n")
+    owner.execute("analyze memory.facts")
+    plans = []
+    owner.add_notice_handler(lambda notice: plans.append(notice.message_primary))
+    owner.execute("load 'auto_explain'")
+    owner.execute("set auto_explain.log_min_duration = 0; set auto_explain.log_nested_statements = on;"
+                  " set auto_explain.log_level = notice")
+    for _ in range(7):   # Postgres plans a function's first five calls with their values, then may go generic
+        plans.clear()
+        owner.execute("select * from memory.search_facts(%s::halfvec, 'x', 'p1', 15, 20)", (str(BASE),))
+    assert any("facts_live_embedding_idx" in plan for plan in plans), [
+        line.strip() for plan in plans for line in plan.splitlines() if "Scan" in line or "Sort" in line]
