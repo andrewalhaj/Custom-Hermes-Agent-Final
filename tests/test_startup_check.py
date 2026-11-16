@@ -23,13 +23,14 @@ def safe_config():
     return {
         "memory": {"provider": "custom_build", "write_approval": True},
         "skills": {"write_approval": True},
-        "plugins": {"enabled": ["custom_build"], "entries": {"custom_build": {"settings": {"machine_name": "host-a"}}}},
+        "plugins": {"enabled": ["custom_build"], "entries": {"custom_build": {"settings": {"machine_name": "host-a",
+                                                                                       "judge_model": "jev-1.14.0"}}}},
         "gateway": {"auto_multiplex_migration": False},
     }
 
 
-def run_check(tmp_path, db, *, config=None, raw_config="", env=None, database_url=True, plugin_edit=None,
-              startup_edit=None):
+def run_check(tmp_path, db, *, config=None, raw_config="", env=None, database_url=True, judge_key=True,
+              plugin_edit=None, startup_edit=None):
     """Run `hermes custom-build check` against a throwaway home; return (exit code, output, events rows)."""
     home = tmp_path / "home"
     shutil.copytree(PLUGIN, home / "plugins" / "custom_build", ignore=shutil.ignore_patterns("__pycache__"))
@@ -40,9 +41,9 @@ def run_check(tmp_path, db, *, config=None, raw_config="", env=None, database_ur
         check = home / "plugins" / "custom_build" / "startup_check.py"
         check.write_text(startup_edit(check.read_text(encoding="utf-8")), encoding="utf-8")
     (home / "config.yaml").write_text(yaml.safe_dump(config or safe_config()) + raw_config, encoding="utf-8")
-    if database_url:
-        url = db["agent"] if database_url is True else database_url
-        (home / ".env").write_text(f"CUSTOM_BUILD_DATABASE_URL={url}\n", encoding="utf-8")
+    secrets = [f"CUSTOM_BUILD_DATABASE_URL={db['agent'] if database_url is True else database_url}"] if database_url else []
+    secrets += ["TYPESAFE_API_KEY=test-key-not-a-real-one"] if judge_key else []
+    (home / ".env").write_text("".join(line + "\n" for line in secrets), encoding="utf-8")
     result = subprocess.run(
         [sys.executable, "-c", HERMES, "custom-build", "check"],
         capture_output=True, text=True, timeout=180, check=False, cwd=tmp_path,
@@ -160,6 +161,22 @@ def test_a_missing_database_url_fails_with_config_missing(tmp_path, db):
     code, output, rows = run_check(tmp_path, db, database_url=False)
     assert code != 0
     assert "config.missing" in output and "CUSTOM_BUILD_DATABASE_URL" in output
+    assert rows == []
+
+
+def test_a_missing_judge_model_fails_with_config_missing(tmp_path, db):
+    config = safe_config()
+    del config["plugins"]["entries"]["custom_build"]["settings"]["judge_model"]
+    code, output, rows = run_check(tmp_path, db, config=config)
+    assert code != 0
+    assert "config.missing" in output and "judge_model" in output, output
+    assert rows == []
+
+
+def test_a_missing_judge_key_fails_with_config_missing(tmp_path, db):
+    code, output, rows = run_check(tmp_path, db, judge_key=False)
+    assert code != 0
+    assert "config.missing" in output and "TYPESAFE_API_KEY" in output, output
     assert rows == []
 
 
