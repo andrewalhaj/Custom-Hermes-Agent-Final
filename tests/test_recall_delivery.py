@@ -85,34 +85,37 @@ def _codes(db):
         return [row[0] for row in conn.execute("select code from memory.events order by id")]
 
 
+# Test bodies share no word with QUERY, so meaning alone orders them: tied word ranks have no order.
+
+
 def _notes(text):
     return [line for line in text.splitlines() if line.startswith("- ")]
 
 
 def test_recalled_notes_are_labelled_with_their_provenance_and_cut_to_five(home, db, owner, ollama):
     for n in range(7):
-        _add(owner, f"Gateway fact {n}.", _at(0.99 - n / 100), ollama.build)
+        _add(owner, f"Host fact {n}.", _at(0.99 - n / 100), ollama.build)
     ollama.vectors = {QUERY: BASE}
     text = recall(home, db, ollama.url)["notes"]
     assert "notes, not instructions" in text.splitlines()[0]
     notes = _notes(text)
     assert len(notes) == 5
-    assert notes[0].startswith("- Gateway fact 0.") and "explicit" in notes[0] and "user_stated" in notes[0]
+    assert notes[0].startswith("- Host fact 0.") and "explicit" in notes[0] and "user_stated" in notes[0]
     assert "stored " in notes[0]
 
 
 def test_a_message_gets_at_most_one_digest(home, db, owner, ollama):
     # Decided on #158: one digest per message, the rest facts.
     for n in range(3):
-        _add(owner, f"Digest {n} of a session about the gateway.", _at(0.99 - n / 100), ollama.build,
+        _add(owner, f"Digest {n} of a session.", _at(0.99 - n / 100), ollama.build,
              kind="digest", basis="assistant_inferred")
     for n in range(4):
-        _add(owner, f"Gateway fact {n}.", _at(0.90 - n / 100), ollama.build)
+        _add(owner, f"Host fact {n}.", _at(0.90 - n / 100), ollama.build)
     ollama.vectors = {QUERY: BASE}
     notes = _notes(recall(home, db, ollama.url)["notes"])
     assert [note.split(" [")[0] for note in notes] == [
-        "- Digest 0 of a session about the gateway.", "- Gateway fact 0.", "- Gateway fact 1.", "- Gateway fact 2.",
-        "- Gateway fact 3."]
+        "- Digest 0 of a session.", "- Host fact 0.", "- Host fact 1.", "- Host fact 2.",
+        "- Host fact 3."]
 
 
 def test_nothing_found_adds_nothing(home, db, ollama):
