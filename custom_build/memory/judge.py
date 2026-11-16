@@ -11,6 +11,7 @@ import urllib.request
 from . import write_path
 
 URL = "https://api.typesafe.ai"
+DEADLINE = 2   # seconds for one judge request (ARCHITECTURE.md 3.6)
 
 
 class JudgeError(Exception):
