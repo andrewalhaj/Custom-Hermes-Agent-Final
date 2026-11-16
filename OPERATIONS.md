@@ -18,7 +18,7 @@ These placeholders appear in the documentation. Each deployment sets them in its
 | `<judge-model>` | The hosted model used as judge, as reranker and to route each message. It answers typed questions (a pick from a list, a yes or no) with probabilities and does not need to generate text. It is set by version, never by an alias that can move to a newer model, because the thresholds depend on its answers. |
 | `<extraction-model>` | The model that proposes facts from user messages and tool results |
 | `<digest-model>` | The model that writes session digests |
-| `<operators-channel>` | Where the daily failure report is sent. The first deployment uses a Telegram channel. |
+| `<operators-channel>` | Where the daily failure report and the scheduled jobs' error alerts are sent, as a Hermes cron delivery target (`--deliver`), such as `telegram:<chat-id>`. The first deployment uses a Telegram channel. |
 
 ## 2. Where it runs
 
@@ -100,7 +100,14 @@ Every job other than retention runs through the job wrapper (ARCHITECTURE.md sec
 
 **A missing report is an alarm.** The report always sends something, so silence never means "all clear". If no report arrives by its expected time, the job host, the report job or the channel has failed, and an operator investigates.
 
-Every job other than retention is a `hermes custom-build <job>` subcommand, shipped and updated with the plugin. Hermes requires a script-only job to name a file in the Hermes home's `scripts/` folder, so each job has a one-line wrapper there that calls its subcommand and never changes.[3]
+Every job other than retention is a `hermes custom-build <job>` subcommand, shipped and updated with the plugin. Hermes requires a script-only job to name a file in the Hermes home's `scripts/` folder, so each job has a wrapper there, a few lines of Python that call its subcommand and never change. The wrappers ship in the plugin's own `scripts/` folder and are copied into the Hermes home's once. Hermes runs a Python script on its own interpreter, whatever the kind of install, so a wrapper names no path to Hermes.[3]
+
+**Setting up the heartbeat** on each agent host, in its Hermes home (#106):
+
+1. Copy `plugins/custom_build/scripts/custom-build-heartbeat.py` into `scripts/`.
+2. `hermes cron create "every 6h" --name custom-build-heartbeat --script custom-build-heartbeat.py --no-agent --deliver <operators-channel>`
+
+A run that succeeds prints nothing, so Hermes sends nothing; a failed run sends Hermes's error alert to `<operators-channel>`.[1]
 
 The report runs as a Hermes script-only cron job (`--no-agent`): it uses no model, and Hermes delivers the script's output to the configured target. A script that exits non-zero or times out makes Hermes deliver an error alert instead.[1]
 
