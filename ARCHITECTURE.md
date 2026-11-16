@@ -136,7 +136,7 @@ There are no references at first, as there are no skills: the store is added whe
    - A fact stored on purpose passes a pattern filter: it must meet the minimum length and must not match the narration patterns in the write-path configuration file, `custom_build/memory/write_path.toml`, which also holds section 3.6's supersede thresholds and the wording of the judge's questions.
    - Extracted facts and digests go to a judge model, which drops the ones not worth keeping.
    - An extracted fact then gets a separate check: does its source turn support it? A fact its source does not support is not stored.
-   - If the judge errors, the fact is queued for retry, never stored unchecked (`store.gate_error`). It waits, redacted, in the plugin's own SQLite database on the machine (section 2), and the provider retries it each time it starts; a retry that stores it is recorded as `store.gate_error` with the result `degraded`.
+   - If the judge errors, the fact is queued for retry, never stored unchecked (`store.gate_error`). It waits, redacted, in the plugin's own SQLite database on the machine (section 2), and the provider retries the queue each time it starts in a primary session (not a subagent, cron run or flush), least-tried facts first, stopping at the first judge failure; a retry that resolves a fact is recorded as `store.gate_error` with the result `degraded`.
 4. **One store function.** All three entrances then go through one function. It embeds the text and compares it with what is already stored in the same project. "Short" and "long" are defined in section 3.6.
 
    | Match with an existing fact | Result |
