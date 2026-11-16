@@ -80,6 +80,7 @@ class FakeOllama(http.server.ThreadingHTTPServer):
         self.drop = 0
         self.cut_off = False
         self.replaced_during_embed = None   # a digest the model takes on while it embeds
+        self.delay = 0                      # seconds before each embedding answer, for deadlines
         self.status = 200
         self.embedded = []
         self.url = f"http://127.0.0.1:{self.server_address[1]}"
@@ -100,6 +101,7 @@ class _OllamaHandler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         self.server.embedded.append(request["input"])
+        time.sleep(self.server.delay)
         if self.server.replaced_during_embed:   # `ollama pull` of a new build while a request runs
             self.server.models = [{**model, "digest": self.server.replaced_during_embed} for model in self.server.models]
         vectors = [self.server.vectors.get(text, self.server.other or [0.01] * self.server.dimensions)
