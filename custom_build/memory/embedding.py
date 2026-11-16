@@ -19,7 +19,8 @@ _DIRECT = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
 class EmbedUnavailable(Exception):
-    """`embed.unavailable`: Ollama cannot be reached, answers with an HTTP error, or lacks the model."""
+    """`embed.unavailable`: Ollama cannot be reached, answers with an HTTP error, lacks the model, cuts its
+    answer off or garbles it, or returns a different number of vectors than texts."""
 
 
 class ModelMismatch(Exception):
