@@ -33,16 +33,24 @@ def _connection_string(value):
     return True
 
 
-def missing_settings(ctx):
-    """The names of the build's settings that are not set, set to something other than text, or, for the
-    connection string, set to text PostgreSQL cannot parse."""
+def missing_store_settings(ctx):
+    """The names of the two settings anything that writes to the store needs, the heartbeat included, that
+    are not set, set to something other than text, or, for the connection string, set to text PostgreSQL
+    cannot parse."""
     from agent.secret_scope import get_secret
 
     found = (("plugins.entries.custom_build.settings." + MACHINE_NAME, _usable(ctx.get_config(MACHINE_NAME))),
-             (DATABASE_URL, _connection_string(get_secret(DATABASE_URL))),
-             ("plugins.entries.custom_build.settings." + JUDGE_MODEL, _usable(ctx.get_config(JUDGE_MODEL))),
-             (JUDGE_KEY, _usable(get_secret(JUDGE_KEY))))
+             (DATABASE_URL, _connection_string(get_secret(DATABASE_URL))))
     return [name for name, ok in found if not ok]
+
+
+def missing_settings(ctx):
+    """Every build setting that is missing or invalid: the store's two, then the judge's model and key."""
+    from agent.secret_scope import get_secret
+
+    found = (("plugins.entries.custom_build.settings." + JUDGE_MODEL, _usable(ctx.get_config(JUDGE_MODEL))),
+             (JUDGE_KEY, _usable(get_secret(JUDGE_KEY))))
+    return missing_store_settings(ctx) + [name for name, ok in found if not ok]
 
 
 def machine(ctx):
