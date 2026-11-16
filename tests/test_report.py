@@ -88,6 +88,7 @@ def test_a_day_with_failures_sends_a_dated_file_grouped_by_code_and_machine(tmp_
     (row,) = [line for line in report.split("\n") if line.startswith("| host-a | 2 |")]
     assert "newest" in row and "older" not in row, row   # its latest reason
     assert "\r" not in report and len(re.findall(r"(?<!\\)\|", row)) == 6, row   # no cell breaks its row
+    assert "newest \\| one with \\\\\\| marks" in row, row   # a backslash in a reason is escaped too
     assert "host-c" in report and "s-1" in report   # what each finding names
     assert "config.missing" not in report   # outside the day
     assert recorded(db) == [("job.succeeded", "ok", "host-a", {"job": "daily-report", "input": 8, "output": 1})]
@@ -138,3 +139,26 @@ def test_a_row_the_store_refuses_fails_the_report(tmp_path, db, code, job):
     assert "events.write_failed" in result.stderr, result.stderr
     if code == "job.missed":   # nothing printed that would read as a report of an incomplete day
         assert result.stdout == "", result.stdout
+
+
+def test_a_day_with_one_failure_reads_in_the_singular(tmp_path, db):
+    seed(db, ran("job.succeeded", "host-a", 1, {"job": "job-health"}),
+         ("db.query", "failed", "host-a", 1, "rejected", {}, None))
+    home = make_home(tmp_path, db)
+    result = hermes(tmp_path, home, "custom-build", "report")
+    delivered = attach(tmp_path, home, result.stdout)
+    assert "1 failure under 1 code." in delivered["text"], delivered["text"]
+    assert "1 failure." in pathlib.Path(delivered["files"][0]).read_text(encoding="utf-8")
+
+
+def test_a_crash_in_the_report_names_the_job_as_the_job_health_check_does(tmp_path, db):
+    def drop_job_missed(text):   # record() then raises inside the report: a bug, which the job wrapper records
+        line = '    "job.missed": "A scheduled job did not run",\n'
+        assert line in text
+        return text.replace(line, "")
+
+    result = hermes(tmp_path, make_home(tmp_path, db, failures_edit=drop_job_missed), "custom-build", "report")
+    assert result.returncode != 0
+    with psycopg.connect(db["owner"]) as conn:
+        details = [d for (d,) in conn.execute("select detail from memory.events where code = 'job.failed'")]
+    assert details == [{"job": "daily-report"}]   # the name job.succeeded and job.missed use
