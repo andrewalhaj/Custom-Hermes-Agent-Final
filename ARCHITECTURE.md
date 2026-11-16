@@ -130,13 +130,13 @@ There are no references at first, as there are no skills: the store is added whe
 1. **Three entrances.**
    - The agent stores a fact on purpose, with the provider's `store_fact` tool, saying what it rests on.
    - A write to built-in memory (`MEMORY.md`, `USER.md`) that Hermes reports (section 2) is mirrored as a fact stored on purpose, with the basis `user_stated` (section 2) and no project, because built-in memory is one file per profile, not per repository. An added entry is stored; a replaced entry supersedes the old entry's fact; a removed entry retires it, with the reason "removed from built-in memory". The pattern filter does not apply: a person approved the exact text.
-   - An extraction model reads the user's messages and tool results (command output, file contents, documentation lookups) and proposes facts. It never reads the agent's own replies, because a wrong reply would otherwise be recalled later as a known fact.
+   - An extraction model reads the user's messages and tool results (command output, file contents, documentation lookups) and proposes facts. It never reads the agent's own replies, because a wrong reply would otherwise be recalled later as a known fact. It runs after each turn of a primary session, in the provider's `sync_turn`, which Hermes calls on its background worker once the reply is shown, through the build's own auxiliary task, `custom_build_extraction` (#148). A call the provider refuses for the account is `extract.refused`; any other failure, or an answer that is not a list of facts, is `extract.error`.
    - At the provider's `on_session_end` (section 2), a digest model writes one digest for each long session (section 3.6) that does not have one yet.
 2. **Redaction before any model sees the text.** The message, the tool output and the session transcript are redacted before they reach the extraction, digest or judge model, and before anything is stored (CONTRIBUTING.md rule L4). If redaction fails, nothing is sent or stored (`redact.failed`).
 3. **A filter on each.**
    - A fact stored on purpose passes a pattern filter: it must meet the minimum length and must not match the narration patterns in the write-path configuration file, `custom_build/memory/write_path.toml`, which also holds section 3.6's supersede thresholds and the wording of the judge's questions.
    - Extracted facts and digests go to a judge model, which drops the ones not worth keeping.
-   - An extracted fact then gets a separate check: does its source turn support it? A fact its source does not support is not stored.
+   - An extracted fact then gets a separate check: does its source turn support it? A fact its source does not support is not stored. For an extracted fact both questions go to the judge in one request, worded in `write_path.toml`, and both answers must reach its threshold. A fact queued for the judge keeps its source turn, so the retry asks both questions too.
    - If the judge errors, the fact is queued for retry, never stored unchecked (`store.gate_error`). It waits, redacted, in the plugin's own SQLite database on the machine (section 2), and the provider retries the queue each time it starts in a primary session (not a subagent, cron run or flush), least-tried facts first, stopping at the first judge failure; a retry that resolves a fact is recorded as `store.gate_error` with the result `degraded`.
 4. **One store function.** All three entrances then go through one function. It embeds the text and compares it with what is already stored in the same project. "Short" and "long" are defined in section 3.6.
 
@@ -232,9 +232,9 @@ Still open, each tracked in its own issue:
 Every deployment states this in its own documentation:
 
 - Stored facts, digests, session chunks and events go to the memory database, which keeps session chunks and events for 90 days (section 4.3).
-- Search candidates, candidate facts and support checks go to the judge model when it is hosted, and so does each new fact with the stored fact closest to it, when the judge decides whether one supersedes the other (section 3.3).
+- Search candidates, candidate facts and support checks go to the judge model when it is hosted (an extracted fact goes with its source turn: the user's message and the turn's tool results, redacted), and so does each new fact with the stored fact closest to it, when the judge decides whether one supersedes the other (section 3.3).
 - Each user message, with the end of the assistant's previous reply, goes to the judge model for routing (section 3.5) when it is hosted and the action query is switched on.
-- User messages and tool output go to the extraction model when it is hosted.
+- User messages and tool output go to the extraction model when it is hosted: after each turn of a primary session, the user's message and that turn's tool results, redacted, never the agent's replies. The first deployment's extraction model is hosted by Anthropic and reached through the Claude subscription (OPERATIONS.md section 2, #148). When that call fails, Hermes's auxiliary fallback can send the same request to the main agent model's provider, which already receives the turn; the build discards that answer and records the failure (`extract.refused` or `extract.error`).
 - Session transcripts go to the digest model when it is hosted.
 - The daily failure report goes to the operators' channel.
 
@@ -506,6 +506,8 @@ Initial codes:
 | `judge.timeout`, `judge.error` | The judge model times out or errors |
 | `rerank.fallback` | The judge could not rerank, and the pool kept its fused order (degraded) |
 | `store.gate_error` | The judge failed during a write; the fact is queued |
+| `extract.error` | The extraction model failed or answered something other than a list of facts |
+| `extract.refused` | The extraction model's provider refused the account: logged out, billing, or forbidden |
 | `guard.bypassed` | The heartbeat found a local session started in safe mode or with the profile's settings ignored, which ran with no part of the build, or one whose launch policy it cannot read (section 5.6) |
 | `guard.crash`, `guard.not_loaded` | A guard raised during a turn (recorded instead of `unhandled`), or the startup check found a guard's hooks or the provider not loaded, or the memory provider found, when it started, that the guards had not loaded |
 | `write_gate.would_ask`, `write_gate.would_block` | Not failures: in `log` mode, the write gate saw a call on its list that `on` would send to a person for approval, or would block outright (section 5.3) |

@@ -71,3 +71,35 @@ def test_the_supersede_decision_needs_both_answers_at_the_threshold():
     assert judge.supersedes({"same_subject": 0.75, "supersedes": 0.75}) is True
     assert judge.supersedes({"same_subject": 0.99, "supersedes": 0.74}) is False
     assert judge.supersedes({"same_subject": 0.74, "supersedes": 0.99}) is False
+
+
+# The gate on an extracted fact (#148, ARCHITECTURE.md 3.3 step 3): worth keeping, and supported by its source.
+FACT = "The mini's gateway runs as the hermes user."
+SOURCE = {"user": "Why did the gateway fail?", "tool_results": ["User=hermes\nExecStart=/usr/bin/hermes gateway"]}
+
+
+def _gate(typesafe):
+    return judge.keep_answers(FACT, SOURCE, url=typesafe.url, key=KEY, model="jev-1.14.0", timeout=2)
+
+
+def test_one_request_asks_both_gate_questions_about_the_fact_and_its_source(typesafe):
+    typesafe.answers = {"worth_keeping": 0.9, "supported": 0.8}
+    assert _gate(typesafe) == {"worth_keeping": 0.9, "supported": 0.8}
+    [request] = typesafe.requests
+    assert request["body"]["state"] == {"fact": FACT, "source": SOURCE}
+    assert sorted(request["body"]["questions"]) == ["supported", "worth_keeping"]
+
+
+@pytest.mark.parametrize("answers, kept", [
+    ({"worth_keeping": 0.9, "supported": 0.8}, True),
+    ({"worth_keeping": 0.9, "supported": 0.5}, False),   # not supported by its source
+    ({"worth_keeping": 0.4, "supported": 0.95}, False),  # not worth keeping
+])
+def test_an_extracted_fact_is_kept_only_with_both_answers_at_the_threshold(answers, kept):
+    assert judge.keeps(answers) is kept
+
+
+def test_a_gate_failure_is_a_judge_error(typesafe):
+    typesafe.status = 500
+    with pytest.raises(judge.JudgeError):
+        _gate(typesafe)
