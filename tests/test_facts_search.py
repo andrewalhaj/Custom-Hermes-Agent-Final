@@ -181,6 +181,17 @@ def test_the_tool_reports_an_embedding_failure_never_an_empty_result(home, db, o
     assert _codes(db)[-1] == "embed.unavailable"
 
 
+def test_a_secret_in_the_query_never_reaches_ollama_the_store_or_a_log_line(home, db, owner, ollama):
+    # CONTRIBUTING.md rule L4: the query goes to Ollama and the store; the build's redaction is forced.
+    fake_key = "sb_" + "secret_" + "N7UNd0UgjKTV-Uodkm0Hg0_xSvQ7d3m"   # assembled at run time, never a literal key
+    _add(owner, "The store key lives in the profile's .env.", BASE, project="github.com/Owner/Repo", model=ollama.build)
+    outcome = tool(home, db, ollama.url, f"where is {fake_key} kept")
+    assert "results" in outcome
+    assert all(fake_key not in text for batch in ollama.embedded for text in batch)
+    logs = "".join(path.read_text(encoding="utf-8") for path in (home / "logs").glob("*.log"))
+    assert fake_key not in logs
+
+
 @pytest.mark.parametrize("change", ["revoke execute on function {f} from memory_agent", "drop function {f}"])
 def test_the_tool_records_a_refused_search_as_db_query(home, db, owner, ollama, change):
     # A store whose grant is missing, or without 0005 at all: the error and its event row (#158 review).

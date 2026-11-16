@@ -221,6 +221,14 @@ def test_a_turn_that_delegates_its_lookup_counts_as_looked_up(tmp_path, db):
     assert [code for code, _, _ in events(rows)] == ["fact_gate.armed"], output
 
 
+def test_a_turn_that_searches_memory_counts_as_looked_up(tmp_path, db):
+    # ARCHITECTURE.md 5.3: the memory search tool joins the lookups when it ships (#158).
+    steps = [["turn", "s1", "u1", "How many facts are in the store?"], ["post", "s1", "u1", "memory_search", "ok"],
+             ["reply", "s1", "u1", "There are 42."]]
+    _, output, rows = run_gate(tmp_path, db, steps)
+    assert [code for code, _, _ in events(rows)] == ["fact_gate.armed"], output
+
+
 def test_a_long_message_is_matched_in_linear_time():
     # A pasted log reaches pre_llm_call whole; a pattern that rescans it at every position holds the GIL.
     import time
