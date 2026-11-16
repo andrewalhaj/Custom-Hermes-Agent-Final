@@ -115,15 +115,15 @@ def test_each_rule_records_its_failing_case_and_the_call_goes_ahead(tmp_path, db
     report, output, rows = run_gate(tmp_path, db, calls)
     assert report["blocks"] == [None] * len(calls), output
     assert [(code, result, detail) for code, result, _, detail, _, _ in rows] == [
-        ("write_gate.would_ask", "ok", {"tool": "write_file", "rule": "skills"}),
-        ("write_gate.would_ask", "ok", {"tool": "patch", "rule": "config"}),
-        ("write_gate.would_ask", "ok", {"tool": "write_file", "rule": "env"}),
-        ("write_gate.would_ask", "ok", {"tool": "patch", "rule": "plugin"}),
-        ("write_gate.would_ask", "ok", {"tool": "terminal", "rule": "install"}),
-        ("write_gate.would_ask", "ok", {"tool": "terminal", "rule": "systemctl"}),
-        ("write_gate.would_ask", "ok", {"tool": "terminal", "rule": "other_hosts"}),
-        ("write_gate.would_ask", "ok", {"tool": "terminal", "rule": "skills"}),
-        ("write_gate.would_ask", "ok", {"tool": "terminal", "rule": "config"}),
+        ("write_gate.would_ask", "ok", {"gen_ai.tool.name":"write_file", "rule": "skills"}),
+        ("write_gate.would_ask", "ok", {"gen_ai.tool.name":"patch", "rule": "config"}),
+        ("write_gate.would_ask", "ok", {"gen_ai.tool.name":"write_file", "rule": "env"}),
+        ("write_gate.would_ask", "ok", {"gen_ai.tool.name":"patch", "rule": "plugin"}),
+        ("write_gate.would_ask", "ok", {"gen_ai.tool.name":"terminal", "rule": "install"}),
+        ("write_gate.would_ask", "ok", {"gen_ai.tool.name":"terminal", "rule": "systemctl"}),
+        ("write_gate.would_ask", "ok", {"gen_ai.tool.name":"terminal", "rule": "other_hosts"}),
+        ("write_gate.would_ask", "ok", {"gen_ai.tool.name":"terminal", "rule": "skills"}),
+        ("write_gate.would_ask", "ok", {"gen_ai.tool.name":"terminal", "rule": "config"}),
     ], output
     assert {(source, session) for *_, source, session in rows} == {("host-a", "s1")}
     # The reason is what the maintainer judges a trigger by: the path Hermes would write, or the command.
@@ -213,7 +213,7 @@ def test_a_call_on_would_block_outright_is_recorded_and_goes_ahead(tmp_path, db,
     report, output, rows = run_gate(tmp_path, db, calls, approvals=approvals, env=env, scenario=scenario)
     assert report["blocks"] == [None, None], output
     assert [(code, detail) for code, _, _, detail, _, _ in rows] == [
-        ("write_gate.would_block", {"tool": "terminal", "rule": "systemctl", "why": why}),
+        ("write_gate.would_block", {"gen_ai.tool.name":"terminal", "rule": "systemctl", "why": why}),
     ], output
 
 
