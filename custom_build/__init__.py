@@ -6,14 +6,24 @@ Both register the redaction patterns, so the provider never writes without them;
 load registers the provider, and only the ordinary load registers the `hermes custom-build` command.
 """
 
+import psycopg
 from agent.memory_provider import MemoryProvider
+
+from . import failures, settings
+from .memory import embedding
 
 # Supabase API key formats, which Hermes's redactor does not cover (CONTRIBUTING.md rule L4).
 REDACTION_PATTERNS = (r"sb_secret_[A-Za-z0-9_-]{20,}", r"sb_publishable_[A-Za-z0-9_-]{20,}")
+START_TIMEOUT = 5   # seconds for each answer from Ollama while the provider starts
+
+
+def _machine():
+    return settings.machine(settings.plugin_context())
 
 
 class CustomBuildProvider(MemoryProvider):
-    """The memory provider. It stores and recalls nothing yet; recall arrives with the facts store."""
+    """The memory provider. When it starts it checks this machine's embedding build against the store
+    (ARCHITECTURE.md section 3.2); storing and recall arrive with their own pull requests."""
 
     @property
     def name(self) -> str:
@@ -22,8 +32,31 @@ class CustomBuildProvider(MemoryProvider):
     def is_available(self) -> bool:
         return True
 
+    @failures.boundary(_machine, settings.connect, provider=True)
     def initialize(self, session_id: str, **kwargs) -> None:
-        pass
+        """Check the embedding build, recording a failed check with its code (#65 keeps is_available() out)."""
+        self.embedder = embedding.Embedder(embedding.OLLAMA_URL)
+        machine = _machine()
+        if missing := settings.missing_settings(settings.plugin_context()):
+            failures.record(None, "config.missing", "failed", source=machine, reason=", ".join(missing),
+                            session_id=session_id)
+            return
+        try:
+            conn = settings.connect()
+        except psycopg.OperationalError as exc:
+            if failures.refused_login(exc):
+                failures.record(None, "db.auth", "failed", source=machine, reason=str(exc), session_id=session_id)
+            else:
+                failures.record(None, "db.unreachable", "failed", source=machine, reason=str(exc), session_id=session_id)
+            return
+        with conn:
+            try:
+                self.embedder.check(conn, timeout=START_TIMEOUT)
+            except embedding.EmbedUnavailable as exc:
+                failures.record(conn, "embed.unavailable", "failed", source=machine, reason=str(exc), session_id=session_id)
+            except embedding.ModelMismatch as exc:
+                failures.record(conn, "embed.model_mismatch", "failed", source=machine, reason=str(exc),
+                                session_id=session_id)
 
     def get_tool_schemas(self) -> list:
         return []
