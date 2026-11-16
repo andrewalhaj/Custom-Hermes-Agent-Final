@@ -106,3 +106,20 @@ def test_a_gate_failure_is_a_judge_error(typesafe):
     typesafe.status = 500
     with pytest.raises(judge.JudgeError):
         _gate(typesafe)
+
+
+# The gate on a digest (#155, ARCHITECTURE.md 3.3): one question, dropped at the same drop score (3.6).
+DIGEST = "The session moved the mini's gateway to the hermes user.\n\nOpen items:\n- Restart the gateway."
+
+
+def test_one_request_asks_whether_the_digest_is_worth_keeping(typesafe):
+    typesafe.answers = {"worth_keeping": 0.8}
+    assert judge.digest_answers(DIGEST, url=typesafe.url, key=KEY, model="jev-1.14.0", timeout=2) == {"worth_keeping": 0.8}
+    [request] = typesafe.requests
+    assert request["body"]["state"] == {"digest": DIGEST}
+    assert list(request["body"]["questions"]) == ["worth_keeping"]
+
+
+@pytest.mark.parametrize("probability, kept", [(0.31, True), (0.30, False)])
+def test_a_digest_is_dropped_at_the_gates_drop_score(probability, kept):
+    assert judge.keeps_digest({"worth_keeping": probability}) is kept
