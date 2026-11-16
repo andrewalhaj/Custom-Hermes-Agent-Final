@@ -69,6 +69,25 @@ def test_a_check_that_failed_passes_once_the_other_build_is_gone(ollama, db):
     assert embedder.build == ollama.build
 
 
+def test_a_build_replaced_after_the_check_refuses_the_embedding(ollama, db):
+    embedder = embedding.Embedder(ollama.url)
+    with psycopg.connect(db["agent"]) as conn:
+        embedder.check(conn, timeout=5)
+        ollama.models = [{**ollama.models[0], "digest": "e" * 64}]   # `ollama pull` after the check
+        with pytest.raises(embedding.ModelMismatch):
+            embedder.embed(conn, ["one"], timeout=5)
+
+
+def test_a_build_replaced_while_it_embeds_refuses_the_vector(ollama, db):
+    embedder = embedding.Embedder(ollama.url)
+    with psycopg.connect(db["agent"]) as conn:
+        embedder.check(conn, timeout=5)
+        ollama.replaced_during_embed = "e" * 64
+        with pytest.raises(embedding.ModelMismatch):
+            embedder.embed(conn, ["one"], timeout=5)
+    assert embedder.build is None   # the next embedding checks against the store again
+
+
 def test_embed_returns_one_vector_of_2560_numbers_per_text(ollama, db):
     embedder = embedding.Embedder(ollama.url)
     with psycopg.connect(db["agent"]) as conn:

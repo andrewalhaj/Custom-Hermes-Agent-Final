@@ -13,6 +13,7 @@ import json
 import os
 import pathlib
 import threading
+import time
 import uuid
 
 import psycopg
@@ -62,9 +63,10 @@ def db():
 
 class FakeOllama(http.server.ThreadingHTTPServer):
     """A stand-in for the two Ollama endpoints the build calls, `/api/tags` and `/api/embed`, so the
-    tests need no model. A test sets the models it lists, the length of the vectors it returns, how many
-    vectors to leave out of an answer (`drop`), an HTTP status to answer with instead, and whether to cut
-    the answer off mid-body (`cut_off`); `embedded` collects every input sent to `/api/embed`."""
+    tests need no model. A test sets the models it lists, the length of the vectors it returns, a vector
+    for a given text (`vectors`; any other text gets `other`, else a constant one), how many vectors to
+    leave out of an answer (`drop`), an HTTP status to answer with instead, and whether to cut the answer
+    off mid-body (`cut_off`); `embedded` collects every input sent to `/api/embed`."""
 
     digest = "df5bd2e3c74cd8d069d21dc038f1b359fcdc9458fce1c99bd43c9eb1518ff907"
     build = f"qwen3-embedding:4b@sha256:{digest}"
@@ -73,8 +75,11 @@ class FakeOllama(http.server.ThreadingHTTPServer):
         super().__init__(("127.0.0.1", 0), _OllamaHandler)
         self.models = [{"name": "qwen3-embedding:4b", "model": "qwen3-embedding:4b", "digest": self.digest}]
         self.dimensions = 2560
+        self.vectors = {}
+        self.other = None
         self.drop = 0
         self.cut_off = False
+        self.replaced_during_embed = None   # a digest the model takes on while it embeds
         self.status = 200
         self.embedded = []
         self.url = f"http://127.0.0.1:{self.server_address[1]}"
@@ -95,7 +100,10 @@ class _OllamaHandler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         self.server.embedded.append(request["input"])
-        vectors = [[0.01] * self.server.dimensions for _ in request["input"]]
+        if self.server.replaced_during_embed:   # `ollama pull` of a new build while a request runs
+            self.server.models = [{**model, "digest": self.server.replaced_during_embed} for model in self.server.models]
+        vectors = [self.server.vectors.get(text, self.server.other or [0.01] * self.server.dimensions)
+                   for text in request["input"]]
         self._answer({"embeddings": vectors[:len(vectors) - self.server.drop]})
 
     def log_message(self, *args):
@@ -118,3 +126,57 @@ def ollama_down():
     server = http.server.HTTPServer(("127.0.0.1", 0), http.server.BaseHTTPRequestHandler)
     server.server_close()
     return f"http://127.0.0.1:{server.server_address[1]}"
+
+
+class FakeTypeSafe(http.server.ThreadingHTTPServer):
+    """A stand-in for TypeSafe's System One endpoint, `POST /v1/systemone`. A test sets the probability
+    each named question gets, an HTTP status to answer with instead, a delay longer than the caller's
+    deadline, a raw body to send instead of JSON (`raw`), an answer cut off mid-body (`cut_off`), or a
+    connection closed before any answer (`hang_up`); `requests` collects each request's headers and body."""
+
+    def __init__(self):
+        super().__init__(("127.0.0.1", 0), _TypeSafeHandler)
+        self.answers = {}
+        self.status = 200
+        self.delay = 0
+        self.raw = None
+        self.cut_off = False
+        self.hang_up = False
+        self.refuse_new = None   # answer 422 when the new fact contains this text
+        self.requests = []
+        self.url = f"http://127.0.0.1:{self.server_address[1]}"
+
+
+class _TypeSafeHandler(http.server.BaseHTTPRequestHandler):
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        self.server.requests.append({"path": self.path, "headers": dict(self.headers), "body": body})
+        time.sleep(self.server.delay)
+        if self.server.hang_up:
+            self.close_connection = True
+            return
+        refused = self.server.refuse_new and self.server.refuse_new in body["state"]["new"]
+        if self.server.status == 200 and not refused:
+            answers = {name: {"type": "noul", "noul": self.server.answers[name]} for name in body["questions"]}
+            payload = {"model": body["model"], "answers": answers, "usage": {"input_tokens": 1, "output_tokens": 1}}
+        else:
+            payload = {"detail": "refused"}
+        data = self.server.raw if self.server.raw is not None else json.dumps(payload).encode()
+        self.send_response(422 if refused else self.server.status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data) + (10 if self.server.cut_off else 0)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def log_message(self, *args):
+        pass
+
+
+@pytest.fixture
+def typesafe():
+    """A FakeTypeSafe serving on a free local port for the length of the test."""
+    server = FakeTypeSafe()
+    threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
+    yield server
+    server.shutdown()
+    server.server_close()

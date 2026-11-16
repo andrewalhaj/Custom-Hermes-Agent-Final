@@ -47,9 +47,10 @@ def start(tmp_path, db, ollama_url, *, database_url=True, mode="plain", proxy=No
     home = tmp_path / "home"
     shutil.copytree(PLUGIN, home / "plugins" / "custom_build", ignore=shutil.ignore_patterns("__pycache__"))
     config = {"memory": {"provider": "custom_build"},
-              "plugins": {"entries": {"custom_build": {"settings": {"machine_name": "host-a"}}}}}
+              "plugins": {"entries": {"custom_build": {"settings": {"machine_name": "host-a", "judge_model": "jev-1.14.0"}}}}}
     (home / "config.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
-    env = {"HERMES_HOME": str(home), "HOME": str(tmp_path), "PATH": "/usr/bin:/bin"}
+    env = {"HERMES_HOME": str(home), "HOME": str(tmp_path), "PATH": "/usr/bin:/bin",
+           "TYPESAFE_API_KEY": "test-key-not-a-real-one"}
     if database_url:
         env["CUSTOM_BUILD_DATABASE_URL"] = db["agent"] if database_url is True else database_url
     if proxy:

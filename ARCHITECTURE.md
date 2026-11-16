@@ -128,15 +128,15 @@ There are no references at first, as there are no skills: the store is added whe
 ### 3.3 The write path
 
 1. **Three entrances.**
-   - The agent stores a fact on purpose.
+   - The agent stores a fact on purpose, with the provider's `store_fact` tool, saying what it rests on.
    - An extraction model reads the user's messages and tool results (command output, file contents, documentation lookups) and proposes facts. It never reads the agent's own replies, because a wrong reply would otherwise be recalled later as a known fact.
    - At the provider's `on_session_end` (section 2), a digest model writes one digest for each long session (section 3.6) that does not have one yet.
 2. **Redaction before any model sees the text.** The message, the tool output and the session transcript are redacted before they reach the extraction, digest or judge model, and before anything is stored (CONTRIBUTING.md rule L4). If redaction fails, nothing is sent or stored (`redact.failed`).
 3. **A filter on each.**
-   - A fact stored on purpose passes a pattern filter: it must meet the minimum length and must not match the narration patterns in the write-path configuration file.
+   - A fact stored on purpose passes a pattern filter: it must meet the minimum length and must not match the narration patterns in the write-path configuration file, `custom_build/memory/write_path.toml`, which also holds section 3.6's supersede thresholds and the wording of the judge's questions.
    - Extracted facts and digests go to a judge model, which drops the ones not worth keeping.
    - An extracted fact then gets a separate check: does its source turn support it? A fact its source does not support is not stored.
-   - If the judge errors, the fact is queued for retry, never stored unchecked (`store.gate_error`).
+   - If the judge errors, the fact is queued for retry, never stored unchecked (`store.gate_error`). It waits, redacted, in the plugin's own SQLite database on the machine (section 2), and the provider retries the queue each time it starts in a primary session (not a subagent, cron run or flush), least-tried facts first, stopping at the first judge failure; a retry that resolves a fact is recorded as `store.gate_error` with the result `degraded`.
 4. **One store function.** All three entrances then go through one function. It embeds the text and compares it with what is already stored in the same project. "Short" and "long" are defined in section 3.6.
 
    | Match with an existing fact | Result |
@@ -146,7 +146,7 @@ There are no references at first, as there are no skills: the store is added whe
    | Very close in meaning, long text, or somewhat close in meaning | The judge decides whether it is the same subject and whether the new fact supersedes the old |
 
 5. **Origin protects deliberate facts.** A fact stored on purpose can supersede an extracted one. The reverse is never allowed.
-6. **Every fact records its basis and source.** `basis` is `user_stated`, `tool_observed` or `assistant_inferred`; `source_turn` points to the turn it came from. A digest takes the weakest basis of its inputs, so a summary never turns an inferred claim into a stated one. Recalled notes show the basis.
+6. **Every fact records its basis and source.** `basis` is `user_stated`, `tool_observed` or `assistant_inferred`; `source_turn` points to the turn it came from: the session's user-turn number, as Hermes counts it for `on_turn_start`, since a provider tool is not given a message position (#113). A digest takes the weakest basis of its inputs, so a summary never turns an inferred claim into a stated one. Recalled notes show the basis.
 7. **Nothing is silently lost.** A superseded or retired fact stays in the table, marked, with a pointer to its replacement or the reason it was retired.
 
 ### 3.4 Retrieval
@@ -168,7 +168,7 @@ For the facts store:
 5. Blend recency back in, on a reranked pool only. A rerank score ignores age, so the final score adds a recency term from `last_verified_at`, or `created_at` for a fact never checked.[9] Its weight is set by the eval set. A pool whose rerank failed keeps its fused order (step 4).
 6. Return the top results. Each result records which searches found it and which stage ranked it.
 
-**Filtering and the vector index.** pgvector applies `WHERE` conditions after the HNSW scan, so a filtered search can return fewer rows than asked for.[10] The search functions set `hnsw.iterative_scan = relaxed_order` (pgvector 0.8.0 and later). The facts index is partial, over live rows only, and queries repeat that predicate exactly so the planner uses it.
+**Filtering and the vector index.** pgvector applies `WHERE` conditions after the HNSW scan, so a filtered search can return fewer rows than asked for.[10] The search functions set `hnsw.iterative_scan = relaxed_order` (pgvector 0.8.0 and later). The write path's lookup of the one nearest fact (section 3.3) sets `strict_order`, because it reads only the top row and needs the truly nearest one. The facts index is partial, over live rows only, and queries repeat that predicate exactly so the planner uses it.
 
 **Word queries.** The full-text side joins the query's words with OR and ranks with `ts_rank_cd`. `plainto_tsquery` and `websearch_to_tsquery` both join unquoted words with AND, so with either one a long question matches nothing.[11] Postgres full-text ranking is not BM25: it uses no statistics from the rest of the collection.[11] BM25 for references therefore runs in application code.
 
@@ -231,7 +231,7 @@ Still open, each tracked in its own issue:
 Every deployment states this in its own documentation:
 
 - Stored facts, digests, session chunks and events go to the memory database, which keeps session chunks and events for 90 days (section 4.3).
-- Search candidates, candidate facts and support checks go to the judge model when it is hosted.
+- Search candidates, candidate facts and support checks go to the judge model when it is hosted, and so does each new fact with the stored fact closest to it, when the judge decides whether one supersedes the other (section 3.3).
 - Each user message, with the end of the assistant's previous reply, goes to the judge model for routing (section 3.5) when it is hosted and the action query is switched on.
 - User messages and tool output go to the extraction model when it is hosted.
 - Session transcripts go to the digest model when it is hosted.
@@ -281,7 +281,7 @@ create table memory.facts (
   project          text,                     -- project key (section 2); null when the session had none
   source           text not null,            -- the machine that wrote the row
   session_id       text,
-  source_turn      integer,                  -- message position of the turn the fact came from
+  source_turn      integer,                  -- the session's user-turn number the fact came from (#113)
   embedding        halfvec(2560) not null,
   embedding_model  text not null,            -- model name and build digest
   search_text      tsvector generated always as (to_tsvector('english', body)) stored,

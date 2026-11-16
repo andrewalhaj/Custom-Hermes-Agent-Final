@@ -24,7 +24,7 @@ def run(ctx):
       open or read, after the heartbeat itself is recorded.
     """
     machine = settings.machine(ctx)
-    if missing := settings.missing_settings(ctx):
+    if missing := settings.missing_store_settings(ctx):
         names = ", ".join(missing)
         failures.record(None, "config.missing", "failed", source=machine, reason=names)
         print(f"custom-build heartbeat failed: config.missing ({names}); not recorded in events: "

@@ -6,11 +6,14 @@ Both register the redaction patterns, so the provider never writes without them;
 load registers the provider, and only the ordinary load registers the `hermes custom-build` command.
 """
 
+import json
+
 import psycopg
 from agent.memory_provider import MemoryProvider
+from agent.secret_scope import get_secret
 
 from . import failures, settings
-from .memory import embedding
+from .memory import embedding, judge, store, tool
 
 # Supabase API key formats, which Hermes's redactor does not cover (CONTRIBUTING.md rule L4).
 REDACTION_PATTERNS = (r"sb_secret_[A-Za-z0-9_-]{20,}", r"sb_publishable_[A-Za-z0-9_-]{20,}")
@@ -21,9 +24,18 @@ def _machine():
     return settings.machine(settings.plugin_context())
 
 
+def _judge():
+    return store.Judge(url=judge.URL, key=get_secret(settings.JUDGE_KEY),
+                       model=settings.plugin_context().get_config(settings.JUDGE_MODEL))
+
+
 class CustomBuildProvider(MemoryProvider):
     """The memory provider. When it starts it checks this machine's embedding build against the store
-    (ARCHITECTURE.md section 3.2); storing and recall arrive with their own pull requests."""
+    (ARCHITECTURE.md section 3.2) and retries facts queued for the judge; its `store_fact` tool stores a
+    fact on purpose (3.3). Recall arrives with its own pull request."""
+
+    session_id = None
+    turn = None
 
     @property
     def name(self) -> str:
@@ -34,7 +46,9 @@ class CustomBuildProvider(MemoryProvider):
 
     @failures.boundary(_machine, settings.connect, failures.PROVIDER)
     def initialize(self, session_id: str, **kwargs) -> None:
-        """Check the embedding build, recording a failed check with its code (#65 keeps is_available() out)."""
+        """Check the embedding build, recording a failed check with its code (#65 keeps is_available() out),
+        then retry the facts queued for the judge."""
+        self.session_id = session_id
         self.embedder = embedding.Embedder(embedding.OLLAMA_URL)
         machine = _machine()
         if missing := settings.missing_settings(settings.plugin_context()):
@@ -57,9 +71,31 @@ class CustomBuildProvider(MemoryProvider):
             except embedding.ModelMismatch as exc:
                 failures.record(conn, "embed.model_mismatch", "failed", source=machine, reason=str(exc),
                                 session_id=session_id)
+            # Hermes asks providers to write only in a primary session, not a subagent, cron run or flush.
+            if self.embedder.build is not None and kwargs.get("agent_context", "primary") == "primary":
+                tool.retry_queued(conn, embedder=self.embedder, judge_at=_judge())
+
+    def on_turn_start(self, turn_number: int, message: str, **kwargs) -> None:
+        self.turn = turn_number   # a fact records the user turn it was stored in
+
+    def on_session_switch(self, new_session_id: str, **kwargs) -> None:
+        self.session_id = new_session_id
 
     def get_tool_schemas(self) -> list:
-        return []
+        return [tool.SCHEMA]
+
+    @failures.boundary(_machine, settings.connect, failures.PROVIDER)
+    def handle_tool_call(self, tool_name: str, args: dict, **kwargs) -> str:
+        if tool_name != tool.SCHEMA["name"]:
+            return super().handle_tool_call(tool_name, args, **kwargs)
+        machine = _machine()
+        if missing := settings.missing_settings(settings.plugin_context()):
+            failures.record(None, "config.missing", "failed", source=machine, reason=", ".join(missing),
+                            session_id=self.session_id)
+            return json.dumps({"error": "config.missing"})
+        outcome = tool.store_fact(args, machine=machine, session_id=self.session_id, turn=self.turn,
+                                  embedder=self.embedder, judge_at=_judge(), connect=settings.connect)
+        return json.dumps(outcome, default=str)   # fact ids are UUIDs
 
 
 def _add_subcommands(parser) -> None:

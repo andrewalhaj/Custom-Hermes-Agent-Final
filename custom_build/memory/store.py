@@ -1,0 +1,97 @@
+"""The one store function the write path's entrances go through (ARCHITECTURE.md section 3.3, step 4).
+
+It skips a fact whose text is already stored, embeds the rest, and compares each with the nearest live
+fact of the same project: close enough, the new fact supersedes it, in the same transaction as its
+insert. The thresholds and the judge's questions are in `write_path.toml`.
+"""
+
+import dataclasses
+import hashlib
+
+from . import judge as judge_api
+from . import write_path
+
+LIVE = "superseded_by is null and retired_at is null"   # the facts index's predicate, repeated exactly
+
+
+@dataclasses.dataclass(frozen=True)
+class Fact:
+    """A fact stored on purpose, already redacted."""
+    body: str
+    basis: str
+    project: str | None
+    source: str
+    session_id: str | None
+    source_turn: int | None
+
+
+@dataclasses.dataclass(frozen=True)
+class Judge:
+    """Where the judge is and how to reach it: TypeSafe's URL, the profile's key and the pinned model."""
+    url: str
+    key: str
+    model: str
+
+
+def body_hash(body):
+    """The identical-text check's key: the text with its whitespace collapsed and its case folded."""
+    return hashlib.sha256(" ".join(body.split()).casefold().encode()).hexdigest()
+
+
+def store(conn, fact, *, embedder, judge, timeout):
+    """Store `fact`: {"already_stored": id}, or {"stored": id, "superseded": the replaced id or None}.
+
+    Raises, storing nothing: embedding's EmbedUnavailable and ModelMismatch, the judge's JudgeError and
+    JudgeTimeout, and psycopg's errors. `timeout` bounds each answer from Ollama; the judge has its own
+    deadline (3.6).
+    """
+    digest = body_hash(fact.body)
+    if existing := _identical(conn, fact.project, digest):
+        return {"already_stored": existing}
+    [vector] = embedder.embed(conn, [fact.body], timeout=timeout)
+    nearest = _nearest(conn, fact.project, str(vector))
+    old = _replaced(nearest, fact.body, judge) if nearest else None
+    with conn.transaction():
+        row = conn.execute(
+            "insert into memory.facts (body, body_hash, kind, origin, basis, project, source, session_id, source_turn,"
+            " embedding, embedding_model) values (%s, %s, 'fact', 'explicit', %s, %s, %s, %s, %s, %s, %s)"
+            f" on conflict (project, body_hash) where {LIVE} do nothing returning id",
+            (fact.body, digest, fact.basis, fact.project, fact.source, fact.session_id, fact.source_turn,
+             str(vector), embedder.build),
+        ).fetchone()
+        if row is None:   # the same text was stored since the check above
+            return {"already_stored": _identical(conn, fact.project, digest)}
+        if old and not conn.execute("update memory.facts set superseded_by = %s where id = %s and superseded_by is null",
+                                    (row[0], old)).rowcount:
+            old = None   # superseded by something else since it was read
+    return {"stored": row[0], "superseded": old}
+
+
+def _identical(conn, project, digest):
+    row = conn.execute(f"select id from memory.facts where project is not distinct from %s and body_hash = %s and {LIVE}",
+                       (project, digest)).fetchone()
+    return row[0] if row else None
+
+
+def _nearest(conn, project, vector):
+    """The nearest live fact of kind `fact` in the project: (id, body, cosine similarity), or None."""
+    with conn.transaction():   # `set local` lasts for this transaction only
+        # Filters apply after the index scan; keep scanning until a row passes them (pgvector 0.8.0).
+        conn.execute("set local hnsw.iterative_scan = strict_order")
+        return conn.execute(
+            f"select id, body, 1 - (embedding <=> %s) from memory.facts where project is not distinct from %s"
+            f" and kind = 'fact' and {LIVE} order by embedding <=> %s limit 1", (vector, project, vector),
+        ).fetchone()
+
+
+def _replaced(nearest, body, judge):
+    """The id of the fact the new one supersedes, or None (3.3 step 4)."""
+    old_id, old_body, similarity = nearest
+    limits = write_path.load()["supersede"]
+    if similarity >= limits["without_judge"] and max(len(body), len(old_body)) <= limits["short_text"]:
+        return old_id
+    if similarity >= limits["ask_judge_from"]:
+        answers = judge_api.supersede_answers(old_body, body, url=judge.url, key=judge.key, model=judge.model,
+                                              timeout=judge_api.DEADLINE)
+        return old_id if judge_api.supersedes(answers) else None
+    return None

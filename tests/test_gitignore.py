@@ -44,6 +44,7 @@ VISIBLE = [
     ".github/workflows/new.yml",
     "migrations/0002_next.sql",
     "custom_build/memory/new_module.py",
+    "custom_build/memory/write_path.toml",
     "custom_build/new_module.py",
     "custom_build/plugin.yaml",
     "custom_build/scripts/custom-build-new-job.py",
