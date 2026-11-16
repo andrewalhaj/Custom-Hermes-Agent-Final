@@ -9,7 +9,7 @@ then a job.succeeded event of its own. The daily report sends what it records.
 from . import failures, jobs, settings
 
 # The jobs whose runs record job.succeeded. Not the heartbeat, which host.missing covers, nor this check,
-# whose absence the report notices (OPERATIONS.md section 4); the report and retention add themselves.
+# whose own missing job.succeeded is the report's to notice; the report and retention add themselves.
 JOBS = ()
 
 
