@@ -48,8 +48,8 @@ def test_a_host_with_no_heartbeat_in_24_hours_is_recorded_as_missing(tmp_path, d
     ]
 
 
-@pytest.mark.parametrize("hosts", [None, [], ["host-a", ""], "host-a", [7]],
-                         ids=["unset", "empty", "a blank name", "not a list", "not text"])
+@pytest.mark.parametrize("hosts", [None, [], ["host-a", ""], "host-a", [7], [" host-a"], ["host-a", "host-a"]],
+                         ids=["unset", "empty", "a blank name", "not a list", "not text", "a padded name", "a repeat"])
 def test_a_missing_or_invalid_host_list_stops_the_check_with_config_missing(tmp_path, db, hosts):
     home = make_home(tmp_path, db)
     if hosts is not None:
