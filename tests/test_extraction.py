@@ -281,8 +281,9 @@ def test_an_answer_from_hermess_fallback_is_not_used_and_the_failure_is_raised(l
 @pytest.fixture
 def plugin_patterns():
     """The plugin's Supabase key patterns, registered as its load does; Hermes's own redactor lacks them."""
-    import custom_build
     from agent import redact
+
+    import custom_build
     redact.register_redaction_patterns(custom_build.REDACTION_PATTERNS, source="plugin:custom_build")
     yield
     redact._reset_plugin_redaction_patterns()
