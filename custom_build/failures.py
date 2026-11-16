@@ -197,7 +197,8 @@ def boundary(source, connect, on_crash):
                 except Exception:   # the turn's block must not depend on reaching the store (rule F5)
                     logger.exception("no connection to record guard.crash")
                 with conn or contextlib.nullcontext():   # closes the connection opened for this record
-                    record(conn, "guard.crash", "failed", source=machine, reason=reason, session_id=kwargs.get("session_id"))
+                    record(conn, "guard.crash", "failed", source=machine, reason=reason,
+                           session_id=kwargs.get("session_id") or None)   # Hermes passes "" for no session
                 return on_crash(exc)
         return call
     return wrap
