@@ -8,6 +8,7 @@ so the job-health check knows it ran; a day with no report at all is the alarm.
 """
 
 import datetime
+import re
 
 from . import failures, jobs
 
@@ -80,4 +81,4 @@ def _write(day, machine, rows, redact):
 
 def _cell(text):
     """A value as one Markdown table cell."""
-    return (text or "").replace("|", "\\|").replace("\n", " ")
+    return re.sub(r"[\r\n]+", " ", text or "").replace("\\", "\\\\").replace("|", "\\|")
