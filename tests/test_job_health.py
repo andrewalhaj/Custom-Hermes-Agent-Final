@@ -8,7 +8,7 @@ import psycopg
 import pytest
 import yaml
 
-from tests.test_heartbeat import hermes, make_home
+from tests.test_heartbeat import hermes, make_home, run_under_cron
 
 
 def with_hosts(home, hosts):
@@ -80,3 +80,11 @@ def test_a_listed_job_with_no_recent_success_or_no_output_is_recorded(tmp_path, 
         ("job.missed", "failed", "host-a", {"job": "never-ran"}),
         ("job.succeeded", "ok", "host-a", {"job": "job-health"}),
     ]
+
+
+def test_hermes_cron_runs_the_check_daily_from_its_scripts_folder_and_delivers_nothing(tmp_path, db):
+    seed(db, ("host.heartbeat", "host-a", 1, {}))
+    answer, run = run_under_cron(tmp_path, with_hosts(make_home(tmp_path, db), ["host-a"]), "job-health", "45 6 * * *")
+    assert "Ran now: succeeded" in answer, answer
+    assert "silent (empty output)" in run
+    assert recorded(db) == [("job.succeeded", "ok", "host-a", {"job": "job-health"})]

@@ -19,7 +19,6 @@ import yaml
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 PLUGIN = ROOT / "custom_build"
 HERMES = "import sys; from hermes_cli.main import main; sys.argv = ['hermes', *sys.argv[1:]]; main()"
-WRAPPER = "custom-build-heartbeat.py"
 
 
 def make_home(tmp_path, db, *, machine_name="host-a", database_url="agent", failures_edit=None):
@@ -64,13 +63,14 @@ def test_the_heartbeat_records_one_event_and_prints_nothing(tmp_path, db):
 UNREACHABLE = "postgresql://u:p@127.0.0.1:1/x?connect_timeout=3"
 
 
-def run_under_cron(tmp_path, home):
+def run_under_cron(tmp_path, home, job="heartbeat", schedule="every 6h"):
     """Set the job up as OPERATIONS.md section 4 says and run it once; return Hermes's answer and the run's record."""
     (home / "scripts").mkdir()
     # From the installed plugin into the folder Hermes runs script-only jobs from.
-    shutil.copy(home / "plugins" / "custom_build" / "scripts" / WRAPPER, home / "scripts" / WRAPPER)
-    created = hermes(tmp_path, home, "cron", "create", "every 6h", "--name", "custom-build-heartbeat",
-                     "--script", WRAPPER, "--no-agent", "--deliver", "local")
+    wrapper = f"custom-build-{job}.py"
+    shutil.copy(home / "plugins" / "custom_build" / "scripts" / wrapper, home / "scripts" / wrapper)
+    created = hermes(tmp_path, home, "cron", "create", schedule, "--name", f"custom-build-{job}",
+                     "--script", wrapper, "--no-agent", "--deliver", "local")
     assert created.returncode == 0, created.stdout + created.stderr
     job_id = re.search(r"Created job: ([0-9a-f]+)", created.stdout).group(1)
     ran = hermes(tmp_path, home, "cron", "run", job_id)   # with no gateway serving the home, it runs at once
