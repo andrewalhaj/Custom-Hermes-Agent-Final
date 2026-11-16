@@ -84,7 +84,7 @@ def attempt(conn, fact, *, embedder, judge_at):
 
 
 def retry_queued(conn, *, embedder, judge_at):
-    """Store each queued fact the judge can now decide on; one stored (or found already stored) is recorded
+    """Store each queued fact the judge can now decide on; one stored, or found already stored, is recorded
     as degraded. The first judge failure ends the pass, so a judge still down costs one request a start."""
     for row_id, fact, attempts in queue.waiting():
         outcome = attempt(conn, fact, embedder=embedder, judge_at=judge_at)
@@ -95,5 +95,5 @@ def retry_queued(conn, *, embedder, judge_at):
             continue
         queue.done(row_id)
         failures.record(conn, "store.gate_error", "degraded", source=fact.source, project=fact.project,
-                        session_id=fact.session_id, turn=fact.source_turn, reason="already stored, found on retry" if "already_stored" in outcome else "stored on retry",
+                        session_id=fact.session_id, turn=fact.source_turn, reason="resolved on retry",
                         detail={"attempts": attempts + 1})
