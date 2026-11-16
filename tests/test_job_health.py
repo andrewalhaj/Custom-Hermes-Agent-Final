@@ -4,6 +4,8 @@ Each case runs the real `hermes` CLI in a throwaway Hermes home, with the harnes
 against events seeded in the throwaway store from the `db` fixture (conftest.py).
 """
 
+import re
+
 import psycopg
 import pytest
 import yaml
@@ -37,7 +39,8 @@ def recorded(db):
 
 def test_a_host_with_no_heartbeat_in_24_hours_is_recorded_as_missing(tmp_path, db):
     home = with_hosts(make_home(tmp_path, db), ["host-a", "host-b", "host-c"])
-    seed(db, ("host.heartbeat", "host-a", 5, {}), ("host.heartbeat", "host-b", 25, {}))
+    seed(db, ("host.heartbeat", "host-a", 5, {}), ("host.heartbeat", "host-b", 25, {}),
+         ("job.succeeded", "host-a", 23, {"job": "daily-report"}))
     result = hermes(tmp_path, home, "custom-build", "job-health")
     assert result.returncode == 0, result.stdout + result.stderr
     assert result.stdout == ""   # Hermes cron would deliver anything printed; the report sends the findings
@@ -64,9 +67,9 @@ def test_a_listed_job_with_no_recent_success_or_no_output_is_recorded(tmp_path, 
     home = with_hosts(make_home(tmp_path, db), ["host-a"])
     module = home / "plugins" / "custom_build" / "job_health.py"
     text = module.read_text(encoding="utf-8")
-    assert "JOBS = ()" in text   # the list starts empty; the report and retention add themselves
+    assert re.search(r"^JOBS = \(.*\)$", text, re.MULTILINE)   # replaced with jobs of this test's own
     jobs = ("nightly", "digest", "fresh", "never-ran", "one-empty", "idle", "ordered", "uncounted")
-    module.write_text(text.replace("JOBS = ()", f"JOBS = {jobs!r}"), encoding="utf-8")
+    module.write_text(re.sub(r"^JOBS = \(.*\)$", f"JOBS = {jobs!r}", text, flags=re.MULTILINE), encoding="utf-8")
     seed(db, ("host.heartbeat", "host-a", 1, {}),
          ("job.succeeded", "host-a", 30, {"job": "nightly"}),                         # last ran 30 hours ago
          ("job.succeeded", "host-a", 20, {"job": "digest", "input": 5, "output": 0}),
@@ -94,7 +97,7 @@ def test_a_listed_job_with_no_recent_success_or_no_output_is_recorded(tmp_path, 
 
 
 def test_hermes_cron_runs_the_check_daily_from_its_scripts_folder_and_delivers_nothing(tmp_path, db):
-    seed(db, ("host.heartbeat", "host-a", 1, {}))
+    seed(db, ("host.heartbeat", "host-a", 1, {}), ("job.succeeded", "host-a", 23, {"job": "daily-report"}))
     answer, run = run_under_cron(tmp_path, with_hosts(make_home(tmp_path, db), ["host-a"]), "job-health", "45 6 * * *")
     assert "Ran now: succeeded" in answer, answer
     assert "silent (empty output)" in run
@@ -108,6 +111,7 @@ def test_a_finding_the_store_refuses_fails_the_check(tmp_path, db):
                      " $$ begin raise exception 'refused'; end $$")
         conn.execute("create trigger refuse_missing before insert on memory.events for each row"
                      " when (new.code = 'host.missing') execute function memory.refuse()")
+    seed(db, ("job.succeeded", "host-a", 23, {"job": "daily-report"}))
     result = hermes(tmp_path, with_hosts(make_home(tmp_path, db), ["host-b"]), "custom-build", "job-health")
     assert result.returncode != 0, result.stdout + result.stderr   # so Hermes cron delivers its error alert
     assert "events.write_failed" in result.stderr, result.stderr
