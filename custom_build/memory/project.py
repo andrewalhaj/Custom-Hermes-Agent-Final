@@ -38,6 +38,6 @@ def _normalise(url):
     else:
         parts = urllib.parse.urlsplit(url)
         host, path = parts.hostname, parts.path   # hostname drops credentials and port, and lowercases
-        if not host:
+        if not host or parts.scheme == "file":   # git opens file://host/path as a local path
             return None
     return f"{host.lower()}/{path.strip('/').removesuffix('.git')}"
