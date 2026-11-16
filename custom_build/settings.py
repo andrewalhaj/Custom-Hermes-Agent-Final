@@ -13,6 +13,7 @@ MACHINE_NAME = "machine_name"   # plugins.entries.custom_build.settings.machine_
 DATABASE_URL = "CUSTOM_BUILD_DATABASE_URL"   # a secret, in the profile's .env
 JUDGE_MODEL = "judge_model"   # plugins.entries.custom_build.settings.judge_model: the judge, pinned by version
 JUDGE_KEY = "TYPESAFE_API_KEY"   # a secret, in the profile's .env
+AGENT_HOSTS = "agent_hosts"   # plugins.entries.custom_build.settings.agent_hosts on the job host: each agent host's name
 CONNECT_TIMEOUT = 5   # seconds, well under Hermes's 30-second deadline for a hook
 
 
@@ -51,6 +52,12 @@ def missing_settings(ctx):
     found = (("plugins.entries.custom_build.settings." + JUDGE_MODEL, _usable(ctx.get_config(JUDGE_MODEL))),
              (JUDGE_KEY, _usable(get_secret(JUDGE_KEY))))
     return missing_store_settings(ctx) + [name for name, ok in found if not ok]
+
+
+def agent_hosts(ctx):
+    """The job host's list of agent host names, or None when it is not a non-empty list of usable names."""
+    value = ctx.get_config(AGENT_HOSTS)
+    return value if isinstance(value, list) and value and all(_usable(name) for name in value) else None
 
 
 def machine(ctx):
