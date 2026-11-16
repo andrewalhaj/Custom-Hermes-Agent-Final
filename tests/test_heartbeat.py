@@ -117,11 +117,16 @@ def seed(tmp_path, home, sessions):
 def test_the_heartbeat_records_each_session_run_without_the_build_once(tmp_path, db):
     home = make_home(tmp_path, db)
     seed(tmp_path, home, {"s-safe": {"safe_mode": True}, "s-ignored": {"ignore_user_config": True}, "s-plain": {}})
+    state = (home / "state.db").read_bytes()
+    with psycopg.connect(db["agent"], autocommit=True) as conn:   # another host's record does not count for this one
+        conn.execute("insert into memory.events (source, code, result, session_id) values ('host-b', 'guard.bypassed', 'failed', 's-safe')")
     for _ in range(2):   # the second run finds both already recorded
         result = hermes(tmp_path, home, "custom-build", "heartbeat")
         assert result.returncode == 0, result.stdout + result.stderr
+    assert (home / "state.db").read_bytes() == state   # read-only: the gateway's database is never changed
     with psycopg.connect(db["owner"]) as conn:
-        found = conn.execute("select code, result, session_id, source from memory.events order by id").fetchall()
+        found = conn.execute("select code, result, session_id, source from memory.events where source = 'host-a'"
+                             " order by id").fetchall()
     assert sorted(row for row in found if row[0] == "guard.bypassed") == [
         ("guard.bypassed", "failed", "s-ignored", "host-a"), ("guard.bypassed", "failed", "s-safe", "host-a"),
     ]
