@@ -104,8 +104,10 @@ def check(ctx, rules, *, tool_name, args, session_id="", task_id="", **kwargs):
 
     rule, target = found
     machine = settings.machine(ctx)
-    # The reason is what a maintainer judges a trigger by; forced redaction, as before every write (rule L4).
-    fields = {"source": machine, "session_id": session_id or None, "reason": redact_sensitive_text(target, force=True)}
+    # The reason is what a maintainer judges a trigger by. Forced redaction, as before every write (rule L4),
+    # and of credentials in a URL too, which Hermes leaves in by default and these commands often carry.
+    reason = redact_sensitive_text(target, force=True, redact_url_credentials=True)
+    fields = {"source": machine, "session_id": session_id or None, "reason": reason}
     with failures.store(machine, settings.connect) as conn:
         if why := blocked_because():
             failures.record(conn, "write_gate.would_block", "ok", **fields,
