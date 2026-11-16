@@ -291,3 +291,8 @@ def test_record_says_whether_it_wrote_the_row(db, login, written):
     finally:
         if conn:
             conn.close()
+
+
+def test_job_wrapper_returns_what_the_job_returns(db):
+    assert failures.run_job("nightly", lambda conn: 42, source="host-a",
+                            connect=lambda: psycopg.connect(db["agent"], autocommit=True)) == 42
