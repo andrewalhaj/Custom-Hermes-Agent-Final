@@ -81,6 +81,17 @@ class CustomBuildProvider(MemoryProvider):
     def on_session_switch(self, new_session_id: str, **kwargs) -> None:
         self.session_id = new_session_id
 
+    @failures.boundary(_machine, settings.connect, failures.PROVIDER)
+    def on_memory_write(self, action: str, target: str, content: str, metadata: dict | None = None) -> None:
+        """Mirror a committed write to MEMORY.md or USER.md into the facts store (ARCHITECTURE.md section 2)."""
+        machine = _machine()
+        if missing := settings.missing_settings(settings.plugin_context()):
+            failures.record(None, "config.missing", "failed", source=machine, reason=", ".join(missing),
+                            session_id=self.session_id)
+            return
+        tool.mirror(action, content, metadata or {}, machine=machine, session_id=self.session_id, turn=self.turn,
+                    embedder=self.embedder, judge_at=_judge(), connect=settings.connect)
+
     def get_tool_schemas(self) -> list:
         return [tool.SCHEMA]
 
