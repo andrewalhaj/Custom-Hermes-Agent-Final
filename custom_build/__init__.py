@@ -71,7 +71,8 @@ class CustomBuildProvider(MemoryProvider):
             except embedding.ModelMismatch as exc:
                 failures.record(conn, "embed.model_mismatch", "failed", source=machine, reason=str(exc),
                                 session_id=session_id)
-            if self.embedder.build is not None:
+            # Hermes asks providers to write only in a primary session, not a subagent, cron run or flush.
+            if self.embedder.build is not None and kwargs.get("agent_context", "primary") == "primary":
                 tool.retry_queued(conn, embedder=self.embedder, judge_at=_judge())
 
     def on_turn_start(self, turn_number: int, message: str, **kwargs) -> None:

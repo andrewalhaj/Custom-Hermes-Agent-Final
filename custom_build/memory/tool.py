@@ -32,12 +32,12 @@ SCHEMA = {
 
 
 def store_fact(args, *, machine, session_id, turn, embedder, judge_at, connect):
-    """Run the tool: {"stored": False, "refused": why}, store.store()'s outcome, or {"error": code}."""
+    """Run the tool: {"refused": why}, store.store()'s outcome, or {"error": code}."""
     body = redact_sensitive_text(str(args.get("fact", "")), force=True)   # before anything sees it (rule L4)
     if args.get("basis") not in BASES:
-        return {"stored": False, "refused": f"basis must be one of {', '.join(BASES)}"}
+        return {"refused": f"basis must be one of {', '.join(BASES)}"}
     if reason := write_path.refusal(body):
-        return {"stored": False, "refused": reason}
+        return {"refused": reason}
     fact = store.Fact(body=body, basis=args["basis"], project=project.key(resolve_agent_cwd()), source=machine,
                       session_id=session_id, source_turn=turn)
     try:
@@ -84,13 +84,16 @@ def attempt(conn, fact, *, embedder, judge_at):
 
 
 def retry_queued(conn, *, embedder, judge_at):
-    """Store each queued fact the judge can now decide on; a stored one is recorded as degraded."""
+    """Store each queued fact the judge can now decide on; one stored (or found already stored) is recorded
+    as degraded. The first judge failure ends the pass, so a judge still down costs one request a start."""
     for row_id, fact, attempts in queue.waiting():
         outcome = attempt(conn, fact, embedder=embedder, judge_at=judge_at)
         if "error" in outcome:
             queue.again(row_id)   # still waiting; its failure is recorded under its own code
+            if outcome["error"] in ("judge.error", "judge.timeout"):
+                return
             continue
         queue.done(row_id)
         failures.record(conn, "store.gate_error", "degraded", source=fact.source, project=fact.project,
-                        session_id=fact.session_id, turn=fact.source_turn, reason="stored on retry",
+                        session_id=fact.session_id, turn=fact.source_turn, reason="already stored, found on retry" if "already_stored" in outcome else "stored on retry",
                         detail={"attempts": attempts + 1})
