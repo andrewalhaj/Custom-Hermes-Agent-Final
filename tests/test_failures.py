@@ -7,6 +7,8 @@ import ast
 import json
 import logging
 import pathlib
+import threading
+import time
 
 import psycopg
 import pytest
@@ -271,6 +273,32 @@ def test_store_logs_an_unreachable_store_and_gives_none(caplog):
     with failures.store("host-a", lambda: psycopg.connect("postgresql://u:p@localhost:1/x", connect_timeout=3)) as conn:
         assert conn is None
     assert _codes(caplog) == [(logging.WARNING, "db.unreachable"), (logging.ERROR, "events.write_failed")]
+
+
+def test_record_gives_up_on_a_stalled_store_and_logs_the_lost_write(db, caplog):
+    # A guard's record must end well inside Hermes's hook deadline (ARCHITECTURE.md 5.5).
+    caplog.set_level(logging.INFO, logger=failures.__name__)
+    with psycopg.connect(db["owner"]) as holder, psycopg.connect(db["agent"], autocommit=True) as conn:
+        holder.execute("lock table memory.events in access exclusive mode")   # stands in for a stalled store
+        release = threading.Timer(8, holder.rollback)   # without a bound, the insert waits for this
+        release.start()
+        started = time.monotonic()
+        failures.record(conn, "db.query", "failed", source="host-a")
+        waited = time.monotonic() - started
+        release.cancel()
+        holder.rollback()
+    assert waited < 5, waited
+    assert _codes(caplog) == [(logging.WARNING, "db.query"), (logging.ERROR, "events.write_failed")]
+
+
+def test_records_bound_does_not_outlive_its_own_transaction(db):
+    # Inside a caller's transaction the bound would hold for the caller's later statements too.
+    with psycopg.connect(db["agent"], autocommit=True) as conn:
+        failures.record(conn, "db.query", "failed", source="host-a")
+        assert conn.execute("show statement_timeout").fetchone() == ("0",)
+        with conn.transaction():
+            failures.record(conn, "db.query", "failed", source="host-a")
+            assert conn.execute("show statement_timeout").fetchone() == ("0",)
 
 
 def test_record_logs_a_row_the_store_refuses_as_a_lost_write(db, caplog):

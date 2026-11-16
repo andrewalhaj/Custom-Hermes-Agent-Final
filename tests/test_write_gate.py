@@ -7,6 +7,7 @@ the message that blocks the call, or None when the call goes ahead. In log mode 
 nothing and records each call on its list in memory.events.
 """
 
+import contextlib
 import json
 import pathlib
 import shutil
@@ -52,8 +53,12 @@ print(json.dumps({"entry": entry, "blocks": blocks}))
 """
 
 
-def run_gate(tmp_path, db, calls, *, mode="log", scenario="plain", approvals=None, env=None, database_url=True):
-    """Run each call through Hermes's pre_tool_call dispatch; return (report, Hermes's output, events rows)."""
+def run_gate(tmp_path, db, calls, *, mode="log", scenario="plain", approvals=None, env=None, database_url=True,
+             hook_timeout=None, during=None):
+    """Run each call through Hermes's pre_tool_call dispatch; return (report, Hermes's output, events rows).
+
+    `during` is a context manager held while the calls run, such as a lock on memory.events.
+    """
     home = tmp_path / "home"
     shutil.copytree(PLUGIN, home / "plugins" / "custom_build", ignore=shutil.ignore_patterns("__pycache__"))
     gate_config = home / "plugins" / "custom_build" / "guards" / "write_gate.toml"
@@ -65,12 +70,15 @@ def run_gate(tmp_path, db, calls, *, mode="log", scenario="plain", approvals=Non
                           "entries": {"custom_build": {"settings": {"machine_name": "host-a"}}}}}
     if approvals:
         config["approvals"] = approvals
+    if hook_timeout:
+        config["plugins"]["hook_callback_timeout"] = hook_timeout
     (home / "config.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
     environment = {"HERMES_HOME": str(home), "HOME": str(tmp_path), "PATH": "/usr/bin:/bin", **(env or {})}
     if database_url:
         environment["CUSTOM_BUILD_DATABASE_URL"] = db["agent"] if database_url is True else database_url
-    result = subprocess.run([sys.executable, "-c", SCENARIO, scenario, json.dumps(calls)], capture_output=True,
-                            text=True, env=environment, cwd=tmp_path, timeout=120, check=False)
+    with during or contextlib.nullcontext():
+        result = subprocess.run([sys.executable, "-c", SCENARIO, scenario, json.dumps(calls)], capture_output=True,
+                                text=True, env=environment, cwd=tmp_path, timeout=120, check=False)
     assert result.returncode == 0, result.stderr[-2000:]
     report = json.loads(result.stdout.strip().splitlines()[-1])
     output = result.stderr + "".join(p.read_text(encoding="utf-8") for p in sorted((home / "logs").glob("*.log")))
@@ -198,3 +206,22 @@ def test_an_unreachable_store_is_logged_and_the_call_goes_ahead(tmp_path, db):
     assert report["blocks"] == [None], output
     assert rows == []
     assert output.index('"code": "db.unreachable"') < output.index('"lost_code": "write_gate.would_ask"'), output
+
+
+@contextlib.contextmanager
+def events_locked(db):
+    """Hold a lock on memory.events, which stands in for a stalled store, until the calls have run."""
+    with psycopg.connect(db["owner"]) as holder:
+        holder.execute("lock table memory.events in access exclusive mode")
+        yield
+        holder.rollback()
+
+
+def test_a_stalled_store_is_logged_and_the_call_goes_ahead(tmp_path, db):
+    # Hermes blocks a call whose pre_tool_call hook runs past its deadline, then every call for 60 seconds;
+    # a guard keeps its whole run under 10 seconds (ARCHITECTURE.md 5.5).
+    calls = [["terminal", {"command": "systemctl restart x"}], ["terminal", {"command": "ls"}]]
+    report, output, rows = run_gate(tmp_path, db, calls, hook_timeout=10, during=events_locked(db))
+    assert report["blocks"] == [None, None], output
+    assert rows == []
+    assert '"lost_code": "write_gate.would_ask"' in output, output
