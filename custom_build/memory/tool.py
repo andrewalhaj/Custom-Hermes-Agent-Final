@@ -53,21 +53,34 @@ def mirror(action, content, metadata, *, machine, session_id, turn, embedder, ju
     """
     body = redact_sensitive_text(str(content), force=True)
     key = project.key(resolve_agent_cwd())
+    fields = {"source": machine, "project": key, "session_id": session_id, "turn": turn}
 
     def work(conn):
         if action == "remove":
             # Hermes sends a remove with empty content; the removed entry is in previous_content.
             removed = redact_sensitive_text(str(metadata.get("previous_content", "")), force=True)
-            store.retire(conn, key, removed, "removed from built-in memory")
+            _update(conn, fields, store.retire, key, removed, "removed from built-in memory")
             return
         fact = store.Fact(body=body, basis="user_stated", project=key, source=machine, session_id=session_id,
                           source_turn=turn)
         outcome = _save(conn, fact, embedder=embedder, judge_at=judge_at)
         new = outcome.get("stored") or outcome.get("already_stored")
         if action == "replace" and new and metadata.get("previous_content"):
-            store.supersede(conn, key, redact_sensitive_text(str(metadata["previous_content"]), force=True), new)
+            old = redact_sensitive_text(str(metadata["previous_content"]), force=True)
+            _update(conn, fields, store.supersede, key, old, new)
 
     _with_store(machine, session_id, connect, work)
+
+
+def _update(conn, fields, change, *args):
+    """change(conn, *args) in a savepoint, a refused or failed update recorded as db.query or db.unreachable."""
+    try:
+        with conn.transaction():
+            change(conn, *args)
+    except psycopg.OperationalError as exc:
+        failures.record(conn, "db.unreachable", "failed", reason=str(exc), **fields)
+    except psycopg.Error as exc:   # a store without migration 0003 refuses the retire
+        failures.record(conn, "db.query", "failed", reason=str(exc), **fields)
 
 
 def _with_store(machine, session_id, connect, work):
