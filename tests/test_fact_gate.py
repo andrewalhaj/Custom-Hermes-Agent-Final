@@ -238,3 +238,17 @@ def test_is_or_does_inside_a_sentence_does_not_arm_the_turn(tmp_path, db):
                   "The function is not running fast enough, can you optimise it", "Your argument does not support that."]
     _, output, rows = run_gate(tmp_path, db, [["turn", "s1", f"u{n}", text] for n, text in enumerate(statements)])
     assert rows == [], output
+
+
+def test_a_long_reply_is_matched_in_linear_time():
+    # A reply reaches transform_llm_output whole, and Hermes waits on that hook.
+    import time
+
+    from custom_build.guards import fact_gate
+
+    config = fact_gate.load_config()
+    for name, pattern in config["needs_documentation"].items():
+        for reply in ("\n" * 100_000, "\n " * 50_000, "a " * 100_000):
+            started = time.monotonic()
+            pattern.search(reply)
+            assert time.monotonic() - started < 1, (name, len(reply))
