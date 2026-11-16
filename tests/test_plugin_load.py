@@ -85,10 +85,11 @@ def test_ordinary_load_succeeds(tmp_path):
     assert ordinary_load_ok(report), report["entry"]
 
 
-def test_ordinary_load_registers_two_hooks_and_no_tools_slash_commands_or_middleware(tmp_path):
+def test_ordinary_load_registers_five_hooks_and_no_tools_slash_commands_or_middleware(tmp_path):
     entry = load(tmp_path, provider=False)["entry"]
-    # the per-turn settings check on pre_llm_call (#68) and the write gate on pre_tool_call (#107)
-    assert (entry["tools"], entry["hooks"], entry["commands"], entry["middleware"]) == (0, 2, 0, 0)
+    # the per-turn settings check on pre_llm_call (#68), the write gate on pre_tool_call (#107), and the
+    # verify gate on pre_tool_call, post_tool_call and transform_llm_output (#124)
+    assert (entry["tools"], entry["hooks"], entry["commands"], entry["middleware"]) == (0, 5, 0, 0)
 
 
 def test_only_the_provider_load_registers_the_provider(tmp_path):

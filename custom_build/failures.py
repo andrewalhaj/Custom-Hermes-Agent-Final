@@ -31,6 +31,8 @@ CATALOG = {
     "guard.not_loaded": "The startup check found a guard's hooks or the provider not loaded",
     "write_gate.would_ask": "Not a failure: in log mode, the write gate saw a call on its list that on would send for approval",
     "write_gate.would_block": "Not a failure: in log mode, the write gate saw a call on its list that on would block outright",
+    "verify_gate.would_block": "Not a failure: in log mode, a call would change a listed file or setting the session never read",
+    "verify_gate.would_withhold": "Not a failure: in log mode, a reply stated a listed file's contents the session never read",
     "config.unsafe": "The startup check found a Hermes setting with a value the build does not support",
     "config.missing": "A setting the build needs is missing or invalid",
     "redact.failed": "The redactor raised; the text is not stored or sent",
