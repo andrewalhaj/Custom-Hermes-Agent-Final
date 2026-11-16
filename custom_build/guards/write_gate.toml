@@ -22,24 +22,24 @@ mode = "log"
 
 [rules.skills]   # writes into the skills folder (#80)
 path = "skills"
-command = '''\bhermes\s+skills\s+(?:install|update|uninstall|reset|repair-official|snapshot)\b'''
+command = '''\bhermes(?:\s+-\S+(?:\s+[^-\s]\S*)?)*\s+skills\s+(?:install|update|uninstall|reset|repair-official|snapshot)\b'''
 
-[rules.config]   # writes to Hermes's own config.yaml
+[rules.config]   # writes to Hermes's own config.yaml, including through Hermes's commands that set it
 path = "config.yaml"
-command = '''\bhermes\s+config\s+(?:set|unset|edit|migrate)\b'''
+command = '''\bhermes(?:\s+-\S+(?:\s+[^-\s]\S*)?)*\s+(?:config\s+(?:set|unset|edit|migrate)|tools\s+(?:enable|disable)|mcp\s+(?:add|remove|rm|configure|config|install)|model|setup)\b'''
 
 [rules.env]   # writes to Hermes's own .env
 path = ".env"
 
 [rules.plugin]   # writes to this plugin's folder
 path = "{plugin}"
-command = '''\bhermes\s+plugins\s+(?:install|update|auto-?update|adopt|remove|rm|uninstall|enable|disable|pack)\b'''
+command = '''\bhermes(?:\s+-\S+(?:\s+[^-\s]\S*)?)*\s+plugins\s+(?:install|update|auto-?update|adopt|remove|rm|uninstall|enable|disable|pack)\b'''
 
 [rules.install]   # terminal commands that install packages
-command = '''(?<![\w.-])(?:pip3?|pipx|uv|npm|pnpm|yarn|bun|apt|apt-get|dnf|yum|zypper|apk|brew|gem|cargo|go|conda|mamba|snap|flatpak|poetry|pdm|bundle|composer)(?![\w-])[^;&|\n]*?(?<![\w.-])(?:install|add|upgrade)(?![\w-])|(?<![\w.-])(?:npm\s+(?:i|ci)|uv\s+sync)(?![\w-])|(?<![\w.-])(?:dpkg|rpm)\s+-i|(?<![\w.-])pacman\s+-S'''
+command = '''(?<![\w.-])(?:pip3?|pipx|uv|npm|pnpm|yarn|bun|apt|apt-get|dnf|yum|zypper|apk|brew|gem|cargo|go|conda|mamba|snap|flatpak|poetry|pdm|bundle|composer)(?![\w-])[^;&|\n]*?(?<![\w.-])(?:install|add|upgrade)(?![\w-])|(?<![\w.-])(?:(?:npm|pnpm|bun)\s+(?:i|ci)|uv\s+sync)(?![\w-])|(?<![\w.-])(?:dpkg|rpm)\s+-i|(?<![\w.-])pacman\s+-S'''
 
 [rules.systemctl]   # terminal commands that run systemctl; before other_hosts, so "systemctl restart ssh" is named systemctl
 command = '''\bsystemctl\b'''
 
 [rules.other_hosts]   # terminal commands that reach other hosts: remote shells and copies, web requests, git remotes
-command = '''(?<![\w.-])(?:ssh|scp|sftp|rsync|mosh|telnet|ftp|nc|ncat|netcat|socat|curl|wget)(?![\w-])|(?<![\w.-])git(?![\w-])[^;&|\n]*?(?<![\w.-])(?:clone|fetch|pull|push|ls-remote)(?![\w-])'''
+command = '''(?<![\w.-])(?:ssh|ssh-copy-id|scp|sftp|rsync|mosh|telnet|ftp|nc|ncat|netcat|socat|curl|wget|gh)(?![\w-])|(?<![\w.-])git(?:\s+-\S+(?:\s+[^-\s]\S*)?)*\s+(?:clone|fetch|pull|push|ls-remote|submodule)(?![\w-])'''
