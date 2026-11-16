@@ -75,6 +75,8 @@ def recall_notes(query, *, machine, session_id, turn, embedder, connect):
     if not query.strip():
         return ""   # 3.5 point 1: only an empty message is skipped
     limits = write_path.load()["recall"]
+    kind = recall.question_kind(query)   # the recall gate's patterns (3.5 points 3-4)
+    wanted = limits["results_past_work"] if kind else limits["results"]
     box = {}
 
     # The recall thread is a Hermes entry point's work too: the boundary wrapper records a crash in it as
@@ -82,7 +84,8 @@ def recall_notes(query, *, machine, session_id, turn, embedder, connect):
     @failures.boundary(lambda: machine, connect, failures.Returns(lambda exc: None))
     def run(session_id):
         box["outcome"] = _searched(query, machine=machine, session_id=session_id, turn=turn, embedder=embedder,
-                                   connect=connect, wanted=limits["results"], deadline=limits["deadline"])
+                                   connect=connect, wanted=wanted, deadline=limits["deadline"],
+                                   open_work=kind == "open_work")
 
     # Hermes's own thread helper, so the thread keeps the session's context: its directory, and so its project.
     worker = spawn_context_thread(run, name="custom_build-recall", kwargs={"session_id": session_id})
@@ -100,11 +103,12 @@ def recall_notes(query, *, machine, session_id, turn, embedder, connect):
     outcome = box["outcome"]
     if "error" in outcome:
         return recall.failed(outcome["error"])
-    return recall.notes(recall.capped(outcome["results"], wanted=limits["results"],
-                                      digests=limits["digests_per_message"]))
+    if kind == "open_work":
+        return recall.notes(recall.open_items(outcome["results"])[:wanted])
+    return recall.notes(recall.capped(outcome["results"], wanted=wanted, digests=limits["digests_per_message"]))
 
 
-def _searched(query, *, machine, session_id, turn, embedder, connect, wanted, deadline=None):
+def _searched(query, *, machine, session_id, turn, embedder, connect, wanted, deadline=None, open_work=False):
     """The fused candidate pool for `wanted` results as {"results": [...]}, or {"error": code}, recorded. With a
     `deadline`, the store cancels any statement that runs past it, so a stalled store releases the search."""
     key = project.key(resolve_agent_cwd())
@@ -114,6 +118,8 @@ def _searched(query, *, machine, session_id, turn, embedder, connect, wanted, de
         if deadline is not None:   # an int in milliseconds, so it is safe to write into the statement
             conn.execute(f"set statement_timeout = {int(deadline * 1000)}")
         try:
+            if open_work:   # not a similarity search: the newest digests (3.5 point 4)
+                return {"results": search.newest_digests(conn, key, write_path.load()["recall"]["open_work_digests"])}
             return {"results": search.candidates(conn, embedder, query, key, wanted=wanted, timeout=TIMEOUT)}
         except embedding.EmbedUnavailable as exc:
             failures.record(conn, "embed.unavailable", "failed", reason=str(exc), **fields)

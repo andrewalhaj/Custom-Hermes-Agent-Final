@@ -69,5 +69,7 @@ fusion_k = 20      # reciprocal-rank fusion constant for facts
 pool_factor = 3    # the candidate pool is this many times the results wanted...
 pool_min = 15      # ...and at least this many
 results = 5        # results per message, and per memory_search call
+results_past_work = 8   # on a question about past work or open work (3.5 points 3-4)
+open_work_digests = 3   # a question about open work reads the newest this many digests (#158; a starting value)
 digests_per_message = 1   # at most this many digests among a message's notes (decided on #158; a starting value)
 deadline = 6       # seconds for recall in prefetch(), inside Hermes's 8-second limit

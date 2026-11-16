@@ -1,0 +1,20 @@
+# The recall gate's patterns (ARCHITECTURE.md sections 3.5 and 5.3; #158, decided there).
+# Memory's recall reads them now, to widen the search for a question about past work and to answer a
+# question about open work from the newest digests; the recall gate reads the same file when the guards
+# track builds it, so the search and the gate always agree on what such a question is.
+# Each is a Python regular expression, matched case-insensitively anywhere in the user's message. Open
+# work is checked first. A change here is a pull request, with tests/test_recall_questions.py updated.
+
+[past_work]
+what_did = '''(?i)\bwhat\s+did\s+(?:we|i|you)\s+(?:decide|say|do|agree|choose|pick|find|change)\b'''
+did_we = '''(?i)\b(?:did|have|had)\s+(?:we|i|you)\s+(?:already\s+)?(?:decide|do|done|fix|fixed|try|tried|set|discuss|talk|say|agree|change|install|pin|use|build)'''
+last_time = '''(?i)\b(?:last|previous|earlier)\s+(?:time|session|conversation|chat|week)\b'''
+remember = '''(?i)\b(?:remember|recall)\b'''
+left_off = '''(?i)\b(?:left|leave)\s+off\b'''
+before = '''(?i)\b(?:earlier|before|yesterday|previously)\s*\?'''   # "... earlier?", a question about the past
+
+[open_work]
+left = '''(?i)\bwhat(?:['’]s|\s+is|\s+are)?\s+(?:still\s+)?(?:left|remaining|outstanding|pending)\b'''
+still_to_do = '''(?i)\bwhat(?:['’]s|\s+is|\s+are)?\s+(?:still\s+)?(?:left\s+)?to\s+do\b'''
+next = '''(?i)\bwhat(?:['’]s|\s+is)?\s+next\b'''
+open_items = '''(?i)\bopen\s+(?:items|work|tasks)\b'''
