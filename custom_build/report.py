@@ -57,11 +57,11 @@ def _ran(conn):
 
 
 def _write(day, machine, rows, redact):
-    """Write the failures, grouped by code then machine, to failures-<day>.md; return its path."""
+    """Write the failures, grouped by code then machine, to doc_<id>_failures-<day>.md; return its path."""
     from gateway.platforms.base import cache_document_from_bytes
 
     lines = [f"# Failure report, {day}", "",
-             f"The last 24 hours of `events`, read on {machine}: {len(rows)} failures.", ""]
+             f"The last 24 hours of `events`, read on {machine}: {_count(len(rows), 'failure')}.", ""]
     for code in dict.fromkeys(row[0] for row in rows):
         shown = "yes" if code in failures.SHOWN_IN_TURN else "no"
         lines += [f"## {code}: severity {failures.SEVERITY.get(code, 'unknown')}, shown in the turn: {shown}", "",
