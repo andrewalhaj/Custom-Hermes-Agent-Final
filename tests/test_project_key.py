@@ -1,8 +1,8 @@
 """Prove the project key (issue #113, ARCHITECTURE.md section 2).
 
 A fact's project is the normalised URL of the `origin` remote of the repository the session works in,
-so it is the same on every machine; a workspace that is not a repository has none (#112 covers a
-repository with no remote). Each test builds a throwaway repository with git itself.
+so it is the same on every machine; a workspace that is not a repository has none, and neither has a
+repository whose origin is missing, a local path or a file URL (#112). Each test builds a throwaway repository with git itself.
 """
 
 import subprocess
@@ -50,3 +50,9 @@ def test_a_workspace_that_is_not_a_repository_has_no_project(tmp_path):
 
 def test_a_repository_with_no_origin_has_no_project(tmp_path):
     assert project.key(_repo(tmp_path / "work")) is None
+
+
+@pytest.mark.parametrize("origin", ["/srv/repo.git", "../other", "file:///srv/repo.git", "file://localhost/srv/repo.git"])
+def test_a_repository_whose_origin_is_not_a_network_remote_has_no_project(tmp_path, origin):
+    # #112 decided: such a repository stores its facts with no project, like one with no origin.
+    assert project.key(_repo(tmp_path / "work", origin)) is None
