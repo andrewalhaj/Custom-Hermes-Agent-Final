@@ -64,9 +64,9 @@ def db():
 class FakeOllama(http.server.ThreadingHTTPServer):
     """A stand-in for the two Ollama endpoints the build calls, `/api/tags` and `/api/embed`, so the
     tests need no model. A test sets the models it lists, the length of the vectors it returns, a vector
-    for a given text (`vectors`; any other text gets a constant one), how many vectors to leave out of an
-    answer (`drop`), an HTTP status to answer with instead, and whether to cut the answer off mid-body
-    (`cut_off`); `embedded` collects every input sent to `/api/embed`."""
+    for a given text (`vectors`; any other text gets `other`, else a constant one), how many vectors to
+    leave out of an answer (`drop`), an HTTP status to answer with instead, and whether to cut the answer
+    off mid-body (`cut_off`); `embedded` collects every input sent to `/api/embed`."""
 
     digest = "df5bd2e3c74cd8d069d21dc038f1b359fcdc9458fce1c99bd43c9eb1518ff907"
     build = f"qwen3-embedding:4b@sha256:{digest}"
@@ -76,6 +76,7 @@ class FakeOllama(http.server.ThreadingHTTPServer):
         self.models = [{"name": "qwen3-embedding:4b", "model": "qwen3-embedding:4b", "digest": self.digest}]
         self.dimensions = 2560
         self.vectors = {}
+        self.other = None
         self.drop = 0
         self.cut_off = False
         self.status = 200
@@ -98,7 +99,8 @@ class _OllamaHandler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         self.server.embedded.append(request["input"])
-        vectors = [self.server.vectors.get(text, [0.01] * self.server.dimensions) for text in request["input"]]
+        vectors = [self.server.vectors.get(text, self.server.other or [0.01] * self.server.dimensions)
+                   for text in request["input"]]
         self._answer({"embeddings": vectors[:len(vectors) - self.server.drop]})
 
     def log_message(self, *args):
