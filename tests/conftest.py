@@ -130,14 +130,18 @@ def ollama_down():
 
 class FakeTypeSafe(http.server.ThreadingHTTPServer):
     """A stand-in for TypeSafe's System One endpoint, `POST /v1/systemone`. A test sets the probability
-    each named question gets, an HTTP status to answer with instead, or a delay longer than the
-    caller's deadline; `requests` collects each request's headers and body."""
+    each named question gets, an HTTP status to answer with instead, a delay longer than the caller's
+    deadline, a raw body to send instead of JSON (`raw`), an answer cut off mid-body (`cut_off`), or a
+    connection closed before any answer (`hang_up`); `requests` collects each request's headers and body."""
 
     def __init__(self):
         super().__init__(("127.0.0.1", 0), _TypeSafeHandler)
         self.answers = {}
         self.status = 200
         self.delay = 0
+        self.raw = None
+        self.cut_off = False
+        self.hang_up = False
         self.requests = []
         self.url = f"http://127.0.0.1:{self.server_address[1]}"
 
@@ -147,15 +151,18 @@ class _TypeSafeHandler(http.server.BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         self.server.requests.append({"path": self.path, "headers": dict(self.headers), "body": body})
         time.sleep(self.server.delay)
+        if self.server.hang_up:
+            self.close_connection = True
+            return
         if self.server.status == 200:
             answers = {name: {"type": "noul", "noul": self.server.answers[name]} for name in body["questions"]}
             payload = {"model": body["model"], "answers": answers, "usage": {"input_tokens": 1, "output_tokens": 1}}
         else:
             payload = {"detail": "refused"}
-        data = json.dumps(payload).encode()
+        data = self.server.raw if self.server.raw is not None else json.dumps(payload).encode()
         self.send_response(self.server.status)
         self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Content-Length", str(len(data) + (10 if self.server.cut_off else 0)))
         self.end_headers()
         self.wfile.write(data)
 

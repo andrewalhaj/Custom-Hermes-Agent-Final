@@ -52,6 +52,21 @@ def test_a_judge_past_its_deadline_is_a_timeout(typesafe):
         _ask(typesafe, timeout=0.5)
 
 
+@pytest.mark.parametrize("break_it", [
+    {"raw": b"<html>not json</html>"},                      # a 200 that is not JSON
+    {"raw": b'{"model": "jev-1.14.0", "usage": {}}'},        # no answers
+    {"raw": b'{"answers": {"same_subject": {"noul": 0.9}}}'},  # one question unanswered
+    {"cut_off": True},                                      # the answer cut off mid-body
+    {"hang_up": True},                                      # the connection closed before any answer
+])
+def test_a_malformed_or_broken_answer_is_a_judge_error(typesafe, break_it):
+    typesafe.answers = {"same_subject": 0.9, "supersedes": 0.9}
+    for name, value in break_it.items():
+        setattr(typesafe, name, value)
+    with pytest.raises(judge.JudgeError):
+        _ask(typesafe)
+
+
 def test_the_supersede_decision_needs_both_answers_at_the_threshold():
     assert judge.supersedes({"same_subject": 0.75, "supersedes": 0.75}) is True
     assert judge.supersedes({"same_subject": 0.99, "supersedes": 0.74}) is False
