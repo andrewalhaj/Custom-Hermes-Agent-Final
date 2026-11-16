@@ -138,3 +138,16 @@ def test_a_crash_is_recorded_as_unhandled_and_re_raised(home, db, ollama, typesa
     report, _ = mirror(home, db, ollama.url, typesafe.url, [["add", "memory", RULE, {}]], mode="crash")
     assert report["raised"] == ["KeyError"]
     assert _codes(db) == ["unhandled"]
+
+
+@pytest.mark.parametrize("columns, write", [
+    ("retired_at, retired_reason", ["remove", "memory", "", {"previous_content": RULE}]),   # a store without 0003
+    ("superseded_by", ["replace", "memory", NEW_RULE, {"previous_content": RULE}]),
+])
+def test_a_refused_retire_or_supersede_is_recorded_as_a_query_failure(home, db, ollama, typesafe, columns, write):
+    ollama.vectors = {RULE: [1.0] + [0.0] * 2559, NEW_RULE: [0.5, 0.866] + [0.0] * 2558}
+    with psycopg.connect(db["owner"]) as conn:
+        conn.execute(f"revoke update ({columns}) on memory.facts from memory_agent")
+    report, _ = mirror(home, db, ollama.url, typesafe.url, [["add", "memory", RULE, {}], write])
+    assert report["raised"] == []
+    assert _codes(db) == ["db.query"]
