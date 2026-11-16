@@ -21,8 +21,11 @@ HERMES = "import sys; from hermes_cli.main import main; sys.argv = ['hermes', *s
 WRAPPER = "custom-build-heartbeat.py"
 
 
-def make_home(tmp_path, db, *, machine_name="host-a", database_url=True, failures_edit=None):
-    """A Hermes home with the plugin installed and enabled, the way an agent host has it."""
+def make_home(tmp_path, db, *, machine_name="host-a", database_url="agent", failures_edit=None):
+    """A Hermes home with the plugin installed and enabled, the way an agent host has it.
+
+    `database_url` names a login from the `db` fixture, or is a connection string as given.
+    """
     home = tmp_path / "home"
     shutil.copytree(PLUGIN, home / "plugins" / "custom_build", ignore=shutil.ignore_patterns("__pycache__"))
     if failures_edit:
@@ -33,7 +36,8 @@ def make_home(tmp_path, db, *, machine_name="host-a", database_url=True, failure
               "plugins": {"enabled": ["custom_build"], "entries": {"custom_build": entry}}}
     (home / "config.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
     if database_url:
-        (home / ".env").write_text(f"CUSTOM_BUILD_DATABASE_URL={db['agent']}\n", encoding="utf-8")
+        (home / ".env").write_text(f"CUSTOM_BUILD_DATABASE_URL={db.get(database_url, database_url)}\n",
+                                   encoding="utf-8")
     return home
 
 
@@ -84,6 +88,13 @@ def test_a_missing_setting_stops_the_heartbeat_with_config_missing(tmp_path, db,
     errors_log = (home / "logs" / "errors.log").read_text(encoding="utf-8")
     assert missing in errors_log
     assert errors_log.index('"code": "config.missing"') < errors_log.index('"code": "events.write_failed"')
+
+
+def test_a_heartbeat_the_store_refuses_exits_non_zero(tmp_path, db):
+    # The maintenance login connects but cannot insert into events, as a host's role outside memory_agent would.
+    result = hermes(tmp_path, make_home(tmp_path, db, database_url="maint"), "custom-build", "heartbeat")
+    assert result.returncode != 0, result.stdout + result.stderr   # so Hermes cron delivers its error alert
+    assert rows(db) == []
 
 
 def test_a_crash_in_the_heartbeat_is_recorded_by_the_job_wrapper(tmp_path, db):
