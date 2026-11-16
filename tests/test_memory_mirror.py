@@ -104,8 +104,9 @@ def test_a_replaced_entry_supersedes_the_old_fact(home, db, ollama, typesafe):
 
 
 def test_a_removed_entry_retires_its_fact_and_can_come_back(home, db, ollama, typesafe):
-    mirror(home, db, ollama.url, typesafe.url, [["add", "memory", RULE, {}], ["remove", "memory", RULE, {}],
-                                               ["add", "memory", RULE, {}]])
+    # Hermes v0.23.1 sends a remove with empty content; the entry is in metadata["previous_content"].
+    removal = ["remove", "memory", "", {"old_text": "answers short", "previous_content": RULE}]
+    mirror(home, db, ollama.url, typesafe.url, [["add", "memory", RULE, {}], removal, ["add", "memory", RULE, {}]])
     assert [(row[0], row[8]) for row in _facts(db)] == [(RULE, "removed from built-in memory"), (RULE, None)]
 
 
