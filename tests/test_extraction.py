@@ -268,6 +268,9 @@ def ladder(monkeypatch):
 @pytest.mark.parametrize("error, raised", [
     (ProviderError("billing_error: usage credits required", 402), extraction.ExtractRefused),
     (ProviderError("You've hit your session limit", 429), extraction.ExtractError),
+    # Hermes labels a quota 429 "payment error" too; a plan limit is not enforcement (#148 review round 2).
+    (ProviderError("You've reached your weekly usage limit", 429), extraction.ExtractError),
+    (ProviderError("rate_limit_error: quota exceeded for this plan", 429), extraction.ExtractError),
     (TimeoutError("Claude request timed out"), extraction.ExtractError),
 ])
 def test_an_answer_from_hermess_fallback_is_not_used_and_the_failure_is_raised(ladder, error, raised):
@@ -287,6 +290,14 @@ def plugin_patterns():
     redact.register_redaction_patterns(custom_build.REDACTION_PATTERNS, source="plugin:custom_build")
     yield
     redact._reset_plugin_redaction_patterns()
+
+
+@pytest.mark.parametrize("error", [ProviderError("Claude Code is not logged in", 401),
+                                   ProviderError("permission_error: this organization is forbidden", 403)])
+def test_a_refused_account_through_hermess_real_call_is_extract_refused(ladder, error):
+    ladder(error)
+    with pytest.raises(extraction.ExtractRefused):
+        extraction.propose({"user": "u", "tool_results": []})
 
 
 def test_a_long_provider_error_is_redacted_before_it_is_cut(monkeypatch, plugin_patterns):
