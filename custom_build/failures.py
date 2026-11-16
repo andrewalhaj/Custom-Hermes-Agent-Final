@@ -29,6 +29,7 @@ CATALOG = {
     "store.gate_error": "The judge failed during a write; the fact is queued",
     "guard.crash": "A guard raised during a turn",
     "guard.not_loaded": "The startup check found a guard's hooks or the provider not loaded",
+    "guard.bypassed": "A local session ran in safe mode or with the profile's settings ignored, or its launch policy cannot be read",
     "write_gate.would_ask": "Not a failure: in log mode, the write gate saw a call on its list that on would send for approval",
     "write_gate.would_block": "Not a failure: in log mode, the write gate saw a call on its list that on would block outright",
     "verify_gate.would_block": "Not a failure: in log mode, a call would change a listed file or setting the session never read",
