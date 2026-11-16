@@ -55,9 +55,12 @@ def missing_settings(ctx):
 
 
 def agent_hosts(ctx):
-    """The job host's list of agent host names, or None when it is not a non-empty list of usable names."""
+    """The job host's list of agent host names, or None unless it is a non-empty list of distinct usable
+    names with no padding, each written as its host's `machine_name` is."""
     value = ctx.get_config(AGENT_HOSTS)
-    return value if isinstance(value, list) and value and all(_usable(name) for name in value) else None
+    ok = (isinstance(value, list) and value and all(_usable(name) and name == name.strip() for name in value)
+          and len(set(value)) == len(value))
+    return value if ok else None
 
 
 def machine(ctx):
