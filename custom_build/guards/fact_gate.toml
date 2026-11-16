@@ -33,5 +33,5 @@ error = '''(?s)\A(?=.*\?)(?=.*\b(?:errors?|exceptions?|tracebacks?|fail(?:s|ed|i
 
 # A reply that needs a documentation lookup too: case-insensitive patterns on an armed turn's reply.
 [needs_documentation]
-procedure = '''(?m)^\s*(?:step\s+)?2[.):]\s'''   # a second numbered step
+procedure = '''(?m)^[ \t]*(?:step\s+)?2[.):]\s'''   # a second numbered step; [ \t], so blank lines are read once
 diagnosis = '''\b(?:root cause|the cause is|is caused by|this happens because|the problem is)\b'''
