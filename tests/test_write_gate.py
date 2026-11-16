@@ -174,6 +174,8 @@ def test_more_commands_on_the_list_are_recorded(tmp_path, db):
         "hermes setup": "config",
         "pnpm i left-pad": "install",
         "ssh-copy-id other-host": "other_hosts",
+        "git -C 'my repo' pull": "other_hosts",   # an option's value quoted, with a space in it
+        "git remote update": "other_hosts",
     }
     _, output, rows = run_gate(tmp_path, db, [["terminal", {"command": c}] for c in commands])
     assert [(reason, detail["rule"]) for _, _, reason, detail, _, _ in rows] == list(commands.items()), output
@@ -222,6 +224,7 @@ def test_a_call_off_the_list_records_nothing(tmp_path, db):
         ["read_file", {"path": str(home / "config.yaml")}],   # reads are not on the list
         ["terminal", {"command": "ls -la"}],
         ["terminal", {"command": "git status"}],
+        ["terminal", {"command": "cd ~/src/gh/tool && make"}],   # a folder named like a tool is not the tool
         ["web_search", {"query": "systemctl restart"}],   # only the terminal's commands are matched
     ]
     report, output, rows = run_gate(tmp_path, db, calls)
