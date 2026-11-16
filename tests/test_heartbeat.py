@@ -97,20 +97,26 @@ from hermes_state_local import POLICY_PREFIX
 home = Path(sys.argv[1])
 db = SessionDB(home / "state.db")
 for sid, flags in json.loads(sys.argv[2]).items():
-    policy = dataclasses.asdict(build_policy({"source": "cli", "cwd": str(home), "model": "m", **flags}, {}))
-    receipt = json.dumps({"session_id": sid, "policy": policy})
+    if isinstance(flags, str):   # a receipt stored as given, such as a malformed one
+        receipt = flags
+    else:
+        policy = dataclasses.asdict(build_policy({"source": "cli", "cwd": str(home), "model": "m", **flags}, {}))
+        receipt = json.dumps({"session_id": sid, "policy": policy})
     db._execute_write(lambda c: c.execute("insert into state_meta(key, value) values (?, ?)", (POLICY_PREFIX + sid, receipt)))
 db.close()
 """
 
 
-def test_the_heartbeat_records_each_session_run_without_the_build_once(tmp_path, db):
-    home = make_home(tmp_path, db)
-    sessions = {"s-safe": {"safe_mode": True}, "s-ignored": {"ignore_user_config": True}, "s-plain": {}}
+def seed(tmp_path, home, sessions):
     seeded = subprocess.run([sys.executable, "-c", SEED, str(home), json.dumps(sessions)], capture_output=True,
                             text=True, timeout=120, check=False, cwd=tmp_path,
                             env={"HERMES_HOME": str(home), "HOME": str(tmp_path), "PATH": "/usr/bin:/bin"})
     assert seeded.returncode == 0, seeded.stderr[-2000:]
+
+
+def test_the_heartbeat_records_each_session_run_without_the_build_once(tmp_path, db):
+    home = make_home(tmp_path, db)
+    seed(tmp_path, home, {"s-safe": {"safe_mode": True}, "s-ignored": {"ignore_user_config": True}, "s-plain": {}})
     for _ in range(2):   # the second run finds both already recorded
         result = hermes(tmp_path, home, "custom-build", "heartbeat")
         assert result.returncode == 0, result.stdout + result.stderr
@@ -120,6 +126,18 @@ def test_the_heartbeat_records_each_session_run_without_the_build_once(tmp_path,
         ("guard.bypassed", "failed", "s-ignored", "host-a"), ("guard.bypassed", "failed", "s-safe", "host-a"),
     ]
     assert [row[0] for row in found].count("host.heartbeat") == 2
+
+
+def test_a_receipt_the_heartbeat_cannot_read_is_recorded_without_stopping_the_scan(tmp_path, db):
+    # Hermes leaves a malformed receipt in place; the build cannot show it ran there, so it is recorded (#23).
+    home = make_home(tmp_path, db)
+    seed(tmp_path, home, {"s-broken": "{not json", "s-safe": {"safe_mode": True}})
+    result = hermes(tmp_path, home, "custom-build", "heartbeat")
+    assert result.returncode == 0, result.stdout + result.stderr
+    with psycopg.connect(db["owner"]) as conn:
+        found = conn.execute("select session_id, reason from memory.events where code = 'guard.bypassed'"
+                             " order by session_id").fetchall()
+    assert found == [("s-broken", "unreadable launch policy"), ("s-safe", "safe_mode")]
 
 
 def test_a_failed_heartbeat_under_hermes_cron_alerts_with_its_code(tmp_path, db):
