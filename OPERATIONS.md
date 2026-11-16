@@ -106,9 +106,9 @@ Every job other than retention is a `hermes custom-build <job>` subcommand, ship
 
 1. Copy `plugins/custom_build/scripts/custom-build-heartbeat.py` into `scripts/`, creating that folder if it does not exist.
 2. `hermes cron create "every 6h" --name custom-build-heartbeat --script custom-build-heartbeat.py --no-agent --deliver <operators-channel>`
-3. `hermes cron run <job-id>`, with the id step 2 printed, runs it on the scheduler's next tick rather than 6 hours later; `events` then holds a `host.heartbeat` row with the host's name.
+3. `hermes cron run <job-id>`, with the id step 2 printed, runs it at once rather than 6 hours later and prints `Ran now: succeeded`; `events` then holds a `host.heartbeat` row with the host's name.
 
-A run that succeeds prints nothing, so Hermes sends nothing; a failed run sends Hermes's error alert to `<operators-channel>`, carrying the line the job printed with its failure code.[1]
+A run that succeeds prints nothing, so Hermes sends nothing; a failed run sends Hermes's error alert to `<operators-channel>`.[1] The alert carries the start of the line the job printed, which names the failure code; the whole line is in the run's record under `cron/output/` in the Hermes home.
 
 The report runs as a Hermes script-only cron job (`--no-agent`): it uses no model, and Hermes delivers the script's output to the configured target. A script that exits non-zero or times out makes Hermes deliver an error alert instead.[1]
 
