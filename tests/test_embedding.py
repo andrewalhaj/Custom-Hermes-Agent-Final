@@ -57,6 +57,18 @@ def test_the_check_fails_when_the_store_holds_another_build(ollama, db):
     assert embedder.build is None
 
 
+def test_a_check_that_failed_passes_once_the_other_build_is_gone(ollama, db):
+    _store_fact(db["owner"], "qwen3-embedding:4b@sha256:another")
+    embedder = embedding.Embedder(ollama.url)
+    with psycopg.connect(db["agent"]) as conn:
+        with pytest.raises(embedding.ModelMismatch):
+            embedder.embed(conn, ["one"], timeout=5)
+        with psycopg.connect(db["owner"]) as owner:
+            owner.execute("delete from memory.facts")   # a re-embedding migration would rewrite them instead
+        assert [len(v) for v in embedder.embed(conn, ["one"], timeout=5)] == [2560]
+    assert embedder.build == ollama.build
+
+
 def test_embed_returns_one_vector_of_2560_numbers_per_text(ollama, db):
     embedder = embedding.Embedder(ollama.url)
     with psycopg.connect(db["agent"]) as conn:
