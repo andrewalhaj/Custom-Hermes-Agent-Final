@@ -178,6 +178,14 @@ def test_the_catalog_holds_the_architecture_codes():
     }
 
 
+def test_every_failure_code_has_a_severity():
+    # The daily report prints each code's severity and whether it is shown in the turn (#35).
+    failure_codes = {code for code, text in failures.CATALOG.items() if not text.startswith("Not a failure")}
+    assert set(failures.SEVERITY) == failure_codes
+    assert set(failures.SEVERITY.values()) <= {"high", "medium", "low"}
+    assert {"config.missing", "guard.crash"} <= failures.SHOWN_IN_TURN <= failure_codes   # the turn's block messages
+
+
 @pytest.mark.parametrize("code, result", [("host.heartbeat", "ok"), ("host.missing", "failed")])
 def test_the_host_codes_can_be_recorded(db, code, result):
     with psycopg.connect(db["agent"], autocommit=True) as conn:
