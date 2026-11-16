@@ -112,3 +112,10 @@ def test_a_finding_the_store_refuses_fails_the_check(tmp_path, db):
     assert result.returncode != 0, result.stdout + result.stderr   # so Hermes cron delivers its error alert
     assert "events.write_failed" in result.stderr, result.stderr
     assert recorded(db) == []   # a run that lost a finding does not count as having run
+
+
+def test_a_day_the_report_did_not_run_is_recorded_as_missed(tmp_path, db):
+    seed(db, ("host.heartbeat", "host-a", 1, {}), ("job.succeeded", "host-a", 26, {"job": "daily-report"}))
+    result = hermes(tmp_path, with_hosts(make_home(tmp_path, db), ["host-a"]), "custom-build", "job-health")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert ("job.missed", "failed", "host-a", {"job": "daily-report"}) in recorded(db)
