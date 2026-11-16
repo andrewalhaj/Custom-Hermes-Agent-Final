@@ -61,3 +61,11 @@ long_session = 20
 instructions = "Is `digest` worth keeping as a record of this session for later sessions with this user?"
 criteria.true = "It records decisions, changes, findings or open work that a later session could use."
 criteria.false = "Nothing in it would help later: the session was small talk, or only repeated what is already known."
+
+# The facts search (section 3.4; defaults in 3.6; #158). It lives here beside the write path's thresholds,
+# so every 3.6 value the build reads is in one file.
+[recall]
+fusion_k = 20      # reciprocal-rank fusion constant for facts
+pool_factor = 3    # the candidate pool is this many times the results wanted...
+pool_min = 15      # ...and at least this many
+results = 5        # results per message, and per memory_search call
