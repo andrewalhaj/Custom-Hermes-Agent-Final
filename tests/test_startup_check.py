@@ -150,6 +150,14 @@ def test_a_missing_database_url_fails_with_config_missing(tmp_path, db):
     assert rows == []
 
 
+def test_a_database_url_postgresql_cannot_parse_fails_with_config_missing(tmp_path, db):
+    code, output, rows = run_check(tmp_path, db, database_url="not a url")
+    assert code != 0
+    assert "config.missing" in output and "CUSTOM_BUILD_DATABASE_URL" in output, output
+    assert "Traceback" not in output
+    assert rows == []
+
+
 def test_a_machine_name_that_is_not_a_string_fails_with_config_missing(tmp_path, db):
     import datetime
 
