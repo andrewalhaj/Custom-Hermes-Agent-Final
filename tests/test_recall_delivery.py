@@ -36,6 +36,10 @@ import plugins.memory
 provider = plugins.memory.load_memory_provider("custom_build")
 modules = {name.rsplit(".", 1)[-1]: m for name, m in sys.modules.items() if "custom_build" in name}
 modules["embedding"].OLLAMA_URL = sys.argv[1]
+if sys.argv[4:] == ["crash"]:
+    def crash(*args, **kwargs):
+        raise KeyError("boom")
+    modules["search"].candidates = crash
 provider.initialize(session_id="s1", hermes_home=sys.argv[3], platform="cli", agent_context="primary")
 started = time.monotonic()
 notes = provider.prefetch(sys.argv[2], session_id="s1")
@@ -69,12 +73,13 @@ def _add(owner, body, vector, build, *, kind="fact", basis="user_stated"):
         (body, uuid.uuid4().hex, kind, "digest" if kind == "digest" else "explicit", basis, PROJECT, str(vector), build))
 
 
-def recall(home, db, ollama_url, query=QUERY, *, store=True):
+def recall(home, db, ollama_url, query=QUERY, *, store=True, mode=None):
     env = {"HERMES_HOME": str(home), "HOME": str(home.parent), "PATH": "/usr/bin:/bin",
            "TYPESAFE_API_KEY": "test-key-not-a-real-one"}
     if store:
         env["CUSTOM_BUILD_DATABASE_URL"] = db["agent"]
-    result = subprocess.run([sys.executable, "-c", SCENARIO, ollama_url, query, str(home)], capture_output=True,
+    result = subprocess.run([sys.executable, "-c", SCENARIO, ollama_url, query, str(home), *([mode] if mode else [])],
+                            capture_output=True,
                             text=True, env=env, cwd=home.parent / "work", timeout=120, check=False)
     assert result.returncode == 0, result.stderr[-3000:]
     return json.loads(result.stdout.strip().splitlines()[-1])
@@ -146,3 +151,10 @@ def test_a_secret_in_the_message_never_reaches_ollama(home, db, ollama):
     # CONTRIBUTING.md rule L4; Hermes redacts first, and the build's own redaction is forced.
     recall(home, db, ollama.url, f"why does {FAKE_KEY} fail")
     assert ollama.embedded and all(FAKE_KEY not in text for batch in ollama.embedded for text in batch)
+
+
+def test_a_crash_in_the_search_is_recorded_as_unhandled_and_reported_in_the_turn(home, db, ollama):
+    # CONTRIBUTING.md rule C2: the recall thread runs inside the boundary wrapper, which records it.
+    text = recall(home, db, ollama.url, mode="crash")["notes"]
+    assert "unhandled" in text
+    assert _codes(db)[-1] == "unhandled"
