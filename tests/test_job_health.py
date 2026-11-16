@@ -88,3 +88,15 @@ def test_hermes_cron_runs_the_check_daily_from_its_scripts_folder_and_delivers_n
     assert "Ran now: succeeded" in answer, answer
     assert "silent (empty output)" in run
     assert recorded(db) == [("job.succeeded", "ok", "host-a", {"job": "job-health"})]
+
+
+def test_a_finding_the_store_refuses_fails_the_check(tmp_path, db):
+    # The store takes the check's own success but not its finding: that finding must not be lost quietly.
+    with psycopg.connect(db["owner"], autocommit=True) as conn:
+        conn.execute("create function memory.refuse() returns trigger language plpgsql as"
+                     " $$ begin raise exception 'refused'; end $$")
+        conn.execute("create trigger refuse_missing before insert on memory.events for each row"
+                     " when (new.code = 'host.missing') execute function memory.refuse()")
+    result = hermes(tmp_path, with_hosts(make_home(tmp_path, db), ["host-b"]), "custom-build", "job-health")
+    assert result.returncode != 0, result.stdout + result.stderr   # so Hermes cron delivers its error alert
+    assert "events.write_failed" in result.stderr, result.stderr
