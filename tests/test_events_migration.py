@@ -1,6 +1,6 @@
 """Prove migrations/0001_memory_events.sql (issue #33, ARCHITECTURE.md sections 4.2 and 4.3).
 
-The `db` fixture (conftest.py) gives each test an empty database with the migration applied.
+The `db` fixture (conftest.py) gives each test an empty database with every migration applied.
 """
 
 import psycopg

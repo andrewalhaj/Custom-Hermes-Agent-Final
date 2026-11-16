@@ -81,6 +81,43 @@ def test_creates_the_four_indexes(db):
     ]
 
 
+def test_creates_exactly_these_checks(db):
+    # The behaviour tests below prove each check refuses; this proves none refuses more than planned.
+    with psycopg.connect(db["owner"]) as conn:
+        checks = conn.execute(
+            "select pg_get_constraintdef(oid) from pg_constraint where conrelid = 'memory.facts'::regclass and contype = 'c'"
+        ).fetchall()
+    assert sorted(row[0] for row in checks) == [
+        "CHECK (((kind = 'digest'::text) = (origin = 'digest'::text)))",
+        "CHECK (((retired_at IS NULL) = (retired_reason IS NULL)))",
+        "CHECK ((basis = ANY (ARRAY['user_stated'::text, 'tool_observed'::text, 'assistant_inferred'::text])))",
+        "CHECK ((kind = ANY (ARRAY['fact'::text, 'digest'::text])))",
+        "CHECK ((origin = ANY (ARRAY['explicit'::text, 'extracted'::text, 'digest'::text, 'imported'::text])))",
+    ]
+
+
+def test_memory_holds_exactly_the_events_and_facts_tables(db):
+    with psycopg.connect(db["owner"]) as conn:
+        tables = conn.execute(
+            "select table_name from information_schema.tables where table_schema = 'memory' order by table_name"
+        ).fetchall()
+    assert tables == [("events",), ("facts",)]
+
+
+def test_grants_exactly_what_code_uses(db):
+    with psycopg.connect(db["owner"]) as conn:
+        tables = conn.execute(
+            "select grantee, privilege_type from information_schema.role_table_grants"
+            " where table_schema = 'memory' and table_name = 'facts' and grantee like 'memory%' order by 1, 2"
+        ).fetchall()
+        updates = conn.execute(
+            "select grantee, column_name from information_schema.column_privileges where table_schema = 'memory'"
+            " and table_name = 'facts' and grantee like 'memory%' and privilege_type = 'UPDATE' order by 1, 2"
+        ).fetchall()
+    assert tables == [("memory_agent", "INSERT"), ("memory_agent", "SELECT")]
+    assert updates == [("memory_agent", "superseded_by")]
+
+
 def test_row_level_security_is_on(db):
     with psycopg.connect(db["owner"]) as conn:
         assert conn.execute("select relrowsecurity from pg_class where oid = 'memory.facts'::regclass").fetchone() == (True,)
