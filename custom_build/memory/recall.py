@@ -30,8 +30,9 @@ def notes(results):
         provenance = [result["origin"], result["basis"], f"stored {result['stored']}"]
         if result["last_verified"]:
             provenance.append(f"verified {result['last_verified']}")
-        body = result["body"].replace("\n", "\n  ")   # a digest's open items stay inside its note
-        lines.append(f"- {body} [{', '.join(provenance)}]")
+        # Provenance first, so a digest's open items, indented under it, are not read as the tag's subject.
+        body = result["body"].replace("\n", "\n    ")
+        lines.append(f"- [{', '.join(provenance)}] {body}")
     return "\n".join(lines)
 
 
