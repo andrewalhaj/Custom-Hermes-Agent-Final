@@ -142,6 +142,7 @@ class FakeTypeSafe(http.server.ThreadingHTTPServer):
         self.raw = None
         self.cut_off = False
         self.hang_up = False
+        self.refuse_new = None   # answer 422 when the new fact contains this text
         self.requests = []
         self.url = f"http://127.0.0.1:{self.server_address[1]}"
 
@@ -154,13 +155,14 @@ class _TypeSafeHandler(http.server.BaseHTTPRequestHandler):
         if self.server.hang_up:
             self.close_connection = True
             return
-        if self.server.status == 200:
+        refused = self.server.refuse_new and self.server.refuse_new in body["state"]["new"]
+        if self.server.status == 200 and not refused:
             answers = {name: {"type": "noul", "noul": self.server.answers[name]} for name in body["questions"]}
             payload = {"model": body["model"], "answers": answers, "usage": {"input_tokens": 1, "output_tokens": 1}}
         else:
             payload = {"detail": "refused"}
         data = self.server.raw if self.server.raw is not None else json.dumps(payload).encode()
-        self.send_response(self.server.status)
+        self.send_response(422 if refused else self.server.status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data) + (10 if self.server.cut_off else 0)))
         self.end_headers()

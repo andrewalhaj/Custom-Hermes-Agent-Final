@@ -189,3 +189,16 @@ def test_a_retry_stops_at_the_first_judge_failure(home, db, ollama, typesafe):
     asked = len(typesafe.requests)
     run(home, db, ollama.url, typesafe.url, [])   # the judge is still down: one try, not one per queued fact
     assert len(typesafe.requests) == asked + 1
+
+
+def test_a_fact_the_judge_always_refuses_does_not_hold_back_the_rest(home, db, ollama, typesafe):
+    stuck, good = "The deploy runbook is long enough to refuse.", "The report goes out at seven each morning."
+    ollama.vectors = {STORED: [1.0] + [0.0] * 2559}
+    ollama.other = [0.85, 0.5268] + [0.0] * 2558   # both queued facts land in the judge's band
+    typesafe.status = 500
+    run(home, db, ollama.url, typesafe.url, [{"fact": STORED, "basis": "user_stated"},
+                                             {"fact": stuck, "basis": "user_stated"}, {"fact": good, "basis": "user_stated"}])
+    typesafe.status, typesafe.answers, typesafe.refuse_new = 200, {"same_subject": 0.1, "supersedes": 0.1}, "runbook"
+    run(home, db, ollama.url, typesafe.url, [])   # the stuck fact is tried first and fails again
+    run(home, db, ollama.url, typesafe.url, [])   # now it waits behind the good one
+    assert good in [row[0] for row in _facts(db)]
