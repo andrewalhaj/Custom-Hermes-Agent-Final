@@ -50,6 +50,36 @@ CATALOG = {
     "unhandled": "Anything not in the catalog, outside a guard, recorded with its traceback",
 }
 
+# Each failure code's severity, which the daily report prints (#35). High: the build's protection or its
+# record is gone. Medium: one answer or write is worse or delayed. Low: degraded, and the answer still came.
+SEVERITY = {
+    "embed.unavailable": "medium",
+    "embed.model_mismatch": "high",
+    "db.unreachable": "high",
+    "db.auth": "high",
+    "db.query": "medium",
+    "recall.timeout": "medium",
+    "judge.timeout": "medium",
+    "judge.error": "medium",
+    "rerank.fallback": "low",
+    "store.gate_error": "medium",
+    "guard.crash": "high",
+    "guard.not_loaded": "high",
+    "guard.bypassed": "high",
+    "config.unsafe": "high",
+    "config.missing": "high",
+    "redact.failed": "high",
+    "memory.write_rejected": "medium",
+    "events.write_failed": "high",
+    "job.failed": "high",
+    "job.missed": "high",
+    "job.no_output": "medium",
+    "host.missing": "high",
+    "unhandled": "high",
+}
+# The codes the build shows in a turn today, as the block that ends it (settings.check_turn, crash_block).
+SHOWN_IN_TURN = frozenset({"config.missing", "guard.crash"})
+
 RESULTS = ("ok", "empty", "failed", "degraded")
 REASON_LIMIT = 500
 # With settings.CONNECT_TIMEOUT, inside the 10 seconds a guard has for its whole run (ARCHITECTURE.md 5.5).
