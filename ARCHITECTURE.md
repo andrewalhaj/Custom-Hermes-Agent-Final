@@ -351,7 +351,7 @@ create index events_code_idx on memory.events (code, at);
 | `embedding_model` | The model and build that produced the vector |
 | `events.result` | `ok`, `empty` (searched, found nothing), `failed`, or `degraded` (a fallback or a retry succeeded) |
 
-Two SQL functions do the searching: `match_facts` and `match_transcript_chunks`. Each runs the vector and full-text searches and fuses them. `match_facts` reads live rows only; session chunks have no lifecycle, so `match_transcript_chunks` reads every chunk.
+Two SQL functions do the searching: `memory.search_facts` (`0005`, #158) and one for session chunks, which arrives with their table. Each runs the vector and full-text searches and fuses them. `memory.search_facts` reads live rows only; session chunks have no lifecycle, so their search reads every chunk. Each plans every call with its own values (PL/pgSQL `EXECUTE`): a plan reused with generic parameters never chose the vector index.
 
 ### 4.3 Access and migrations
 
