@@ -414,7 +414,7 @@ The reminder alone is not enough, because the model can ignore it as it ignores 
 
 What counts as a checkable question, a question about past work, a managed file or setting, and a sensitive action is defined in each guard's configuration file in this repository, as patterns and lists. Changing one is a pull request like any code change, with the guard's tests updated.
 
-The write gate's first list of sensitive actions (#80): writes into the skills folder by any tool; writes to Hermes's own `config.yaml` and `.env` and to the plugin's folder; and terminal commands that install packages, run `systemctl`, or reach other hosts. The gate reads a `write_file` or `patch` call by the paths the tool will write, and a terminal command by pattern (section 5.6), so "any tool" means those three. Hermes's skill tool, `skill_manage`, is held by `skills.write_approval` instead (next item).
+The write gate's first list of sensitive actions (#80): writes into the skills folder by any tool; writes to Hermes's own `config.yaml` and `.env` and to the plugin's folder; and terminal commands that install packages, run `systemctl`, or reach other hosts. The gate reads a `write_file` or `patch` call by the paths the tool will write, and a terminal command by pattern (section 5.6), so "any tool" means those three. Hermes's skill tool, `skill_manage`, is held by `skills.write_approval` instead (the last item of the list below).
 
 The guards rest on Hermes mechanisms that the table does not name:
 
