@@ -62,14 +62,16 @@ def _refused(failure):
     return failure.startswith("auth error") or (failure.startswith("payment error") and "billing" in failure.lower())
 
 
-def propose(turn_source):
-    """The facts the model proposes, as (body, basis) pairs. Raises ExtractRefused or ExtractError."""
+def ask(task, prompt, payload, max_tokens):
+    """The answer's text from the build's auxiliary `task`, with `payload` sent as JSON after `prompt`.
+    Raises ExtractRefused when the provider refused the account, else ExtractError; an answer from Hermes's
+    fallback is never returned (#148)."""
     route = {}
     try:
         response = auxiliary_client.call_llm(
-            task=TASK, temperature=0, max_tokens=MAX_TOKENS, route_info=route,
-            messages=[{"role": "system", "content": PROMPT},
-                      {"role": "user", "content": json.dumps(turn_source, ensure_ascii=False)}])
+            task=task, temperature=0, max_tokens=max_tokens, route_info=route,
+            messages=[{"role": "system", "content": prompt},
+                      {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}])
     except Exception as exc:   # whatever the provider raises; its status says whether the account was refused
         reason = _redact(f"{type(exc).__name__}: {exc}")[:200]   # redacted before the cut, so no key is halved
         if getattr(exc, "status_code", None) in REFUSED:
@@ -77,14 +79,19 @@ def propose(turn_source):
         raise ExtractError(reason) from exc
     if route.get("fallback_label"):
         # Hermes answered from another model after the task's own provider failed: not the decided route, so
-        # its facts are not used, and the provider's failure is raised as if Hermes had not hidden it (#148).
+        # its answer is not used, and the provider's failure is raised as if Hermes had not hidden it (#148).
         failure = str(route.get("failure", ""))
         reason = _redact(f"fell back to {route['fallback_label']} after {failure}")[:200]
         if _refused(failure):
             raise ExtractRefused(reason)
         raise ExtractError(reason)
     text = auxiliary_client.extract_content_or_reasoning(response).strip()
-    text = text.removeprefix("```json").removeprefix("```").removesuffix("```").strip()   # a fenced answer
+    return text.removeprefix("```json").removeprefix("```").removesuffix("```").strip()   # a fenced answer
+
+
+def propose(turn_source):
+    """The facts the model proposes, as (body, basis) pairs. Raises ExtractRefused or ExtractError."""
+    text = ask(TASK, PROMPT, turn_source, MAX_TOKENS)
     try:
         items = json.loads(text)
         if not isinstance(items, list):
