@@ -39,14 +39,16 @@ def unsafe_settings():
     from hermes_cli.plugins import _resolve_hook_callback_timeout
     from tools.approval_context import _binary_approval_mode, _get_approval_mode
     from tools.write_approval import write_approval_enabled
-    from utils import is_truthy_value
+    from utils import TRUTHY_STRINGS, is_truthy_value
 
     config = load_config_readonly() or {}
     found = []
     if (config.get("memory") or {}).get("provider") != "custom_build":
         found.append("memory.provider is not custom_build")
     found += [f"{part}.write_approval is off" for part in ("memory", "skills") if not write_approval_enabled(part)]
-    if not _redact_enabled():
+    # The gateway exports the key over HERMES_REDACT_SECRETS for its child processes (gateway/run.py), so either off is off.
+    redact_key = (config.get("security") or {}).get("redact_secrets")
+    if not _redact_enabled() or (redact_key is not None and str(redact_key).lower() not in TRUTHY_STRINGS):
         found.append("security.redact_secrets (or HERMES_REDACT_SECRETS) is off")
     if _get_approval_mode() == "off":
         found.append("approvals.mode is off")
