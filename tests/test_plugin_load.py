@@ -50,6 +50,7 @@ print(json.dumps({
     "provider": provider.name if isinstance(provider, MemoryProvider) else None,
     "ordinary_provider_calls": ordinary_provider_calls,
     "redacted": redact_sensitive_text(text),
+    "aux_tasks": {key: entry["defaults"] for key, entry in get_plugin_manager()._aux_tasks.items()},
 }))
 """
 
@@ -171,3 +172,10 @@ def test_hermes_reads_the_plugins_packages_and_they_match_the_project():
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["dependencies"]
     assert declaration.installs_packages
     assert list(declaration.install_requirements) == project
+
+
+def test_ordinary_load_registers_the_extraction_task_on_the_claude_subscription(tmp_path):
+    # #148, decided: Haiku through the Claude subscription; the profile's auxiliary.custom_build_extraction
+    # block can still override the route.
+    defaults = load(tmp_path, provider=False)["aux_tasks"]["custom_build_extraction"]
+    assert (defaults["provider"], defaults["model"]) == ("claude-subscription-directsdk-experimental", "haiku")
