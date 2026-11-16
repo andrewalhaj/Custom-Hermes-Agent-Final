@@ -144,6 +144,15 @@ def _record_job_crash(conn, name, source, exc):
     record(conn, "job.failed", "failed", source=source, reason=reason, detail={"job": name})
 
 
+def exit_note(stop):
+    """Name what run_job recorded before it raised `stop`, and where, for a caller's stderr (#64)."""
+    if isinstance(stop.__cause__, psycopg.OperationalError):
+        code = "db.auth" if refused_login(stop.__cause__) else "db.unreachable"
+        return (f"{code}; not recorded in events: events.write_failed (no connection to the store); "
+                "the details are in Hermes's errors.log")
+    return "unhandled and job.failed; the traceback is in Hermes's errors.log"
+
+
 def boundary(source, connect, on_crash):
     """Wrap a guard that Hermes calls on `pre_llm_call` (ARCHITECTURE.md section 2).
 
