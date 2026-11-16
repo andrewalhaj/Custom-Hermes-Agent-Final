@@ -68,7 +68,8 @@ def check_turn(ctx, **kwargs):
                     session_id=kwargs.get("session_id"))
     return {"action": "block", "message": f"The custom build blocked this turn: config.missing ({names}). "
                                           "Set each one as text, quoting a value YAML would read as a number "
-                                          "or date, then send your message again."}
+                                          "or date, and the connection string as one PostgreSQL can parse, "
+                                          "then send your message again."}
 
 
 def crash_block(exc):

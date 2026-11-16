@@ -77,7 +77,8 @@ def run(ctx):
     if missing := settings.missing_settings(ctx):
         failures.record(None, "config.missing", "failed", source=machine, reason=", ".join(missing))
         print(f"custom-build check failed: config.missing ({', '.join(missing)}): set each one as text, "
-              "quoting a value YAML would read as a number or date; "
+              "quoting a value YAML would read as a number or date, and the connection string as one PostgreSQL "
+              "can parse; "
               "not recorded in events: events.write_failed (no connection to the store)", file=sys.stderr)
         return 1
 
