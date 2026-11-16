@@ -35,7 +35,9 @@ def load_problems():
 def unsafe_settings():
     """Hermes settings with a value the build does not support (`config.unsafe`)."""
     from hermes_cli.config import load_config_readonly
+    from hermes_cli.gateway_migrate_guards import auto_migration_opted_out
     from hermes_cli.plugins import _resolve_hook_callback_timeout
+    from hermes_constants import get_default_hermes_root
     from tools.approval_context import _binary_approval_mode, _get_approval_mode
     from utils import is_truthy_value
 
@@ -54,6 +56,9 @@ def unsafe_settings():
         found.append("compression.in_place is false")
     if len(profiles := installed_profiles()) > 1:
         found.append(f"the host has {len(profiles)} Hermes profiles ({', '.join(profiles)}), not one")
+    # The check runs only at start; with this on, a running gateway also serves a profile added later (#85).
+    if not auto_migration_opted_out(get_default_hermes_root()):
+        found.append("gateway.auto_multiplex_migration is not false")
     return found
 
 
