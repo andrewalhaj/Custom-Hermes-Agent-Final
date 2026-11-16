@@ -9,6 +9,11 @@ def search(conn, embedder, query, project, *, wanted, timeout):
 
     Raises embedding's EmbedUnavailable and ModelMismatch, and psycopg's errors.
     """
+    return candidates(conn, embedder, query, project, wanted=wanted, timeout=timeout)[:wanted]
+
+
+def candidates(conn, embedder, query, project, *, wanted, timeout):
+    """The whole fused candidate pool for `wanted` results (3.6), best first, for delivery's slot rules."""
     limits = write_path.load()["recall"]
     [vector] = embedder.embed(conn, [query], timeout=timeout)
     pool = max(limits["pool_factor"] * wanted, limits["pool_min"])
@@ -20,4 +25,4 @@ def search(conn, embedder, query, project, *, wanted, timeout):
              "last_verified": verified.date().isoformat() if verified else None,
              "found_by": [name for name, rank in (("meaning", meaning), ("words", words)) if rank is not None],
              "ranked_by": "fusion"}
-            for body, kind, origin, basis, created, verified, meaning, words in rows[:wanted]]
+            for body, kind, origin, basis, created, verified, meaning, words in rows]

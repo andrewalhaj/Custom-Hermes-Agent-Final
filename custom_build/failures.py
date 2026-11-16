@@ -230,13 +230,23 @@ def _record_job_crash(conn, name, source, exc):
 PROVIDER = object()
 
 
+class Returns:
+    """`on_crash` for prefetch() and the work it runs (ARCHITECTURE.md section 2): the crash is recorded as
+    `unhandled`, not `guard.crash`, and `value(exc)` is returned, such as a "recall failed" note (#158)."""
+
+    def __init__(self, value):
+        self.value = value
+
+
 def boundary(source, connect, on_crash):
     """Wrap a guard that Hermes calls (ARCHITECTURE.md section 2).
 
     On any exception the guard raises, log it with its traceback, record `guard.crash` with the
     exception's type and message as the reason, and return `on_crash(exc)`: for a guard on
     `pre_llm_call`, the block that ends the turn, which Hermes would otherwise let go ahead; for a
-    guard in log mode, None, so the call goes ahead. `source()` names the machine and `connect()`
+    guard in log mode, None, so the call goes ahead. A provider method passes PROVIDER instead, and
+    prefetch() and the work it runs pass Returns(value): both record `unhandled`, not `guard.crash`;
+    PROVIDER then re-raises, and Returns returns `value(exc)`. `source()` names the machine and `connect()`
     opens a connection for the record, or gives None when there is no store. A connection that fails
     to open is logged as `db.auth` or `db.unreachable`, as in `run_job`; with no connection, or an
     insert the store refuses, the record is logged with events.write_failed, and `on_crash(exc)` is
@@ -258,10 +268,12 @@ def boundary(source, connect, on_crash):
                     _record_lost_connection(lost, machine)
                 except Exception:   # the turn's block must not depend on reaching the store (rule F5)
                     logger.exception("no connection to record guard.crash")
-                if on_crash is PROVIDER:
+                if on_crash is PROVIDER or isinstance(on_crash, Returns):
                     with conn or contextlib.nullcontext():
                         record(conn, "unhandled", "failed", source=machine, reason=reason, session_id=kwargs.get("session_id"))
-                    raise
+                    if on_crash is PROVIDER:
+                        raise
+                    return on_crash.value(exc)
                 with conn or contextlib.nullcontext():   # closes the connection opened for this record
                     record(conn, "guard.crash", "failed", source=machine, reason=reason,
                            session_id=kwargs.get("session_id") or None)   # Hermes passes "" for no session

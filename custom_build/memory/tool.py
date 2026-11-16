@@ -7,6 +7,7 @@ stored fact (CONTRIBUTING.md rule C3); Hermes then reports the call with the sta
 import datetime
 
 import psycopg
+from agent.memory_provider import spawn_context_thread
 from agent.redact import redact_sensitive_text
 from agent.runtime_cwd import resolve_agent_cwd
 
@@ -18,6 +19,7 @@ from . import (
     judge,
     project,
     queue,
+    recall,
     search,
     store,
     write_path,
@@ -60,19 +62,69 @@ def memory_search(args, *, machine, session_id, turn, embedder, connect):
     query = redact_sensitive_text(str(args.get("query", "")), force=True)   # it goes to Ollama and the store
     if not query.strip():
         return {"refused": "query is empty"}
+    wanted = write_path.load()["recall"]["results"]
+    outcome = _searched(query, machine=machine, session_id=session_id, turn=turn, embedder=embedder, connect=connect,
+                        wanted=wanted)
+    return {"results": outcome["results"][:wanted]} if "results" in outcome else outcome
+
+
+def recall_notes(query, *, machine, session_id, turn, embedder, connect):
+    """prefetch()'s notes for a message (3.5): searched under the recall deadline, at most one digest, cut to the
+    results per message; a failure or a missed deadline is reported in the turn with its code."""
+    query = redact_sensitive_text(str(query or ""), force=True)   # Hermes redacts too; the build's is forced
+    if not query.strip():
+        return ""   # 3.5 point 1: only an empty message is skipped
+    limits = write_path.load()["recall"]
+    box = {}
+
+    # The recall thread is a Hermes entry point's work too: the boundary wrapper records a crash in it as
+    # unhandled (CONTRIBUTING.md rule C2), with its session, and the turn is told below.
+    @failures.boundary(lambda: machine, connect, failures.Returns(lambda exc: None))
+    def run(session_id):
+        box["outcome"] = _searched(query, machine=machine, session_id=session_id, turn=turn, embedder=embedder,
+                                   connect=connect, wanted=limits["results"], deadline=limits["deadline"])
+
+    # Hermes's own thread helper, so the thread keeps the session's context: its directory, and so its project.
+    worker = spawn_context_thread(run, name="custom_build-recall", kwargs={"session_id": session_id})
+    worker.start()
+    worker.join(limits["deadline"])
+    if worker.is_alive():   # the store cuts the search off at the same deadline; the turn does not wait for it
+        record = spawn_context_thread(_with_store, name="custom_build-recall-timeout", args=(
+            machine, session_id, connect, lambda conn: failures.record(
+                conn, "recall.timeout", "failed", source=machine, project=project.key(resolve_agent_cwd()),
+                session_id=session_id, turn=turn, reason=f"no answer within {limits['deadline']} seconds")))
+        record.start()   # off the turn's path: opening a connection to record it must not pass Hermes's 8 seconds
+        return recall.failed("recall.timeout")
+    if "outcome" not in box:   # it raised, and the boundary wrapper recorded it
+        return recall.failed("unhandled")
+    outcome = box["outcome"]
+    if "error" in outcome:
+        return recall.failed(outcome["error"])
+    return recall.notes(recall.capped(outcome["results"], wanted=limits["results"],
+                                      digests=limits["digests_per_message"]))
+
+
+def _searched(query, *, machine, session_id, turn, embedder, connect, wanted, deadline=None):
+    """The fused candidate pool for `wanted` results as {"results": [...]}, or {"error": code}, recorded. With a
+    `deadline`, the store cancels any statement that runs past it, so a stalled store releases the search."""
     key = project.key(resolve_agent_cwd())
     fields = {"source": machine, "project": key, "session_id": session_id, "turn": turn}
 
     def work(conn):
+        if deadline is not None:   # an int in milliseconds, so it is safe to write into the statement
+            conn.execute(f"set statement_timeout = {int(deadline * 1000)}")
         try:
-            return {"results": search.search(conn, embedder, query, key, wanted=write_path.load()["recall"]["results"],
-                                             timeout=TIMEOUT)}
+            return {"results": search.candidates(conn, embedder, query, key, wanted=wanted, timeout=TIMEOUT)}
         except embedding.EmbedUnavailable as exc:
             failures.record(conn, "embed.unavailable", "failed", reason=str(exc), **fields)
             return {"error": "embed.unavailable"}
         except embedding.ModelMismatch as exc:
             failures.record(conn, "embed.model_mismatch", "failed", reason=str(exc), **fields)
             return {"error": "embed.model_mismatch"}
+        except psycopg.errors.QueryCanceled:
+            # The store cancelled a recall statement at the deadline: prefetch has already told the turn and
+            # recorded recall.timeout. It is an OperationalError too, but the store was reached (#158 review).
+            return {"error": "recall.timeout"}
         except psycopg.OperationalError as exc:
             failures.record(conn, "db.unreachable", "failed", reason=str(exc), **fields)
             return {"error": "db.unreachable"}

@@ -13,7 +13,7 @@ from agent.memory_provider import MemoryProvider
 from agent.secret_scope import get_secret
 
 from . import failures, settings
-from .memory import embedding, judge, store, tool
+from .memory import embedding, judge, recall, store, tool
 
 # Supabase API key formats, which Hermes's redactor does not cover (CONTRIBUTING.md rule L4).
 REDACTION_PATTERNS = (r"sb_secret_[A-Za-z0-9_-]{20,}", r"sb_publishable_[A-Za-z0-9_-]{20,}")
@@ -122,6 +122,18 @@ class CustomBuildProvider(MemoryProvider):
             return
         tool.write_digest(messages or [], machine=machine, session_id=self.session_id, turn=self.turn,
                           embedder=self.embedder, judge_at=_judge(), connect=settings.connect)
+
+    # ARCHITECTURE.md section 2: a crash is recorded as unhandled and the turn gets a "recall failed" note.
+    @failures.boundary(_machine, settings.connect, failures.Returns(lambda exc: recall.failed("unhandled")))
+    def prefetch(self, query: str, *, session_id: str = "") -> str:
+        """The recalled notes for the coming turn (ARCHITECTURE.md 3.5), or a failure with its code."""
+        machine = _machine()
+        if missing := settings.missing_store_settings(settings.plugin_context()):
+            failures.record(None, "config.missing", "failed", source=machine, reason=", ".join(missing),
+                            session_id=self.session_id)
+            return recall.failed("config.missing")
+        return tool.recall_notes(query, machine=machine, session_id=self.session_id, turn=self.turn,
+                                 embedder=self.embedder, connect=settings.connect)
 
     def get_tool_schemas(self) -> list:
         return [tool.SCHEMA, tool.SEARCH_SCHEMA]
