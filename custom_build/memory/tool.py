@@ -5,6 +5,7 @@ stored fact (CONTRIBUTING.md rule C3); Hermes then reports the call with the sta
 """
 
 import datetime
+import threading
 
 import psycopg
 from agent.redact import redact_sensitive_text
@@ -18,6 +19,7 @@ from . import (
     judge,
     project,
     queue,
+    recall,
     search,
     store,
     write_path,
@@ -60,13 +62,53 @@ def memory_search(args, *, machine, session_id, turn, embedder, connect):
     query = redact_sensitive_text(str(args.get("query", "")), force=True)   # it goes to Ollama and the store
     if not query.strip():
         return {"refused": "query is empty"}
+    wanted = write_path.load()["recall"]["results"]
+    outcome = _searched(query, machine=machine, session_id=session_id, turn=turn, embedder=embedder, connect=connect,
+                        wanted=wanted)
+    return {"results": outcome["results"][:wanted]} if "results" in outcome else outcome
+
+
+def recall_notes(query, *, machine, session_id, turn, embedder, connect):
+    """prefetch()'s notes for a message (3.5): searched under the recall deadline, at most one digest, cut to the
+    results per message; a failure or a missed deadline is reported in the turn with its code."""
+    query = redact_sensitive_text(str(query or ""), force=True)   # Hermes redacts too; the build's is forced
+    if not query.strip():
+        return ""   # 3.5 point 1: only an empty message is skipped
+    limits = write_path.load()["recall"]
+    box = {}
+
+    def run():
+        try:
+            box["outcome"] = _searched(query, machine=machine, session_id=session_id, turn=turn, embedder=embedder,
+                                       connect=connect, wanted=limits["results"])
+        except Exception as exc:   # re-raised below, so the provider's boundary records it as unhandled
+            box["raised"] = exc
+
+    worker = threading.Thread(target=run, name="custom_build-recall", daemon=True)
+    worker.start()
+    worker.join(limits["deadline"])
+    if worker.is_alive():   # the search runs on, but the turn is not held past the deadline
+        _with_store(machine, session_id, connect, lambda conn: failures.record(
+            conn, "recall.timeout", "failed", source=machine, project=project.key(resolve_agent_cwd()),
+            session_id=session_id, turn=turn, reason=f"no answer within {limits['deadline']} seconds"))
+        return recall.failed("recall.timeout")
+    if "raised" in box:
+        raise box["raised"]
+    outcome = box["outcome"]
+    if "error" in outcome:
+        return recall.failed(outcome["error"])
+    return recall.notes(recall.capped(outcome["results"], wanted=limits["results"],
+                                      digests=limits["digests_per_message"]))
+
+
+def _searched(query, *, machine, session_id, turn, embedder, connect, wanted):
+    """The fused candidate pool for `wanted` results as {"results": [...]}, or {"error": code}, recorded."""
     key = project.key(resolve_agent_cwd())
     fields = {"source": machine, "project": key, "session_id": session_id, "turn": turn}
 
     def work(conn):
         try:
-            return {"results": search.search(conn, embedder, query, key, wanted=write_path.load()["recall"]["results"],
-                                             timeout=TIMEOUT)}
+            return {"results": search.candidates(conn, embedder, query, key, wanted=wanted, timeout=TIMEOUT)}
         except embedding.EmbedUnavailable as exc:
             failures.record(conn, "embed.unavailable", "failed", reason=str(exc), **fields)
             return {"error": "embed.unavailable"}
