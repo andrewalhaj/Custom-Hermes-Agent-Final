@@ -74,10 +74,11 @@ def run_gate(tmp_path, db, steps, *, mode="log", scenario="plain"):
     gate_config.write_text(text.replace('\nmode = "log"\n', f'\nmode = "{mode}"\n'), encoding="utf-8")
     config = {"memory": {"provider": "custom_build"},
               "plugins": {"enabled": ["custom_build"],
-                          "entries": {"custom_build": {"settings": {"machine_name": "host-a"}}}}}
+                          "entries": {"custom_build": {"settings": {"machine_name": "host-a", "judge_model": "jev-1.14.0"}}}}}
     (home / "config.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
     environment = {"HERMES_HOME": str(home), "HOME": str(tmp_path), "PATH": "/usr/bin:/bin",
-                   "CUSTOM_BUILD_DATABASE_URL": db["agent"]}
+                   "CUSTOM_BUILD_DATABASE_URL": db["agent"],
+                   "TYPESAFE_API_KEY": "test-key-not-a-real-one"}   # both settings the per-turn check needs (#132)
     result = subprocess.run([sys.executable, "-c", SCENARIO, scenario, json.dumps(steps)], capture_output=True,
                             text=True, env=environment, cwd=tmp_path, timeout=120, check=False)
     assert result.returncode == 0, result.stderr[-2000:]
