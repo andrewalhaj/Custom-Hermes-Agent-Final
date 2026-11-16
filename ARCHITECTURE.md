@@ -221,8 +221,8 @@ Hermes caps the context that one `pre_llm_call` hook adds to a turn at 10,000 ch
 
 Still open, each tracked in its own issue:
 
-- Whether reference chunks move into the shared store, decided once there is a set of documents to search and the eval set has numbers (#3).
-- Where the memory provider reads each message's uid, and what happens to a session chunk when its uid appears on more than one row, its text changes or the message has none, to a branch's copied history, and to facts drawn from messages a rewind removed (#17).
+- Whether reference chunks move into the shared store, decided with eval-set numbers once there is a set of documents to search (#3).
+- Where the memory provider reads each message's uid, and what happens to a session chunk when its uid appears on more than one row, its text changes or the message has none, to a branch's copied history, and to facts drawn from messages a rewind removed, settled when the sessions store is built (section 3.1) (#17).
 - How the build detects a gateway session that runs without it: one created in safe mode, or with the profile's settings ignored (#23).
 - Whether a search by the picked action finds what a search by a freely written one would, and whether a low-probability pick should count (#26).
 
