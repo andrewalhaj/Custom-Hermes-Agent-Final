@@ -280,3 +280,14 @@ def test_job_wrapper_records_an_unexpected_error_while_connecting(caplog):
         (logging.WARNING, "job.failed"), (logging.ERROR, "events.write_failed"),
     ]
     assert any(r.exc_info and r.exc_info[0] is ValueError for r in caplog.records)   # the traceback is logged
+
+
+@pytest.mark.parametrize("login, written", [("agent", True), ("maint", False), (None, False)])
+def test_record_says_whether_it_wrote_the_row(db, login, written):
+    # The maintenance login cannot insert into events, and with no connection there is no store (#106).
+    conn = psycopg.connect(db[login], autocommit=True) if login else None
+    try:
+        assert failures.record(conn, "db.query", "failed", source="host-a") is written
+    finally:
+        if conn:
+            conn.close()
