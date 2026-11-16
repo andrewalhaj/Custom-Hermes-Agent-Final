@@ -92,7 +92,7 @@ Every machine that runs the agent:
 | Job | Runs | What it does | Its own failure |
 |---|---|---|---|
 | Retention | Daily | Deletes `events` rows and session chunks older than 90 days. Misses worth keeping are copied into the eval set before then (ARCHITECTURE.md section 3.8). Runs inside the database: a function a migration adds, scheduled by Supabase's `pg_cron`, so no host holds a login that can delete (ARCHITECTURE.md section 4.3). `pg_cron` 1.6.4 is available on the project but not yet installed.[9] | A run records a success event; a missing one is `job.missed` |
-| Heartbeat | Every 6 hours, on every agent host (#43) | Writes one `host.heartbeat` event | `job.failed`; a heartbeat that never runs is caught by the job-health check |
+| Heartbeat | Every 6 hours, on every agent host (#43) | Writes one `host.heartbeat` event | Exits non-zero, so Hermes sends its error alert, which names the code: `config.missing`, `db.auth` or `db.unreachable`, `events.write_failed`, or `unhandled` and `job.failed`. A heartbeat that never runs is caught by the job-health check |
 | Job-health check | Daily, before the report | Flags any job with no fresh success (`job.missed`) and any job that took input but produced nothing for more than one run (`job.no_output`), and records `host.missing` for any machine in `<agent-hosts>` with no heartbeat in the last 24 hours (ARCHITECTURE.md section 6.3). A host's missing heartbeat is reported as `host.missing` only, not also as `job.missed`. | Reported by the report's absence |
 | Daily failure report | Daily at 07:00, the job host's local time | Sends the day's failures from `events`, grouped by code and machine, and every "always" answer given to the write gate that day, as a dated Markdown file to `<operators-channel>`. With nothing to report it sends a one-line all-clear that names the jobs that ran. | A missing report |
 
@@ -104,10 +104,11 @@ Every job other than retention is a `hermes custom-build <job>` subcommand, ship
 
 **Setting up the heartbeat** on each agent host, in its Hermes home (#106):
 
-1. Copy `plugins/custom_build/scripts/custom-build-heartbeat.py` into `scripts/`.
+1. Copy `plugins/custom_build/scripts/custom-build-heartbeat.py` into `scripts/`, creating that folder if it does not exist.
 2. `hermes cron create "every 6h" --name custom-build-heartbeat --script custom-build-heartbeat.py --no-agent --deliver <operators-channel>`
+3. `hermes cron run <job-id>`, with the id step 2 printed, runs it on the scheduler's next tick rather than 6 hours later; `events` then holds a `host.heartbeat` row with the host's name.
 
-A run that succeeds prints nothing, so Hermes sends nothing; a failed run sends Hermes's error alert to `<operators-channel>`.[1]
+A run that succeeds prints nothing, so Hermes sends nothing; a failed run sends Hermes's error alert to `<operators-channel>`, carrying the line the job printed with its failure code.[1]
 
 The report runs as a Hermes script-only cron job (`--no-agent`): it uses no model, and Hermes delivers the script's output to the configured target. A script that exits non-zero or times out makes Hermes deliver an error alert instead.[1]
 
@@ -146,7 +147,7 @@ The same applies to every other direct dependency: read its release notes in its
 
 | Bundled plugin | Used | Why |
 |---|---|---|
-| The messaging platform that carries `<operators-channel>` | Yes, configured | The daily failure report is delivered through it (section 4) |
+| The messaging platform that carries `<operators-channel>` | Yes, configured | The daily failure report and the scheduled jobs' error alerts are delivered through it (section 4) |
 | `security-guidance` | Yes, enabled in its default warn mode | It adds a warning to the result of a file write whose content matches a known-dangerous code pattern. It runs on the machine and sends nothing off it.[3] It only warns, so it is not one of the build's guards (ARCHITECTURE.md section 5). Its block mode stays off, because its patterns have false positives. |
 | A web search or page-fetch backend | Each deployment's choice | The build does not ship one. A deployment that configures one adds what that backend receives to its own list of what leaves the host (ARCHITECTURE.md section 3.7). |
 | Any other memory provider | Never | Hermes runs one external memory provider, and it is this build's |
