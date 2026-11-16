@@ -56,7 +56,9 @@ def mirror(action, content, metadata, *, machine, session_id, turn, embedder, ju
 
     def work(conn):
         if action == "remove":
-            store.retire(conn, key, body, "removed from built-in memory")
+            # Hermes sends a remove with empty content; the removed entry is in previous_content.
+            removed = redact_sensitive_text(str(metadata.get("previous_content", "")), force=True)
+            store.retire(conn, key, removed, "removed from built-in memory")
             return
         fact = store.Fact(body=body, basis="user_stated", project=key, source=machine, session_id=session_id,
                           source_turn=turn)
