@@ -14,8 +14,6 @@ TASK = "custom_build_extraction"
 DEFAULTS = {"provider": "claude-subscription-directsdk-experimental", "model": "haiku"}
 BASES = ("user_stated", "tool_observed")
 REFUSED = (401, 402, 403)   # the provider refused the account: logged out, billing, forbidden
-# Hermes's reasons for the same refusals when its fallback answered instead (agent/auxiliary_error_policy.py).
-REFUSED_REASONS = ("auth error", "payment error")
 MAX_TOKENS = 1024
 
 PROMPT = (
@@ -58,6 +56,12 @@ def source(user_content, messages):
     return {"user": _redact(_text(user_content)), "tool_results": [_redact(r) for r in results if r]}
 
 
+def _refused(failure):
+    """Whether Hermes's route failure (agent/auxiliary_error_policy.py's labels) is the account being refused.
+    Hermes also labels a quota 429 "payment error"; a plan limit is not enforcement, so only billing counts."""
+    return failure.startswith("auth error") or (failure.startswith("payment error") and "billing" in failure.lower())
+
+
 def propose(turn_source):
     """The facts the model proposes, as (body, basis) pairs. Raises ExtractRefused or ExtractError."""
     route = {}
@@ -76,7 +80,7 @@ def propose(turn_source):
         # its facts are not used, and the provider's failure is raised as if Hermes had not hidden it (#148).
         failure = str(route.get("failure", ""))
         reason = _redact(f"fell back to {route['fallback_label']} after {failure}")[:200]
-        if failure.startswith(REFUSED_REASONS):
+        if _refused(failure):
             raise ExtractRefused(reason)
         raise ExtractError(reason)
     text = auxiliary_client.extract_content_or_reasoning(response).strip()
