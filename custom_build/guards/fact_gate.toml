@@ -28,7 +28,7 @@ value = '''\bwhat(?:'s|\s+is|\s+are)\s+(?:the\s+)?(?:current\s+)?(?:value|settin
 count = '''\bhow\s+(?:many|much)\b'''
 support = '''\bdoes\s+(?:[\w.-]+\s+){1,3}support\b'''
 date = '''\bwhen\s+(?:is|was|did|does|will)\b'''
-error = '''(?s)(?=.*\?)(?=.*\b(?:errors?|exceptions?|tracebacks?|fail(?:s|ed|ing|ures?)?)\b)'''   # a question naming a failure
+error = '''(?s)\A(?=.*\?)(?=.*\b(?:errors?|exceptions?|tracebacks?|fail(?:s|ed|ing|ures?)?)\b)'''   # a question naming a failure; anchored, so it reads the message once
 
 # A reply that needs a documentation lookup too: case-insensitive patterns on an armed turn's reply.
 [needs_documentation]
