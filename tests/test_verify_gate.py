@@ -47,7 +47,13 @@ def settle():
 answers = []
 for n, step in enumerate(steps):
     kind, session = step[0], step[1]
-    if kind == "pre":
+    if kind == "corrupt":   # the plugin's state file, as Hermes names it, made unreadable
+        from hermes_cli.plugins_state import PluginState
+        path = PluginState("custom_build").path
+        assert path.exists(), path
+        path.write_text("{bad", encoding="utf-8")
+        answers.append(None)
+    elif kind == "pre":
         answers.append(resolve_pre_tool_block(step[2], step[3], session_id=session, task_id="t1"))
     elif kind == "post":
         _emit_post_tool_call_hook(function_name=step[2], function_args=step[3], result="{}", task_id="t1",
@@ -200,3 +206,29 @@ def test_a_crash_in_the_gate_is_recorded_and_the_call_goes_ahead(tmp_path, db):
     assert report["answers"] == [None], output
     assert [(code, reason, session) for code, _, reason, _, _, session in rows] == [
         ("guard.crash", "KeyError: 'boom'", "s1")], output
+
+
+def test_only_the_100_most_recently_active_sessions_keep_their_reads(tmp_path, db):
+    env = tmp_path / "home" / ".env"
+    read = [["post", f"s{n}", "read_file", {"path": str(env)}, "ok"] for n in range(100)]   # s0 .. s99
+    steps = [*read, ["post", "s0", "read_file", {"path": str(env)}, "ok"],   # s0 active again, so s1 is now oldest
+             ["post", "s100", "read_file", {"path": str(env)}, "ok"]]   # the 101st session drops the oldest
+    steps += [["pre", s, "patch", {"path": str(env), "old_string": "a", "new_string": "b"}] for s in ("s1", "s0", "s100")]
+    _, output, rows = run_gate(tmp_path, db, steps)
+    assert [(code, session) for code, *_, session in rows] == [("verify_gate.would_block", "s1")], output
+
+
+def test_an_unreadable_state_file_troubles_only_calls_on_the_list(tmp_path, db):
+    home = tmp_path / "home"
+    steps = [["post", "s1", "read_file", {"path": str(home / ".env")}, "ok"],   # creates the state file
+             ["corrupt", "s1"],
+             ["pre", "s1", "read_file", {"path": str(tmp_path / "notes.txt")}],
+             ["reply", "s1", "hi"]]
+    _, output, rows = run_gate(tmp_path, db, steps)
+    assert rows == [], output
+
+
+def test_a_chained_hermes_config_command_is_read_whole(tmp_path, db):
+    steps = [["pre", "s1", "terminal", {"command": "hermes config get approvals.mode && hermes config set approvals.mode off"}]]
+    _, output, rows = run_gate(tmp_path, db, steps)
+    assert [rule for _, rule in rules(rows)] == ["approvals.mode"], output
