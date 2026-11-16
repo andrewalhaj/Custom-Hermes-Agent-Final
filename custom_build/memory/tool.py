@@ -9,7 +9,7 @@ from agent.redact import redact_sensitive_text
 from agent.runtime_cwd import resolve_agent_cwd
 
 from .. import failures
-from . import embedding, judge, project, queue, store, write_path
+from . import embedding, extraction, judge, project, queue, store, write_path
 
 BASES = ("user_stated", "tool_observed", "assistant_inferred")
 TIMEOUT = 5   # seconds for each answer from Ollama while a fact is stored
@@ -72,6 +72,35 @@ def mirror(action, content, metadata, *, machine, session_id, turn, embedder, ju
     _with_store(machine, session_id, connect, work)
 
 
+def extract(user_content, messages, *, machine, session_id, turn, embedder, judge_at, connect):
+    """Store the facts the extraction model proposes from a finished turn, each through the judge's gate
+    (3.3 step 3) and then the store function, with origin `extracted` (#148)."""
+    turn_source = extraction.source(user_content, messages)
+    fields = {"source": machine, "project": project.key(resolve_agent_cwd()), "session_id": session_id, "turn": turn}
+    failure, proposals = None, []
+    try:   # before the store is opened: the call can take as long as its auxiliary timeout
+        proposals = extraction.propose(turn_source)
+    except (extraction.ExtractRefused, extraction.ExtractError) as exc:
+        failure = exc
+    if not failure and not proposals:
+        return
+
+    def work(conn):
+        if isinstance(failure, extraction.ExtractRefused):
+            failures.record(conn, "extract.refused", "failed", reason=str(failure), **fields)
+            return
+        if failure:
+            failures.record(conn, "extract.error", "failed", reason=str(failure), **fields)
+            return
+        for body, basis in proposals:
+            fact = store.Fact(body=redact_sensitive_text(body, force=True), basis=basis, project=fields["project"],
+                              source=machine, session_id=session_id, source_turn=turn, origin="extracted",
+                              gate=turn_source)
+            _save(conn, fact, embedder=embedder, judge_at=judge_at)
+
+    _with_store(machine, session_id, connect, work)
+
+
 def _update(conn, fields, change, *args):
     """change(conn, *args) in a savepoint, a refused or failed update recorded as db.query or db.unreachable."""
     try:
@@ -112,6 +141,8 @@ def attempt(conn, fact, *, embedder, judge_at):
     """store.store(), with each failure it expects recorded under its code and returned as {"error": code}."""
     fields = {"source": fact.source, "project": fact.project, "session_id": fact.session_id, "turn": fact.source_turn}
     try:
+        if fact.gate is not None and not _kept(fact, judge_at):
+            return {"dropped": "the judge did not keep it"}
         return store.store(conn, fact, embedder=embedder, judge=judge_at, timeout=TIMEOUT)
     except embedding.EmbedUnavailable as exc:
         failures.record(conn, "embed.unavailable", "failed", reason=str(exc), **fields)
@@ -131,6 +162,13 @@ def attempt(conn, fact, *, embedder, judge_at):
     except psycopg.Error as exc:
         failures.record(conn, "db.query", "failed", reason=str(exc), **fields)
         return {"error": "db.query"}
+
+
+def _kept(fact, judge_at):
+    """The gate on an extracted fact: worth keeping, and supported by its source turn. Raises the judge's errors."""
+    answers = judge.keep_answers(fact.body, fact.gate, url=judge_at.url, key=judge_at.key, model=judge_at.model,
+                                 timeout=judge.DEADLINE)
+    return judge.keeps(answers)
 
 
 def retry_queued(conn, *, embedder, judge_at):

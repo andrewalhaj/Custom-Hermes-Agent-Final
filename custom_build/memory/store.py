@@ -24,6 +24,7 @@ class Fact:
     session_id: str | None
     source_turn: int | None
     origin: str = "explicit"
+    gate: dict | None = None   # an extracted fact's source turn, which the judge checks it against first
 
 
 @dataclasses.dataclass(frozen=True)
