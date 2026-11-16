@@ -111,8 +111,8 @@ class CustomBuildProvider(MemoryProvider):
 
     @failures.boundary(_machine, settings.connect, failures.PROVIDER)
     def on_session_end(self, messages: list) -> None:
-        """Write the session's digest if it is long (ARCHITECTURE.md 3.3). Hermes calls this at a real session
-        boundary, before it rebinds the session id."""
+        """Write the session's digest if it is long (ARCHITECTURE.md 3.3). Hermes calls this at a session's end, and
+        also when the gateway evicts an idle agent whose session can resume (#156), before any session id change."""
         if not self.primary:
             return
         machine = _machine()
