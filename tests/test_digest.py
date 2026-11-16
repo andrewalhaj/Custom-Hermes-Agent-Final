@@ -85,12 +85,18 @@ runs = json.loads(sys.argv[6])
 class Refusal(RuntimeError):
     status_code = 401
 
+try:   # a JSON list is one answer per call, in order
+    answers = json.loads(answer) if json.loads(answer).__class__ is list else None
+except ValueError:
+    answers = None
+
 def fake_call_llm(**kwargs):
     with open(sent_path, "a") as f:
         f.write(json.dumps(kwargs["messages"]) + "\n")
     if answer == "refused":
         raise Refusal("Claude Code is not logged in")
-    return {"choices": [{"message": {"role": "assistant", "content": answer}}]}
+    text = json.dumps(answers.pop(0)) if answers is not None else answer
+    return {"choices": [{"message": {"role": "assistant", "content": text}}]}
 
 auxiliary_client.call_llm = fake_call_llm
 provider = plugins.memory.load_memory_provider("custom_build")
@@ -200,3 +206,20 @@ def test_a_secret_in_the_session_never_reaches_the_model_the_judge_the_store_or_
     assert all(FAKE_KEY not in json.dumps(r["body"]) for r in typesafe.requests)
     assert all(FAKE_KEY not in row[0] for row in _rows(db))
     assert FAKE_KEY not in output
+
+
+def test_two_digests_queued_for_one_session_store_only_one(home, db, ollama, typesafe):
+    # #155 review: a session ended twice while the judge is down queues two; the retry stores one.
+    typesafe.status = 500
+    two = json.dumps([{"summary": SUMMARY, "open_items": []}, {"summary": SUMMARY + " It also fixed the unit.",
+                                                               "open_items": []}])
+    end(home, db, ollama.url, typesafe.url, two, [_session(10), _session(12)])
+    typesafe.status, typesafe.answers = 200, {"worth_keeping": 0.8}
+    end(home, db, ollama.url, typesafe.url, ANSWER, [])   # the next start retries the queue
+    assert [row[1] for row in _rows(db)] == ["digest"]
+
+
+def test_a_newest_message_over_the_cap_is_cut_not_left_out():
+    # #155 review: otherwise the model is sent an empty transcript.
+    messages = [{"role": "user", "content": "x" * 50}]
+    assert digest.transcript(messages, max_chars=20) == [{"role": "user", "content": "x" * 20}]
