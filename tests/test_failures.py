@@ -251,6 +251,27 @@ def test_boundary_passes_a_normal_answer_through_without_opening_a_connection():
     assert failures.boundary(_host_a, connect, _block)(lambda **kwargs: None)(session_id="s1") is None
 
 
+# The boundary wrapper's row for a provider method other than prefetch (ARCHITECTURE.md section 2).
+
+def test_boundary_records_a_provider_crash_as_unhandled_and_re_raises(db, caplog):
+    caplog.set_level(logging.INFO, logger=failures.__name__)
+    method = failures.boundary(_host_a, lambda: psycopg.connect(db["agent"], autocommit=True),
+                               failures.PROVIDER)(_guard_that_crashes)
+    with pytest.raises(KeyError):
+        method(session_id="s1")
+    rows = _rows(db["owner"])
+    assert [(r[0], r[2], r[4], r[5]) for r in rows] == [("host-a", "s1", "unhandled", "failed")]
+    assert rows[0][6] == "KeyError: 'boom'"
+    assert any(r.exc_info and r.exc_info[0] is KeyError for r in caplog.records)   # the traceback is logged
+
+
+def test_boundary_re_raises_a_provider_crash_with_no_store(caplog):
+    caplog.set_level(logging.INFO, logger=failures.__name__)
+    with pytest.raises(KeyError):
+        failures.boundary(_host_a, lambda: None, failures.PROVIDER)(_guard_that_crashes)()
+    assert _codes(caplog) == [(logging.WARNING, "unhandled"), (logging.ERROR, "events.write_failed")]
+
+
 def test_boundary_with_no_store_logs_the_lost_record_and_still_answers(caplog):
     caplog.set_level(logging.INFO, logger=failures.__name__)
     guard = failures.boundary(_host_a, lambda: None, _block)(_guard_that_crashes)

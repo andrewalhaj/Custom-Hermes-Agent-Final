@@ -47,6 +47,17 @@ def machine(ctx):
     return value if _usable(value) else "unknown"
 
 
+def plugin_context():
+    """A context that reads the build's settings as Hermes does, for the memory-provider load.
+
+    That load's own context forwards registration calls only, so it has no `get_config`; Hermes builds
+    a context the same way to forward them (Hermes v0.23.1, `plugins/memory/__init__.py`).
+    """
+    from hermes_cli.plugins import PluginContext, PluginManifest, get_plugin_manager
+
+    return PluginContext(PluginManifest(name="custom_build", key="custom_build"), get_plugin_manager())
+
+
 def connect():
     """A new connection to the store, or None when no URL is set."""
     from agent.secret_scope import get_secret
