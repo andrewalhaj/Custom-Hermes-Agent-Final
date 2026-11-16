@@ -109,6 +109,20 @@ class CustomBuildProvider(MemoryProvider):
         tool.extract(user_content, messages or [], machine=machine, session_id=self.session_id, turn=self.turn,
                      embedder=self.embedder, judge_at=_judge(), connect=settings.connect)
 
+    @failures.boundary(_machine, settings.connect, failures.PROVIDER)
+    def on_session_end(self, messages: list) -> None:
+        """Write the session's digest if it is long (ARCHITECTURE.md 3.3). Hermes calls this at a real session
+        boundary, before it rebinds the session id."""
+        if not self.primary:
+            return
+        machine = _machine()
+        if missing := settings.missing_settings(settings.plugin_context()):
+            failures.record(None, "config.missing", "failed", source=machine, reason=", ".join(missing),
+                            session_id=self.session_id)
+            return
+        tool.write_digest(messages or [], machine=machine, session_id=self.session_id, turn=self.turn,
+                          embedder=self.embedder, judge_at=_judge(), connect=settings.connect)
+
     def get_tool_schemas(self) -> list:
         return [tool.SCHEMA]
 
@@ -144,11 +158,14 @@ def register(ctx) -> None:
 
     from . import failures, settings
     from .guards import fact_gate, verify_gate, write_gate
-    from .memory import extraction
+    from .memory import digest, extraction
 
     ctx.register_auxiliary_task(extraction.TASK, display_name="Custom build: fact extraction",
                                 description="Proposes facts from each turn's user message and tool results (#148)",
                                 defaults=extraction.DEFAULTS)
+    ctx.register_auxiliary_task(digest.TASK, display_name="Custom build: session digest",
+                                description="Summarises a long session at its end (#155)",
+                                inherit_from=extraction.TASK)
 
     @failures.boundary(lambda: settings.machine(ctx), settings.connect, settings.crash_block)
     def check_turn(**kwargs):

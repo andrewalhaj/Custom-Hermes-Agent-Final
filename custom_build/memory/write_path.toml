@@ -51,8 +51,12 @@ instructions = "Does `source` state what `fact` says?"
 criteria.true = "The user's message says it outright, or a tool result shows it directly, such as in a command's output or a file."
 criteria.false = "`source` does not say it, only hints at it, or says something different."
 
-# The gate on a session's digest (section 3.3 step 3, #155): one Noul about the digest alone, dropped at the
-# gate's drop score. A digest has no support check.
+# A session's digest (section 3.3, #155). A session is long, and gets one, at this many messages (3.6), not
+# counting system prompts. Its gate is one Noul about the digest alone, dropped at the gate's drop score;
+# a digest has no support check.
+[digest]
+long_session = 20
+
 [digest.questions.worth_keeping]
 instructions = "Is `digest` worth keeping as a record of this session for later sessions with this user?"
 criteria.true = "It records decisions, changes, findings or open work that a later session could use."

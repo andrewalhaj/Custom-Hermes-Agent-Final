@@ -73,6 +73,12 @@ def store(conn, fact, *, embedder, judge, timeout):
     return {"stored": row[0], "superseded": old}
 
 
+def has_digest(conn, session_id):
+    """Whether the session already has a digest, live or not (3.3: one for each long session)."""
+    return conn.execute("select 1 from memory.facts where session_id = %s and kind = 'digest' limit 1",
+                        (session_id,)).fetchone() is not None
+
+
 def identical(conn, project, body):
     """The id of the live fact in the project with the same text as `body`, or None."""
     return _identical(conn, project, body_hash(body))
