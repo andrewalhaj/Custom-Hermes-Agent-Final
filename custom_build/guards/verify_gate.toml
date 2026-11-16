@@ -1,0 +1,49 @@
+# The verify gate's mode and its lists (ARCHITECTURE.md sections 5.3 and 5.4, #124).
+# The lists are the first ones proposed in #124, each entry with its reason. They are tuned from a week of
+# log-mode events before the gate goes on. A change here is a pull request, with tests/test_verify_gate.py updated.
+
+# log: record each change to a listed file or setting this session never read, as verify_gate.would_block,
+#      and each reply that states a listed file's contents this session never read, as
+#      verify_gate.would_withhold. Nothing is blocked or withheld.
+# off: register no hook.
+# on: refused until the gate can enforce (5.4 item 6).
+mode = "log"
+
+# Settings: the keys in OPERATIONS.md section 3, item 3 and item 4's table. The build depends on each, and
+# the startup check fails on most of them. Changed by `hermes config set|unset <key>`; read by
+# `hermes config get <key>` or `hermes config show`.
+settings = [
+    "plugins.entries.custom_build.settings.machine_name",
+    "memory.provider",
+    "skills.write_approval",
+    "memory.write_approval",
+    "compression.in_place",
+    "logging.max_size_mb",
+    "logging.backup_count",
+    "security.redact_secrets",
+    "gateway.auto_multiplex_migration",
+    "plugins.isolation",
+    "approvals.mode",
+    "plugins.hook_callback_timeout",
+    "approvals.cron_mode",
+    "approvals.single_query_mode",
+    "approvals.unattended_mode",
+]
+
+# A terminal command that names a listed file (as the write gate reads names) changes it when it also
+# matches this; otherwise it reads it. Matched by text, so `cat x > y` counts as a change of both.
+writes = '''(?<![0-9&])>{1,2}|\btee\b|\bsed\s+(?:-\w+\s+)*-i|\bperl\s+-\w*i|\b(?:cp|mv|rm|ln|truncate|chmod|chown|install|touch|dd)\b'''
+
+# A reply states a file's contents when one of its sentences names the file and matches this.
+contents = '''\b(?:contains?|is set to|says|reads|currently)\b'''
+
+# Files: relative to the Hermes home of the profile in use; "{plugin}" is this plugin's own folder.
+# Changed by write_file, patch or a terminal command; read by read_file or a terminal command.
+# Hermes's memory tool is not a change here: it edits entries under Hermes's own checks, and
+# memory.write_approval stages its writes.
+[files]
+config = "config.yaml"          # every setting the build depends on (OPERATIONS.md section 3, items 3 and 4)
+env = ".env"                    # the store's connection string (OPERATIONS.md section 3, item 2)
+plugin = "{plugin}"             # the build itself (ARCHITECTURE.md section 1)
+memory = "memories/MEMORY.md"   # built-in memory, loaded into every session's prompt (ARCHITECTURE.md section 1)
+user = "memories/USER.md"
