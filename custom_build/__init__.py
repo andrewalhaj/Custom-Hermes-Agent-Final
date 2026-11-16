@@ -32,6 +32,7 @@ class CustomBuildProvider(MemoryProvider):
 def _add_subcommands(parser) -> None:
     commands = parser.add_subparsers(dest="custom_build_command", required=True)
     commands.add_parser("check", help="Run the startup check; exits non-zero when Hermes must not start")
+    commands.add_parser("heartbeat", help="Record this host's heartbeat; Hermes cron runs it every 6 hours")
 
 
 def register(ctx) -> None:
@@ -51,9 +52,10 @@ def register(ctx) -> None:
     # Before the subcommand: if this fails, Hermes drops the load and the startup check cannot pass.
     ctx.register_hook("pre_llm_call", check_turn)
 
-    def run_check(args) -> int:
-        from . import startup_check
+    def run_command(args) -> int:
+        from . import heartbeat, startup_check
 
-        return startup_check.run(ctx)   # Hermes turns a non-zero return into the exit code
+        run = {"check": startup_check.run, "heartbeat": heartbeat.run}[args.custom_build_command]
+        return run(ctx)   # Hermes turns a non-zero return into the exit code
 
-    ctx.register_cli_command("custom-build", "The custom build's commands", _add_subcommands, run_check)
+    ctx.register_cli_command("custom-build", "The custom build's commands", _add_subcommands, run_command)
