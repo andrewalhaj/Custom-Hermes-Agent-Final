@@ -20,14 +20,14 @@ documentation = ["web_search", "web_extract"]
 # Checkable questions: case-insensitive patterns on the user's message, tried in this order; the first that
 # matches names the turn. Each asks for a fact a tool can check and the agent would otherwise answer from memory.
 [questions]
-version = '''\b(?:which|what)\s+version\b|\blatest\s+(?:version|release)\b'''
+version = '''\b(?:which|what)\s+(?:[\w.-]+\s+)?version\b|\blatest\s+(?:version|release)\b'''
 location = '''\bwhere\s+(?:is|are|does|do)\b'''   # before state: "where is X installed" asks a place
-state = '''\bis\s+(?:the\s+|my\s+|our\s+|it\s+)?[\w.-]+\s+(?:running|up|down|enabled|disabled|installed|set|configured|reachable)\b'''
-value = '''\bwhat\s+(?:is|are)\s+(?:the\s+)?(?:current\s+)?(?:value|setting|status|state|limit|default|size|price|cost)\b'''
+state = '''\bis\s+(?:the\s+|my\s+|our\s+|it\s+)?(?:[\w.-]+\s+){1,3}(?:running|up|down|open|listening|enabled|disabled|installed|set|configured|reachable)\b'''
+value = '''\bwhat(?:'s|\s+is|\s+are)\s+(?:the\s+)?(?:current\s+)?(?:value|setting|status|state|limit|default|size|price|cost)\b'''
 count = '''\bhow\s+(?:many|much)\b'''
-support = '''\bdoes\s+[\w.-]+\s+support\b'''
+support = '''\bdoes\s+(?:[\w.-]+\s+){1,3}support\b'''
 date = '''\bwhen\s+(?:is|was|did|does|will)\b'''
-error = '''(?s)(?=.*\?)(?=.*\b(?:error|exception|traceback|fail(?:s|ed|ing|ure)?)\b)'''   # a question naming a failure
+error = '''(?s)(?=.*\?)(?=.*\b(?:errors?|exceptions?|tracebacks?|fail(?:s|ed|ing|ures?)?)\b)'''   # a question naming a failure
 
 # A reply that needs a documentation lookup too: case-insensitive patterns on an armed turn's reply.
 [needs_documentation]
