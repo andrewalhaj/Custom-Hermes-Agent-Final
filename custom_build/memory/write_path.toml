@@ -35,8 +35,10 @@ criteria.false = "`stored` stays true and useful beside `new`: `new` adds someth
 
 # The gate on an extracted fact (section 3.3 step 3, #148): one request, two Nouls about the fact and the
 # turn it came from (the user's message and the turn's tool results).
+[gate]
+drop_score = 0.70          # the judge gate (3.6), for extracted facts and digests: dropped when 1 - "worth keeping" is this or higher (#152)
+
 [extraction]
-drop_score = 0.70          # the judge gate (3.6): dropped when 1 - "worth keeping" is this or higher (#152)
 support_threshold = 0.75   # the support check: kept only when "supported" is this or higher
 
 [extraction.questions.worth_keeping]
@@ -48,3 +50,10 @@ criteria.false = "It is true only for this moment or this task, such as a passin
 instructions = "Does `source` state what `fact` says?"
 criteria.true = "The user's message says it outright, or a tool result shows it directly, such as in a command's output or a file."
 criteria.false = "`source` does not say it, only hints at it, or says something different."
+
+# The gate on a session's digest (section 3.3 step 3, #155): one Noul about the digest alone, dropped at the
+# gate's drop score. A digest has no support check.
+[digest.questions.worth_keeping]
+instructions = "Is `digest` worth keeping as a record of this session for later sessions with this user?"
+criteria.true = "It records decisions, changes, findings or open work that a later session could use."
+criteria.false = "Nothing in it would help later: the session was small talk, or only repeated what is already known."
