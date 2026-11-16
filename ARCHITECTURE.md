@@ -265,7 +265,7 @@ The memory store is a Supabase project: Postgres with the `pgvector` extension. 
 
 ### 4.2 Schema
 
-`memory.events` and the `memory` schema are created by `migrations/0001_memory_events.sql`, and `memory.facts` and the `vector` extension by `migrations/0002_memory_facts.sql`; those files are their source of truth, and the block below still shows them for reading in one place. The rest of this section is the plan. Each table's migration file becomes its source of truth when it merges, and this section is updated to match. A new migration creates only what earlier ones did not.
+`memory.events` and the `memory` schema are created by `migrations/0001_memory_events.sql`, and `memory.facts` by `migrations/0002_memory_facts.sql`, which also installs the `vector` extension where it is missing; those files are their source of truth, and the block below still shows them for reading in one place. The rest of this section is the plan. Each table's migration file becomes its source of truth when it merges, and this section is updated to match. A new migration creates only what earlier ones did not.
 
 ```sql
 create extension if not exists vector;
