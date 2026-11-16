@@ -103,6 +103,7 @@ def _add_subcommands(parser) -> None:
     commands.add_parser("check", help="Run the startup check; exits non-zero when Hermes must not start")
     commands.add_parser("heartbeat", help="Record this host's heartbeat; Hermes cron runs it every 6 hours")
     commands.add_parser("job-health", help="Record missed jobs, jobs with no output and missing hosts; daily")
+    commands.add_parser("report", help="Send the day's failure report, or an all-clear; daily at 07:00")
 
 
 def register(ctx) -> None:
@@ -127,10 +128,10 @@ def register(ctx) -> None:
     fact_gate.register(ctx)
 
     def run_command(args) -> int:
-        from . import heartbeat, job_health, startup_check
+        from . import heartbeat, job_health, report, startup_check
 
         run = {"check": startup_check.run, "heartbeat": heartbeat.run,
-               "job-health": job_health.run}[args.custom_build_command]
+               "job-health": job_health.run, "report": report.run}[args.custom_build_command]
         return run(ctx)   # Hermes turns a non-zero return into the exit code
 
     ctx.register_cli_command("custom-build", "The custom build's commands", _add_subcommands, run_command)
