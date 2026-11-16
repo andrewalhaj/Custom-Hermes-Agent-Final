@@ -54,10 +54,11 @@ print(json.dumps({"entry": entry, "blocks": blocks}))
 
 
 def run_gate(tmp_path, db, calls, *, mode="log", scenario="plain", approvals=None, env=None, database_url=True,
-             hook_timeout=None, during=None):
+             hook_timeout=None, during=None, config_link=False):
     """Run each call through Hermes's pre_tool_call dispatch; return (report, Hermes's output, events rows).
 
-    `during` is a context manager held while the calls run, such as a lock on memory.events.
+    `during` is a context manager held while the calls run, such as a lock on memory.events. With
+    `config_link`, the home's config.yaml is a link to a copy kept elsewhere, as a dotfiles checkout keeps it.
     """
     home = tmp_path / "home"
     shutil.copytree(PLUGIN, home / "plugins" / "custom_build", ignore=shutil.ignore_patterns("__pycache__"))
@@ -72,7 +73,11 @@ def run_gate(tmp_path, db, calls, *, mode="log", scenario="plain", approvals=Non
         config["approvals"] = approvals
     if hook_timeout:
         config["plugins"]["hook_callback_timeout"] = hook_timeout
-    (home / "config.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
+    config_file = tmp_path / "dotfiles" / "hermes-config.yaml" if config_link else home / "config.yaml"
+    config_file.parent.mkdir(exist_ok=True)
+    config_file.write_text(yaml.safe_dump(config), encoding="utf-8")
+    if config_link:
+        (home / "config.yaml").symlink_to(config_file)
     environment = {"HERMES_HOME": str(home), "HOME": str(tmp_path), "PATH": "/usr/bin:/bin", **(env or {})}
     if database_url:
         environment["CUSTOM_BUILD_DATABASE_URL"] = db["agent"] if database_url is True else database_url
@@ -135,6 +140,29 @@ def test_a_command_naming_a_path_in_the_users_home_records_it(tmp_path, db):
     report, output, rows = run_gate(tmp_path, db, [["terminal", {"command": "rm -r ~/home/skills/note-taking"}]])
     assert report["blocks"] == [None], output
     assert [(code, detail["rule"]) for code, _, _, detail, _, _ in rows] == [("write_gate.would_ask", "skills")]
+
+
+def test_a_command_naming_a_path_from_where_it_runs_records_it(tmp_path, db):
+    home = tmp_path / "home"
+    calls = [
+        ["terminal", {"command": "echo X=1 >> .env", "workdir": str(home)}],   # relative to its working directory
+        ["terminal", {"command": f"cd {home} && echo X=1 >> .env"}],   # after it changes into the Hermes home
+        ["terminal", {"command": "cd $HERMES_HOME && rm -r skills/note-taking"}],
+    ]
+    report, output, rows = run_gate(tmp_path, db, calls)
+    assert report["blocks"] == [None] * len(calls), output
+    assert [(code, detail["rule"]) for code, _, _, detail, _, _ in rows] == [
+        ("write_gate.would_ask", "env"), ("write_gate.would_ask", "env"), ("write_gate.would_ask", "skills"),
+    ], output
+
+
+def test_a_command_naming_a_linked_config_records_it(tmp_path, db):
+    home = tmp_path / "home"
+    calls = [["terminal", {"command": "sed -i s/a/b/ ~/home/config.yaml"}],
+             ["terminal", {"command": f"sed -i s/a/b/ {home}/config.yaml"}]]
+    report, output, rows = run_gate(tmp_path, db, calls, config_link=True)
+    assert report["blocks"] == [None, None], output
+    assert [(code, detail["rule"]) for code, _, _, detail, _, _ in rows] == [("write_gate.would_ask", "config")] * 2, output
 
 
 def test_a_call_off_the_list_records_nothing(tmp_path, db):
