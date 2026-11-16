@@ -194,3 +194,14 @@ def test_a_second_profile_fails_with_config_unsafe(tmp_path, db):
     assert code != 0, output
     assert [(c, r) for c, r, _, _ in rows] == [("config.unsafe", "failed")], output
     assert "profile" in rows[0][2] and "second" in rows[0][2]
+
+
+def test_a_managed_multiplex_flag_fails_with_config_unsafe(tmp_path, db):
+    # Boot reads the flag from the managed overlay and gateway.json too, not only from config.yaml (#85).
+    managed = tmp_path / "managed"
+    managed.mkdir()
+    (managed / "config.yaml").write_text(yaml.safe_dump({"gateway": {"multiplex_profiles": True}}), encoding="utf-8")
+    code, output, rows = run_check(tmp_path, db, env={"HERMES_MANAGED_DIR": str(managed)})
+    assert code != 0, output
+    assert [(c, r, s) for c, r, _, s in rows] == [("config.unsafe", "failed", "host-a")], output
+    assert "gateway.multiplex_profiles" in rows[0][2]
