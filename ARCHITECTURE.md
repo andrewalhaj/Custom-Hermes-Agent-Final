@@ -522,7 +522,7 @@ Initial codes:
 
 A retry that succeeds is recorded as `degraded` with its retry count, so a flaky dependency shows up as a trend before it becomes an outage.
 
-Retention is the one exception to the first two rows. It runs inside the database, so a failed run rolls back: its error is in `pg_cron`'s run history, and `events` shows it the next day as `job.missed` (section 4.3).
+Retention is an exception to the first two rows. It runs inside the database, so a failed run rolls back: its error is in `pg_cron`'s run history, and `events` shows it as `job.missed` at the next job-health check (section 4.3).
 
 ### 6.3 Absence checks
 
