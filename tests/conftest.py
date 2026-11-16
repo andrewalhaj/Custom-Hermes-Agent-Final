@@ -13,6 +13,7 @@ import json
 import os
 import pathlib
 import threading
+import time
 import uuid
 
 import psycopg
@@ -118,3 +119,48 @@ def ollama_down():
     server = http.server.HTTPServer(("127.0.0.1", 0), http.server.BaseHTTPRequestHandler)
     server.server_close()
     return f"http://127.0.0.1:{server.server_address[1]}"
+
+
+class FakeTypeSafe(http.server.ThreadingHTTPServer):
+    """A stand-in for TypeSafe's System One endpoint, `POST /v1/systemone`. A test sets the probability
+    each named question gets, an HTTP status to answer with instead, or a delay longer than the
+    caller's deadline; `requests` collects each request's headers and body."""
+
+    def __init__(self):
+        super().__init__(("127.0.0.1", 0), _TypeSafeHandler)
+        self.answers = {}
+        self.status = 200
+        self.delay = 0
+        self.requests = []
+        self.url = f"http://127.0.0.1:{self.server_address[1]}"
+
+
+class _TypeSafeHandler(http.server.BaseHTTPRequestHandler):
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        self.server.requests.append({"path": self.path, "headers": dict(self.headers), "body": body})
+        time.sleep(self.server.delay)
+        if self.server.status == 200:
+            answers = {name: {"type": "noul", "noul": self.server.answers[name]} for name in body["questions"]}
+            payload = {"model": body["model"], "answers": answers, "usage": {"input_tokens": 1, "output_tokens": 1}}
+        else:
+            payload = {"detail": "refused"}
+        data = json.dumps(payload).encode()
+        self.send_response(self.server.status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def log_message(self, *args):
+        pass
+
+
+@pytest.fixture
+def typesafe():
+    """A FakeTypeSafe serving on a free local port for the length of the test."""
+    server = FakeTypeSafe()
+    threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
+    yield server
+    server.shutdown()
+    server.server_close()
