@@ -4,6 +4,8 @@ A failure the tool expects is recorded with its code and returned in an `error` 
 stored fact (CONTRIBUTING.md rule C3); Hermes then reports the call with the status `error`.
 """
 
+import datetime
+
 import psycopg
 from agent.redact import redact_sensitive_text
 from agent.runtime_cwd import resolve_agent_cwd
@@ -114,6 +116,7 @@ def write_digest(messages, *, machine, session_id, turn, embedder, judge_at, con
         return
     fields = {"source": machine, "project": project.key(resolve_agent_cwd()), "session_id": session_id, "turn": turn}
     failure, body = None, None
+    written_at = datetime.datetime.now(datetime.UTC).isoformat()   # orders the session's digests (#156)
     try:   # with no connection open: the call can take as long as its auxiliary timeout
         body = _redact_forced(digest.write(digest.transcript(messages)))
     except (extraction.ExtractRefused, extraction.ExtractError) as exc:
@@ -128,7 +131,8 @@ def write_digest(messages, *, machine, session_id, turn, embedder, judge_at, con
             return
         # The weakest basis of its inputs: the transcript holds the agent's replies (3.3 rule 6).
         fact = store.Fact(body=body, basis="assistant_inferred", project=fields["project"], source=machine,
-                          session_id=session_id, source_turn=turn, origin="digest", kind="digest")
+                          session_id=session_id, source_turn=turn, origin="digest", kind="digest",
+                          written_at=written_at)
         _save(conn, fact, embedder=embedder, judge_at=judge_at)
 
     _with_store(machine, session_id, connect, work)
