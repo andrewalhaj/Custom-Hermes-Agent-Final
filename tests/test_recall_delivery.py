@@ -47,11 +47,22 @@ if mode.startswith("session-cwd="):   # ACP and the TUI gateway pin the session'
     from agent.runtime_cwd import set_session_cwd
     set_session_cwd(mode.split("=", 1)[1])
 provider.initialize(session_id="s1", hermes_home=sys.argv[3], platform="cli", agent_context="primary")
+holder = None
+if mode == "stall":         # after the provider starts: every read of facts now waits on this lock
+    import os, psycopg
+    holder = psycopg.connect(os.environ["OWNER_URL"])
+    holder.execute("lock table memory.facts in access exclusive mode")
 started = time.monotonic()
 notes = provider.prefetch(sys.argv[2], session_id="s1")
-print(json.dumps({"notes": notes, "seconds": time.monotonic() - started}), flush=True)
-if mode == "linger":        # let work the turn no longer waits for finish
+seconds = time.monotonic() - started
+waiting = None
+if mode in ("linger", "stall"):   # let work the turn no longer waits for finish
     time.sleep(2)
+if holder is not None:
+    waiting = holder.execute("select count(*) from pg_stat_activity where datname = current_database()"
+                             " and pid <> pg_backend_pid() and wait_event_type = 'Lock'").fetchone()[0]
+    holder.rollback()
+print(json.dumps({"notes": notes, "seconds": seconds, "waiting": waiting}), flush=True)
 """
 
 
@@ -83,7 +94,7 @@ def _add(owner, body, vector, build, *, kind="fact", basis="user_stated"):
 
 def recall(home, db, ollama_url, query=QUERY, *, store=True, mode=None, cwd=None):
     env = {"HERMES_HOME": str(home), "HOME": str(home.parent), "PATH": "/usr/bin:/bin",
-           "TYPESAFE_API_KEY": "test-key-not-a-real-one"}
+           "TYPESAFE_API_KEY": "test-key-not-a-real-one", "OWNER_URL": db["owner"]}
     if store:
         env["CUSTOM_BUILD_DATABASE_URL"] = db["agent"]
     result = subprocess.run([sys.executable, "-c", SCENARIO, ollama_url, query, str(home), *([mode] if mode else [])],
@@ -196,16 +207,9 @@ def test_a_stalled_store_does_not_hold_a_search_open(home, db, owner, ollama):
     config = home / "plugins" / "custom_build" / "memory" / "write_path.toml"
     config.write_text(config.read_text(encoding="utf-8").replace("deadline = 6", "deadline = 0.5"), encoding="utf-8")
     ollama.vectors = {QUERY: BASE}
-    owner.execute("begin")
-    owner.execute("lock table memory.facts in access exclusive mode")   # every read of facts waits
-    try:
-        outcome = recall(home, db, ollama.url, mode="linger")
-        assert "recall.timeout" in outcome["notes"]
-        waiting = owner.execute("select count(*) from pg_stat_activity where datname = current_database()"
-                                " and pid <> pg_backend_pid() and wait_event_type = 'Lock'").fetchone()[0]
-        assert waiting == 0
-    finally:
-        owner.execute("rollback")
+    outcome = recall(home, db, ollama.url, mode="stall")   # the scenario holds a lock on facts during prefetch
+    assert "recall.timeout" in outcome["notes"]
+    assert outcome["waiting"] == 0   # two seconds later, the store has cancelled the stuck search
 
 
 def test_a_digests_open_items_stay_under_its_provenance(home, db, owner, ollama):
