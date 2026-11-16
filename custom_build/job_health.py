@@ -1,11 +1,16 @@
 """The job-health check, `hermes custom-build job-health` (ARCHITECTURE.md section 6.3, OPERATIONS.md section 4).
 
 Hermes cron runs it daily on the job host, before the report. It records host.missing for each agent
-host on its list with no heartbeat in the last 24 hours, then a job.succeeded event of its own; the
-daily report sends what it records.
+host on its list with no heartbeat in the last 24 hours; job.missed for each job in JOBS with no
+job.succeeded in that time; job.no_output for each whose last two runs took input and put nothing out;
+then a job.succeeded event of its own. The daily report sends what it records.
 """
 
 from . import failures, jobs, settings
+
+# The jobs whose runs record job.succeeded. Not the heartbeat, which host.missing covers, nor this check,
+# whose absence the report notices (OPERATIONS.md section 4); the report and retention add themselves.
+JOBS = ()
 
 
 def run(ctx):
@@ -16,9 +21,17 @@ def run(ctx):
 
 
 def check(conn, machine, hosts):
-    """Record each missing host, then this run's success; return whether that success was written."""
+    """Record each missing host and job finding, then this run's success; return whether that was written."""
     for host in hosts:
         if not conn.execute("select 1 from memory.events where code = 'host.heartbeat' and source = %s"
                             " and at > now() - interval '24 hours' limit 1", (host,)).fetchone():
             failures.record(conn, "host.missing", "failed", source=machine, detail={"host": host})
+    for job in JOBS:
+        if not conn.execute("select 1 from memory.events where code = 'job.succeeded' and detail->>'job' = %s"
+                            " and at > now() - interval '24 hours' limit 1", (job,)).fetchone():
+            failures.record(conn, "job.missed", "failed", source=machine, detail={"job": job})
+        last = conn.execute("select detail from memory.events where code = 'job.succeeded' and detail->>'job' = %s"
+                            " order by at desc limit 2", (job,)).fetchall()
+        if len(last) == 2 and all(d.get("input", 0) > 0 and d.get("output") == 0 for (d,) in last):
+            failures.record(conn, "job.no_output", "failed", source=machine, detail={"job": job})
     return failures.record(conn, "job.succeeded", "ok", source=machine, detail={"job": "job-health"})
