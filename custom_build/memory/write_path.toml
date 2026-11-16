@@ -34,9 +34,10 @@ criteria.true = "`new` updates, corrects or restates `stored`, so `stored` is ou
 criteria.false = "`stored` stays true and useful beside `new`: `new` adds something else, or is about another thing."
 
 # The gate on an extracted fact (section 3.3 step 3, #148): one request, two Nouls about the fact and the
-# turn it came from (the user's message and the turn's tool results). Both answers must reach the threshold.
+# turn it came from (the user's message and the turn's tool results).
 [extraction]
-judge_threshold = 0.75
+drop_score = 0.70          # the judge gate (3.6): dropped when 1 - "worth keeping" is this or higher (#152)
+support_threshold = 0.75   # the support check: kept only when "supported" is this or higher
 
 [extraction.questions.worth_keeping]
 instructions = "Is `fact` worth remembering in a later session with this user?"

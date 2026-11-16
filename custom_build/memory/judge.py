@@ -62,6 +62,7 @@ def supersedes(answers):
 
 
 def keeps(answers):
-    """The gate's decision on an extracted fact, in code: every answer at or above the threshold."""
-    threshold = write_path.load()["extraction"]["judge_threshold"]
-    return all(probability >= threshold for probability in answers.values())
+    """The decision on an extracted fact, in code: the gate drops it at a drop score (1 - "worth keeping") of
+    `drop_score` or higher, and the support check needs "supported" at `support_threshold` or higher (3.6)."""
+    limits = write_path.load()["extraction"]
+    return 1 - answers["worth_keeping"] < limits["drop_score"] and answers["supported"] >= limits["support_threshold"]

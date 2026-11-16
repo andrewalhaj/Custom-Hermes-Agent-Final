@@ -90,12 +90,15 @@ def test_one_request_asks_both_gate_questions_about_the_fact_and_its_source(type
     assert sorted(request["body"]["questions"]) == ["supported", "worth_keeping"]
 
 
+# ARCHITECTURE.md 3.6 (#152): the gate drops at a drop score (1 - "worth keeping") of 0.70 or higher; the
+# support check needs "supported" at 0.75 or higher.
 @pytest.mark.parametrize("answers, kept", [
     ({"worth_keeping": 0.9, "supported": 0.8}, True),
-    ({"worth_keeping": 0.9, "supported": 0.5}, False),   # not supported by its source
-    ({"worth_keeping": 0.4, "supported": 0.95}, False),  # not worth keeping
+    ({"worth_keeping": 0.31, "supported": 0.75}, True),   # drop score 0.69: kept
+    ({"worth_keeping": 0.30, "supported": 0.95}, False),  # drop score 0.70: dropped
+    ({"worth_keeping": 0.9, "supported": 0.74}, False),   # not supported by its source
 ])
-def test_an_extracted_fact_is_kept_only_with_both_answers_at_the_threshold(answers, kept):
+def test_an_extracted_fact_is_kept_by_the_gate_and_the_support_check(answers, kept):
     assert judge.keeps(answers) is kept
 
 
