@@ -77,12 +77,12 @@ def recall_notes(query, *, machine, session_id, turn, embedder, connect):
     limits = write_path.load()["recall"]
     box = {}
 
+    # The recall thread is a Hermes entry point's work too: the boundary wrapper records a crash in it as
+    # unhandled (CONTRIBUTING.md rule C2), and the turn is told below.
+    @failures.boundary(lambda: machine, connect, failures.PROVIDER)
     def run():
-        try:
-            box["outcome"] = _searched(query, machine=machine, session_id=session_id, turn=turn, embedder=embedder,
-                                       connect=connect, wanted=limits["results"])
-        except Exception as exc:   # re-raised below, so the provider's boundary records it as unhandled
-            box["raised"] = exc
+        box["outcome"] = _searched(query, machine=machine, session_id=session_id, turn=turn, embedder=embedder,
+                                   connect=connect, wanted=limits["results"])
 
     worker = threading.Thread(target=run, name="custom_build-recall", daemon=True)
     worker.start()
@@ -92,8 +92,8 @@ def recall_notes(query, *, machine, session_id, turn, embedder, connect):
             conn, "recall.timeout", "failed", source=machine, project=project.key(resolve_agent_cwd()),
             session_id=session_id, turn=turn, reason=f"no answer within {limits['deadline']} seconds"))
         return recall.failed("recall.timeout")
-    if "raised" in box:
-        raise box["raised"]
+    if "outcome" not in box:   # it raised, and the boundary wrapper recorded it
+        return recall.failed("unhandled")
     outcome = box["outcome"]
     if "error" in outcome:
         return recall.failed(outcome["error"])
