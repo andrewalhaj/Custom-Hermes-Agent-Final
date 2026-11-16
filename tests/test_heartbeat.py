@@ -5,6 +5,7 @@ real `hermes` CLI there in a process of its own, and reads what the heartbeat wr
 throwaway store from the `db` fixture (conftest.py).
 """
 
+import json
 import pathlib
 import re
 import shutil
@@ -82,6 +83,43 @@ def test_hermes_cron_runs_the_wrapper_from_its_scripts_folder_and_delivers_nothi
     assert "Ran now: succeeded" in answer, answer
     assert rows(db) == [("host.heartbeat", "ok", None, "host-a", {})]
     assert "silent (empty output)" in run
+
+
+# Local sessions as a gateway stores them: each one's launch policy, built by Hermes's own builder, kept in
+# state_meta under gateway.local_policy.v1:<session id> (hermes_state_local.py).
+SEED = r"""
+import dataclasses, json, sys
+from pathlib import Path
+from gateway.session_policy import build_policy
+from hermes_state import SessionDB
+from hermes_state_local import POLICY_PREFIX
+
+home = Path(sys.argv[1])
+db = SessionDB(home / "state.db")
+for sid, flags in json.loads(sys.argv[2]).items():
+    policy = dataclasses.asdict(build_policy({"source": "cli", "cwd": str(home), "model": "m", **flags}, {}))
+    receipt = json.dumps({"session_id": sid, "policy": policy})
+    db._execute_write(lambda c: c.execute("insert into state_meta(key, value) values (?, ?)", (POLICY_PREFIX + sid, receipt)))
+db.close()
+"""
+
+
+def test_the_heartbeat_records_each_session_run_without_the_build_once(tmp_path, db):
+    home = make_home(tmp_path, db)
+    sessions = {"s-safe": {"safe_mode": True}, "s-ignored": {"ignore_user_config": True}, "s-plain": {}}
+    seeded = subprocess.run([sys.executable, "-c", SEED, str(home), json.dumps(sessions)], capture_output=True,
+                            text=True, timeout=120, check=False, cwd=tmp_path,
+                            env={"HERMES_HOME": str(home), "HOME": str(tmp_path), "PATH": "/usr/bin:/bin"})
+    assert seeded.returncode == 0, seeded.stderr[-2000:]
+    for _ in range(2):   # the second run finds both already recorded
+        result = hermes(tmp_path, home, "custom-build", "heartbeat")
+        assert result.returncode == 0, result.stdout + result.stderr
+    with psycopg.connect(db["owner"]) as conn:
+        found = conn.execute("select code, result, session_id, source from memory.events order by id").fetchall()
+    assert sorted(row for row in found if row[0] == "guard.bypassed") == [
+        ("guard.bypassed", "failed", "s-ignored", "host-a"), ("guard.bypassed", "failed", "s-safe", "host-a"),
+    ]
+    assert [row[0] for row in found].count("host.heartbeat") == 2
 
 
 def test_a_failed_heartbeat_under_hermes_cron_alerts_with_its_code(tmp_path, db):
