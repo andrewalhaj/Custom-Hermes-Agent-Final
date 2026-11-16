@@ -180,7 +180,7 @@ def test_a_crash_in_the_gate_is_recorded_and_the_call_goes_ahead(tmp_path, db):
 
 
 def test_the_recorded_command_is_redacted(tmp_path, db):
-    report, output, rows = run_gate(tmp_path, db, [["terminal", {"command": f"ssh other-host 'export KEY={FAKE_SECRET}'"}]])
+    _, output, rows = run_gate(tmp_path, db, [["terminal", {"command": f"ssh other-host 'export KEY={FAKE_SECRET}'"}]])
     assert [code for code, *_ in rows] == ["write_gate.would_ask"], output
     assert FAKE_SECRET not in rows[0][2] and "ssh other-host" in rows[0][2]
     assert FAKE_SECRET not in output
