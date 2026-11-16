@@ -11,7 +11,17 @@ from agent.redact import redact_sensitive_text
 from agent.runtime_cwd import resolve_agent_cwd
 
 from .. import failures
-from . import digest, embedding, extraction, judge, project, queue, search, store, write_path
+from . import (
+    digest,
+    embedding,
+    extraction,
+    judge,
+    project,
+    queue,
+    search,
+    store,
+    write_path,
+)
 
 BASES = ("user_stated", "tool_observed", "assistant_inferred")
 TIMEOUT = 5   # seconds for each answer from Ollama while a fact is stored
