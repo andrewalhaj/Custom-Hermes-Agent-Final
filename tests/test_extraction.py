@@ -11,6 +11,7 @@ import pathlib
 import shutil
 import subprocess
 import sys
+import types
 
 import psycopg
 import pytest
@@ -187,6 +188,17 @@ def test_a_judge_failure_queues_the_fact_and_the_retry_still_gates_it(home, db, 
     turn(home, db, ollama.url, typesafe.url, "[]")   # the next start retries the queue
     assert _facts(db) == []   # the retry asked the gate, which refused it
     assert typesafe.requests[-1]["body"]["state"]["fact"] == FACT
+    with psycopg.connect(db["owner"]) as conn:   # #148 review: recorded as dropped, not as resolved
+        assert conn.execute("select code, result, reason from memory.events order by id desc limit 1").fetchone() == (
+            "store.gate_error", "degraded", "dropped on retry: the judge did not keep it")
+
+
+def test_a_fact_already_stored_does_not_ask_the_judge_again(home, db, ollama, typesafe):
+    typesafe.answers = {"worth_keeping": 0.9, "supported": 0.9}
+    turn(home, db, ollama.url, typesafe.url, ONE_FACT)
+    turn(home, db, ollama.url, typesafe.url, ONE_FACT)
+    assert len(typesafe.requests) == 1   # the second proposal is the same text, already live
+    assert len(_facts(db)) == 1
 
 
 def test_nothing_is_extracted_outside_a_primary_session(home, db, ollama, typesafe):
@@ -206,3 +218,80 @@ def test_a_secret_in_the_turn_never_reaches_the_model_the_judge_the_store_or_a_l
     assert all(FAKE_KEY not in json.dumps(r["body"]) for r in typesafe.requests)
     assert all(FAKE_KEY not in row[0] for row in _facts(db))
     assert FAKE_KEY not in output
+
+
+class ProviderError(RuntimeError):
+    """Shaped like the subscription provider's ClaudeAPIError (directsdk.py at 6313fad): a status_code attribute."""
+
+    def __init__(self, message, status_code):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+class FakeClient:
+    """An OpenAI-shaped client: raises `error`, or answers `text`."""
+
+    def __init__(self, error=None, text="[]"):
+        self.error, self.text, self.base_url, self.api_key, self.calls = error, text, "", "placeholder", 0
+        client = self
+
+        class Completions:
+            @staticmethod
+            def create(**kwargs):
+                client.calls += 1
+                if client.error:
+                    raise client.error
+                message = types.SimpleNamespace(content=client.text, tool_calls=None)
+                return types.SimpleNamespace(choices=[types.SimpleNamespace(message=message, finish_reason="stop")],
+                                             usage=None, model="m")
+
+        self.chat = types.SimpleNamespace(completions=Completions)
+
+
+@pytest.fixture
+def ladder(monkeypatch):
+    """Hermes's real call_llm, with only the clients replaced: the task's provider fails as told, and the main
+    agent model, on another provider, answers with a fact."""
+    def route(error):
+        primary, main = FakeClient(error), FakeClient(text=ONE_FACT)
+        monkeypatch.setattr(auxiliary_client, "_resolve_task_provider_model",
+                            lambda *a, **k: (extraction.DEFAULTS["provider"], "haiku", None, None, None))
+        monkeypatch.setattr(auxiliary_client, "_read_main_provider", lambda: "openrouter")
+        monkeypatch.setattr(auxiliary_client, "_read_main_model", lambda: "some/model")
+        monkeypatch.setattr(auxiliary_client, "_get_cached_client", lambda *a, **k: (primary, "haiku"))
+        monkeypatch.setattr(auxiliary_client, "resolve_provider_client", lambda provider=None, model=None, **k: (main, model))
+        monkeypatch.setattr(auxiliary_client.time, "sleep", lambda seconds: None)
+        return main
+    return route
+
+
+@pytest.mark.parametrize("error, raised", [
+    (ProviderError("billing_error: usage credits required", 402), extraction.ExtractRefused),
+    (ProviderError("You've hit your session limit", 429), extraction.ExtractError),
+    (TimeoutError("Claude request timed out"), extraction.ExtractError),
+])
+def test_an_answer_from_hermess_fallback_is_not_used_and_the_failure_is_raised(ladder, error, raised):
+    # #148 review: Hermes answers some failures with the main agent model instead of raising.
+    main = ladder(error)
+    with pytest.raises(raised):
+        extraction.propose({"user": "u", "tool_results": []})
+    assert main.calls == 1   # the fallback did answer; its facts are discarded
+
+
+@pytest.fixture
+def plugin_patterns():
+    """The plugin's Supabase key patterns, registered as its load does; Hermes's own redactor lacks them."""
+    import custom_build
+    from agent import redact
+    redact.register_redaction_patterns(custom_build.REDACTION_PATTERNS, source="plugin:custom_build")
+    yield
+    redact._reset_plugin_redaction_patterns()
+
+
+def test_a_long_provider_error_is_redacted_before_it_is_cut(monkeypatch, plugin_patterns):
+    # #148 review: cutting first could leave part of a key that the redactor no longer recognises.
+    message = "x" * 155 + f" {FAKE_KEY}"   # "ProviderError: " + this puts the 200-character cut 29 characters into the key
+    monkeypatch.setattr(auxiliary_client, "call_llm", lambda **kw: (_ for _ in ()).throw(ProviderError(message, 500)))
+    with pytest.raises(extraction.ExtractError) as caught:
+        extraction.propose({"user": "u", "tool_results": []})
+    assert FAKE_KEY[:25] not in str(caught.value)
