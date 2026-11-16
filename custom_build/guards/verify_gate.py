@@ -108,9 +108,11 @@ def _remember(ctx, session_id, names):
 
 def before(ctx, config, *, tool_name, args, session_id="", task_id="", **kwargs):
     """`pre_tool_call`: record a change to a listed file or setting this session never read."""
+    # The state is read only for a change on the list, so a call off it never touches the state file.
+    if not (changed := changes(config, tool_name, args, task_id)):
+        return
     read = _read(ctx, session_id)
-    unread = [(rule, target) for rule, target in changes(config, tool_name, args, task_id) if rule not in read]
-    if unread:
+    if unread := [(rule, target) for rule, target in changed if rule not in read]:
         _record(ctx, session_id=session_id, rule=unread[0][0], reason=unread[0][1], tool=tool_name, withhold=False)
 
 
@@ -123,10 +125,13 @@ def after(ctx, config, *, tool_name, args, session_id="", task_id="", status=Non
 def reply(ctx, config, *, response_text, session_id="", **kwargs):
     """`transform_llm_output`: record a reply that states a listed file's contents this session never read.
     It returns nothing, so the reply is delivered as written."""
-    read = _read(ctx, session_id)
     stated = [sentence for sentence in SENTENCES.split(response_text or "") if config["contents"].search(sentence)]
-    for name, path in _paths(config)[1].items():
-        if name not in read and any(path.name in sentence for sentence in stated):
+    if not (named := [(name, path) for name, path in _paths(config)[1].items()
+                      if any(path.name in sentence for sentence in stated)]):
+        return
+    read = _read(ctx, session_id)
+    for name, path in named:
+        if name not in read:
             _record(ctx, session_id=session_id, rule=name, reason=path.name, tool=None, withhold=True)
 
 
