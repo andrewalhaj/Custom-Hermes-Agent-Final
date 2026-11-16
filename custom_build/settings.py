@@ -1,6 +1,6 @@
-"""The build's two settings and the per-turn check on them (ARCHITECTURE.md section 5.5).
+"""The build's settings and the per-turn check on them (ARCHITECTURE.md section 5.5).
 
-The startup check reads the same two settings before Hermes starts; the plugin's `pre_llm_call` hook
+The startup check reads the same settings before Hermes starts; the plugin's `pre_llm_call` hook
 reads them again on every turn, in the process that serves it, which a hand-started Hermes never
 checked before.
 """
@@ -11,6 +11,8 @@ from . import failures
 
 MACHINE_NAME = "machine_name"   # plugins.entries.custom_build.settings.machine_name in config.yaml
 DATABASE_URL = "CUSTOM_BUILD_DATABASE_URL"   # a secret, in the profile's .env
+JUDGE_MODEL = "judge_model"   # plugins.entries.custom_build.settings.judge_model: the judge, pinned by version
+JUDGE_KEY = "TYPESAFE_API_KEY"   # a secret, in the profile's .env
 CONNECT_TIMEOUT = 5   # seconds, well under Hermes's 30-second deadline for a hook
 
 
@@ -37,7 +39,9 @@ def missing_settings(ctx):
     from agent.secret_scope import get_secret
 
     found = (("plugins.entries.custom_build.settings." + MACHINE_NAME, _usable(ctx.get_config(MACHINE_NAME))),
-             (DATABASE_URL, _connection_string(get_secret(DATABASE_URL))))
+             (DATABASE_URL, _connection_string(get_secret(DATABASE_URL))),
+             ("plugins.entries.custom_build.settings." + JUDGE_MODEL, _usable(ctx.get_config(JUDGE_MODEL))),
+             (JUDGE_KEY, _usable(get_secret(JUDGE_KEY))))
     return [name for name, ok in found if not ok]
 
 
