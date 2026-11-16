@@ -28,6 +28,9 @@ HIDDEN = [
     "migrations/notes.md",
     "custom_build/.env",
     "custom_build/__pycache__/failures.cpython-312.pyc",
+    "custom_build/guards/.env",
+    "custom_build/guards/notes.md",
+    "custom_build/guards/__pycache__/write_gate.cpython-314.pyc",
     ".githooks/.env",
     ".githooks/notes.md",
 ]
@@ -37,6 +40,8 @@ VISIBLE = [
     "migrations/0002_next.sql",
     "custom_build/new_module.py",
     "custom_build/plugin.yaml",
+    "custom_build/guards/write_gate.py",
+    "custom_build/guards/write_gate.toml",
     "hermes-requirements.txt",
     ".githooks/pre-commit",
 ]

@@ -147,6 +147,8 @@ def test_the_catalog_holds_the_architecture_codes():
     assert set(failures.CATALOG) == {
         "embed.unavailable", "embed.model_mismatch", "db.unreachable", "db.auth", "db.query", "recall.timeout",
         "judge.timeout", "judge.error", "rerank.fallback", "store.gate_error", "guard.crash", "guard.not_loaded",
+        "write_gate.would_ask",
+        "write_gate.would_block",
         "config.unsafe", "config.missing", "redact.failed", "memory.write_rejected", "events.write_failed",
         "job.failed", "job.missed", "job.no_output", "host.missing", "host.heartbeat", "unhandled",
     }
@@ -255,6 +257,20 @@ def test_boundary_still_answers_when_the_store_refuses_the_record(db, caplog):
     guard = failures.boundary(_host_a, lambda: psycopg.connect(db["maint"], autocommit=True), _block)(_guard_that_crashes)
     assert guard() == {"action": "block", "message": "blocked after KeyError"}
     assert _codes(caplog) == [(logging.WARNING, "guard.crash"), (logging.ERROR, "events.write_failed")]
+
+
+def test_store_gives_a_connection_to_record_on_and_closes_it(db):
+    with failures.store("host-a", lambda: psycopg.connect(db["agent"], autocommit=True)) as conn:
+        failures.record(conn, "db.query", "failed", source="host-a")
+    assert conn.closed
+    assert [row[4] for row in _rows(db["agent"])] == ["db.query"]
+
+
+def test_store_logs_an_unreachable_store_and_gives_none(caplog):
+    caplog.set_level(logging.INFO, logger=failures.__name__)
+    with failures.store("host-a", lambda: psycopg.connect("postgresql://u:p@localhost:1/x", connect_timeout=3)) as conn:
+        assert conn is None
+    assert _codes(caplog) == [(logging.WARNING, "db.unreachable"), (logging.ERROR, "events.write_failed")]
 
 
 def test_record_logs_a_row_the_store_refuses_as_a_lost_write(db, caplog):
