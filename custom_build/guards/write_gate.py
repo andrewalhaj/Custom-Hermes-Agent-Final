@@ -109,11 +109,11 @@ def check(ctx, rules, *, tool_name, args, session_id="", task_id="", **kwargs):
     reason = redact_sensitive_text(target, force=True, redact_url_credentials=True)
     fields = {"source": machine, "session_id": session_id or None, "reason": reason}
     with failures.store(machine, settings.connect) as conn:
+        tool = {"gen_ai.tool.name": tool_name}   # its OpenTelemetry name (rule L3)
         if why := blocked_because():
-            failures.record(conn, "write_gate.would_block", "ok", **fields,
-                            detail={"tool": tool_name, "rule": rule, "why": why})
+            failures.record(conn, "write_gate.would_block", "ok", **fields, detail={**tool, "rule": rule, "why": why})
         else:
-            failures.record(conn, "write_gate.would_ask", "ok", **fields, detail={"tool": tool_name, "rule": rule})
+            failures.record(conn, "write_gate.would_ask", "ok", **fields, detail={**tool, "rule": rule})
 
 
 def register(ctx):
