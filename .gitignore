@@ -35,3 +35,8 @@
 
 /.githooks/*
 !/.githooks/pre-commit
+
+!/custom_build/guards/
+/custom_build/guards/*
+!/custom_build/guards/*.py
+!/custom_build/guards/*.toml

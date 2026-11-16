@@ -1,0 +1,50 @@
+# The write gate's mode and its list of sensitive actions (ARCHITECTURE.md sections 5.3 and 5.4, #107).
+# A change here is a pull request like any code change, with tests/test_write_gate.py updated.
+
+# log: record each call on the list, as write_gate.would_ask or write_gate.would_block, and block nothing.
+# off: register no hook.
+# on: refused until the gate can enforce. That arrives with the pull request that moves the gate to on,
+#     after a week of real use, citing its counts from events (5.4 item 6).
+mode = "log"
+
+# Each rule has a path, a command pattern, or both. A call is recorded under the first rule it matches.
+#
+# path: relative to the Hermes home of the profile in use; "{plugin}" is this plugin's own folder.
+#   A write_file or patch call matches when Hermes resolves a path it writes to this one or to
+#   anything under it. A terminal command matches when it names the path: absolutely or by the
+#   path a link points to; from the user's home (as in ~/.hermes/skills) or from the directory it
+#   runs in; or as an entry of a Hermes home it also names (as in $HERMES_HOME/skills, or
+#   cd ~/.hermes && rm -r skills).
+# command: a Python regular expression, searched for in a terminal command.
+#
+# A command is matched by the text it contains, not by what it does, so the list over-matches: a
+# command that only reads a path matches, as does one that names a longer name (.env.example), or
+# names a Hermes home and, anywhere else, an entry's name. The week of log-mode events shows how often.
+#
+# Not on the list: tools that run code of their own, such as execute_code, and a script that writes
+# a file through its own code (5.6). The skill tool, skill_manage, names no path; skills.write_approval
+# already stages its every change for a person (#42).
+
+[rules.skills]   # writes into the skills folder (#80)
+path = "skills"
+command = '''\bhermes(?:\s+-\S+(?:\s+[^-\s]\S*)?)*\s+skills\s+(?:install|update|uninstall|reset|repair-official|snapshot)\b'''
+
+[rules.config]   # writes to Hermes's own config.yaml, including through Hermes's commands that set it
+path = "config.yaml"
+command = '''\bhermes(?:\s+-\S+(?:\s+[^-\s]\S*)?)*\s+(?:config\s+(?:set|unset|edit|migrate)|tools\s+(?:enable|disable)|mcp\s+(?:add|remove|rm|configure|config|install)|model|setup)\b'''
+
+[rules.env]   # writes to Hermes's own .env
+path = ".env"
+
+[rules.plugin]   # writes to this plugin's folder
+path = "{plugin}"
+command = '''\bhermes(?:\s+-\S+(?:\s+[^-\s]\S*)?)*\s+plugins\s+(?:install|update|auto-?update|adopt|remove|rm|uninstall|enable|disable|pack)\b'''
+
+[rules.install]   # terminal commands that install packages
+command = '''(?<![\w.-])(?:pip3?|pipx|uv|npm|pnpm|yarn|bun|apt|apt-get|dnf|yum|zypper|apk|brew|gem|cargo|go|conda|mamba|snap|flatpak|poetry|pdm|bundle|composer)(?![\w-])[^;&|\n]*?(?<![\w.-])(?:install|add|upgrade)(?![\w-])|(?<![\w.-])(?:(?:npm|pnpm|bun)\s+(?:i|ci)|uv\s+sync)(?![\w-])|(?<![\w.-])(?:dpkg|rpm)\s+-i|(?<![\w.-])pacman\s+-S'''
+
+[rules.systemctl]   # terminal commands that run systemctl; before other_hosts, so "systemctl restart ssh" is named systemctl
+command = '''\bsystemctl\b'''
+
+[rules.other_hosts]   # terminal commands that reach other hosts: remote shells and copies, web requests, git remotes
+command = '''(?<![\w.-])(?:ssh|ssh-copy-id|scp|sftp|rsync|mosh|telnet|ftp|nc|ncat|netcat|socat|curl|wget|gh)(?=\s|$)|(?<![\w.-])git(?:\s+-\S+(?:\s+(?:'[^']*'|"[^"]*"|[^-\s'"]\S*))?)*\s+(?:clone|fetch|pull|push|ls-remote|submodule|remote\s+update)(?![\w-])'''

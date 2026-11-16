@@ -56,7 +56,8 @@ Hermes's developer guide says a memory provider can also load as an ordinary plu
 
   | Entry point | Recorded as | Then |
   |---|---|---|
-  | A guard on `pre_tool_call` or `transform_llm_output` | `guard.crash` | Re-raises, so Hermes blocks the call or withholds the reply |
+  | A guard on `pre_tool_call` or `transform_llm_output`, in `on` mode | `guard.crash` | Re-raises, so Hermes blocks the call or withholds the reply |
+  | A guard in `log` mode, on any hook | `guard.crash` | Returns nothing, so the call or the reply goes ahead: `log` mode blocks nothing (section 5.4) |
   | A guard on `pre_llm_call` | `guard.crash` | Returns a block that names the failure |
   | The action query on `pre_llm_call` | `unhandled` | Returns a "recall failed" note, so the turn and the message query go ahead |
   | `prefetch()` | `unhandled` | Returns a "recall failed" note |
@@ -413,7 +414,7 @@ The reminder alone is not enough, because the model can ignore it as it ignores 
 
 What counts as a checkable question, a question about past work, a managed file or setting, and a sensitive action is defined in each guard's configuration file in this repository, as patterns and lists. Changing one is a pull request like any code change, with the guard's tests updated.
 
-The write gate's first list of sensitive actions (#80): writes into the skills folder by any tool; writes to Hermes's own `config.yaml` and `.env` and to the plugin's folder; and terminal commands that install packages, run `systemctl`, or reach other hosts.
+The write gate's first list of sensitive actions (#80): writes into the skills folder by any tool; writes to Hermes's own `config.yaml` and `.env` and to the plugin's folder; and terminal commands that install packages, run `systemctl`, or reach other hosts. The gate reads a `write_file` or `patch` call by the paths the tool will write, and a terminal command by pattern (section 5.6), so "any tool" means those three. Hermes's skill tool, `skill_manage`, is held by `skills.write_approval` instead (the last item of the list below).
 
 The guards rest on Hermes mechanisms that the table does not name:
 
@@ -445,7 +446,7 @@ Hermes's memory tool enforces the size limits of `MEMORY.md` and `USER.md` itsel
 
   It is a check before the start, not proof about the running process (section 5.6).
 - **A missing setting inside Hermes.** The plugin's `pre_llm_call` hook checks the build's settings on every turn. When one is missing or invalid, it blocks the turn with a notice that names the setting (`config.missing`), so the agent never runs a turn with the build half configured. Here and in the startup check, a setting is invalid when its value is not text with more than whitespace in it, or, for the connection string, when PostgreSQL's client library cannot parse it (#71, #83). Hermes keeps a blocked turn's message only as a placeholder, so the message must be sent again once the setting is fixed.[4] A scheduled job that finds a setting missing stops with the same code. The manifest declares no settings for Hermes to check: Hermes would only log a warning for a bad `config_schema` value, or disable a plugin whose `requires_env` variable is unset, and start anyway.[15]
-- **Each guard finishes well inside Hermes's hook deadline.** Hermes bounds a hook by `plugins.hook_callback_timeout`, 30 seconds by default. A `pre_llm_call` callback that runs past it is skipped, so the turn goes ahead, and Hermes then suppresses that callback for 60 seconds. Each guard therefore keeps its whole run, network calls included, under 10 seconds, and the startup check fails when the setting is below 30 seconds (#69).[14]
+- **Each guard finishes well inside Hermes's hook deadline.** Hermes bounds a hook by `plugins.hook_callback_timeout`, 30 seconds by default. A `pre_llm_call` callback that runs past it is skipped, so the turn goes ahead, and Hermes then suppresses that callback for 60 seconds. Each guard therefore keeps its whole run, network calls included, under 10 seconds, and the startup check fails when the setting is below 30 seconds (#69).[14] The write gate's hook writes its events from a worker thread, because a store that stops answering after the login is bounded by nothing the store enforces (#107). It waits on the store only to record a crash in the hook itself (#117).
 - **During a turn**, Hermes isolates hook errors, and the direction depends on the hook:[4]
 
   | Hook | When the callback raises or times out |
@@ -470,7 +471,7 @@ Hermes's memory tool enforces the size limits of `MEMORY.md` and `USER.md` itsel
 - A Hermes started by hand, outside the service, skips the startup check (section 5.5). Hermes logs a warning for a plugin that failed to load, and nothing in Hermes stops it; if the guards failed to load while the memory provider loaded, the provider records it (next item).
 - The startup check runs in a process of its own before Hermes starts. It does not prove the load in the process that serves requests, where a plugin's load has its own deadline and plugins can be reloaded while Hermes runs.[16] If the ordinary load fails there while the provider loads, the provider runs with no guards. The provider reports it: when it starts, it reads the `custom_build` entry in Hermes's plugin list (`list_plugins()`), and if that entry is missing, or shows an error or no registered hooks, it records `guard.not_loaded` and every recall it returns carries a notice that the guards are off. It checks once, when it starts, so a reload that fails later, while Hermes runs, is not caught.[16] A missing entry is what a gateway started by hand with `HERMES_SAFE_MODE` in its own environment shows: it skips plugin discovery, so the ordinary load never happens, while the memory provider still loads (#29).[16] A CLI or TUI launched with that variable, or with `--safe-mode`, does not take this path: it creates a safe-mode session (next item), and a gateway the CLI starts for itself drops the variable.[14]
 - Two kinds of gateway session run with no part of the build, and nothing records them. A session created in safe mode runs its turns in a worker process where Hermes starts no memory provider and runs no plugin hook. A session created with the profile's settings ignored runs on Hermes's code defaults, which do not select the build. How the build detects either is open (#23).[14]
-- Some of the build rests on Hermes behaviour that the developer guide does not describe: `kind: standalone` on a memory provider's directory and the two imports it causes (section 1), `register()` telling the two loads apart by its context, the startup check running as a plugin subcommand and calling Hermes's plugin loader and approval-mode readers directly, the memory provider reading Hermes's plugin list to find whether the guards loaded, and the write gate's checks for an approval bypass. Each is re-tested on every Hermes upgrade (OPERATIONS.md section 5).
+- Some of the build rests on Hermes behaviour that the developer guide does not describe: `kind: standalone` on a memory provider's directory and the two imports it causes (section 1), `register()` telling the two loads apart by its context, the startup check running as a plugin subcommand and calling Hermes's plugin loader and approval-mode readers directly, the memory provider reading Hermes's plugin list to find whether the guards loaded, the write gate's checks for an approval bypass, and the write gate reading which paths a `write_file` or `patch` call will write the way those tools resolve them. Each is re-tested on every Hermes upgrade (OPERATIONS.md section 5).
 - Hermes's approval gate approves without asking in four cases, and the write gate does not hold in them:[14]
   - yolo is on, by any route: the `--yolo` flag, the `HERMES_YOLO_MODE` variable, the `/yolo` command in a CLI or gateway session, or a one-shot run started with `hermes -z`;
   - `approvals.mode` is `off`;
@@ -502,6 +503,7 @@ Initial codes:
 | `rerank.fallback` | The judge could not rerank, and the pool kept its fused order (degraded) |
 | `store.gate_error` | The judge failed during a write; the fact is queued |
 | `guard.crash`, `guard.not_loaded` | A guard raised during a turn (recorded instead of `unhandled`), or the startup check found a guard's hooks or the provider not loaded, or the memory provider found, when it started, that the guards had not loaded |
+| `write_gate.would_ask`, `write_gate.would_block` | Not failures: in `log` mode, the write gate saw a call on its list that `on` would send to a person for approval, or would block outright (section 5.3) |
 | `config.unsafe` | The startup check found a Hermes setting with a value the build does not support (section 5.5) |
 | `config.missing` | A setting the build needs is missing or invalid: the startup check fails, a scheduled job stops, and inside Hermes every turn is blocked (section 5.5) |
 | `redact.failed` | The redactor raised; the text is not stored or sent |

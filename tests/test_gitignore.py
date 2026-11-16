@@ -32,6 +32,9 @@ HIDDEN = [
     "custom_build/scripts/notes.md",
     ".githooks/.env",
     ".githooks/notes.md",
+    "custom_build/guards/.env",
+    "custom_build/guards/notes.md",
+    "custom_build/guards/__pycache__/write_gate.cpython-314.pyc",
 ]
 VISIBLE = [
     "tests/test_new.py",
@@ -42,6 +45,8 @@ VISIBLE = [
     "custom_build/scripts/custom-build-new-job.py",
     "hermes-requirements.txt",
     ".githooks/pre-commit",
+    "custom_build/guards/write_gate.py",
+    "custom_build/guards/write_gate.toml",
 ]
 
 

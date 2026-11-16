@@ -29,6 +29,8 @@ CATALOG = {
     "store.gate_error": "The judge failed during a write; the fact is queued",
     "guard.crash": "A guard raised during a turn",
     "guard.not_loaded": "The startup check found a guard's hooks or the provider not loaded",
+    "write_gate.would_ask": "Not a failure: in log mode, the write gate saw a call on its list that on would send for approval",
+    "write_gate.would_block": "Not a failure: in log mode, the write gate saw a call on its list that on would block outright",
     "config.unsafe": "The startup check found a Hermes setting with a value the build does not support",
     "config.missing": "A setting the build needs is missing or invalid",
     "redact.failed": "The redactor raised; the text is not stored or sent",
@@ -44,6 +46,9 @@ CATALOG = {
 
 RESULTS = ("ok", "empty", "failed", "degraded")
 REASON_LIMIT = 500
+# With settings.CONNECT_TIMEOUT, inside the 10 seconds a guard has for its whole run (ARCHITECTURE.md 5.5).
+# Set per transaction, because Supabase's pooler drops a timeout given at connect (supavisor#1272).
+RECORD_TIMEOUT = "3s"
 # Postgres's and Supabase's pooler's texts for a refused login; psycopg gives no SQL state on connect.
 # shortcut: matches English server messages only, extend if a server runs another lc_messages.
 REFUSED_LOGIN = ("password authentication failed", "no pg_hba.conf entry", "pg_hba.conf rejects",
@@ -81,7 +86,12 @@ def record(conn, code, result, *, source, reason=None, project=None, session_id=
         _log_lost_write(fields, "no connection to the store")
         return False
     try:
+        own = conn.info.transaction_status == psycopg.pq.TransactionStatus.IDLE   # no caller's transaction is open
         with conn.transaction():
+            # A stalled store then gives up, a lost write like any other, instead of holding a hook past
+            # Hermes's deadline. Set inside a caller's transaction, the bound would outlive this record.
+            if own:
+                conn.execute(f"set local statement_timeout = '{RECORD_TIMEOUT}'")
             conn.execute(
                 "insert into memory.events (source, project, session_id, turn, code, result, reason, detail)"
                 " values (%s, %s, %s, %s, %s, %s, %s, %s)",
@@ -106,6 +116,23 @@ def _record_lost_connection(exc, source):
         record(None, "db.auth", "failed", source=source, reason=str(exc))
     else:
         record(None, "db.unreachable", "failed", source=source, reason=str(exc))
+
+
+@contextlib.contextmanager
+def store(source, connect):
+    """Give a new connection from `connect()` to record on, and close it on leaving.
+
+    Gives None when `connect()` gives None (no store is configured) or the connection fails to open,
+    which is logged as `db.auth` (the server refused the login) or `db.unreachable`, as in `run_job`.
+    `record()` then logs what it is given with events.write_failed.
+    """
+    try:
+        conn = connect()
+    except psycopg.OperationalError as exc:
+        _record_lost_connection(exc, source)
+        conn = None
+    with conn or contextlib.nullcontext():
+        yield conn
 
 
 def run_job(name, job, *, connect, source):
@@ -154,16 +181,16 @@ def _record_job_crash(conn, name, source, exc):
 
 
 def boundary(source, connect, on_crash):
-    """Wrap a guard that Hermes calls on `pre_llm_call` (ARCHITECTURE.md section 2).
+    """Wrap a guard that Hermes calls (ARCHITECTURE.md section 2).
 
     On any exception the guard raises, log it with its traceback, record `guard.crash` with the
-    exception's type and message as the reason, and return `on_crash(exc)`, the block that ends the
-    turn: Hermes would otherwise log the error and let the turn go ahead. `source()` names the machine
-    and `connect()` opens a connection for the record, or gives None when there is no store. A
-    connection that fails to open is logged as `db.auth` or `db.unreachable`, as in `run_job`; with no
-    connection, or an insert the store refuses, the record is logged with events.write_failed, and the
-    block is still returned. Only this row of section 2's table is built; the others arrive with their
-    entry points.
+    exception's type and message as the reason, and return `on_crash(exc)`: for a guard on
+    `pre_llm_call`, the block that ends the turn, which Hermes would otherwise let go ahead; for a
+    guard in log mode, None, so the call goes ahead. `source()` names the machine and `connect()`
+    opens a connection for the record, or gives None when there is no store. A connection that fails
+    to open is logged as `db.auth` or `db.unreachable`, as in `run_job`; with no connection, or an
+    insert the store refuses, the record is logged with events.write_failed, and `on_crash(exc)` is
+    still returned. The other rows of section 2's table arrive with their entry points.
     """
     def wrap(guard):
         @functools.wraps(guard)
@@ -182,7 +209,8 @@ def boundary(source, connect, on_crash):
                 except Exception:   # the turn's block must not depend on reaching the store (rule F5)
                     logger.exception("no connection to record guard.crash")
                 with conn or contextlib.nullcontext():   # closes the connection opened for this record
-                    record(conn, "guard.crash", "failed", source=machine, reason=reason, session_id=kwargs.get("session_id"))
+                    record(conn, "guard.crash", "failed", source=machine, reason=reason,
+                           session_id=kwargs.get("session_id") or None)   # Hermes passes "" for no session
                 return on_crash(exc)
         return call
     return wrap
