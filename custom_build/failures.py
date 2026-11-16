@@ -109,7 +109,7 @@ def _record_lost_connection(exc, source):
 
 
 def run_job(name, job, *, connect, source):
-    """Run job(conn) on a fresh connection; on any exception record it and exit non-zero.
+    """Run job(conn) on a fresh connection and return what it returns; on any exception record it and exit non-zero.
 
     The crash is recorded as `unhandled`, with the traceback in the log line and the exception's type
     and message as the reason, then as `job.failed` naming the job. SystemExit(1) follows, so the
@@ -129,7 +129,7 @@ def run_job(name, job, *, connect, source):
         raise SystemExit(1) from exc
     with conn:
         try:
-            job(conn)
+            return job(conn)
         except Exception as exc:
             logger.exception("job %s crashed", name)
             if not conn.closed:   # a lost connection reads as closed; record() then logs events.write_failed
