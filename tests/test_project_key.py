@@ -50,3 +50,9 @@ def test_a_workspace_that_is_not_a_repository_has_no_project(tmp_path):
 
 def test_a_repository_with_no_origin_has_no_project(tmp_path):
     assert project.key(_repo(tmp_path / "work")) is None
+
+
+@pytest.mark.parametrize("origin", ["/srv/repo.git", "../other", "file:///srv/repo.git"])
+def test_a_repository_whose_origin_is_not_a_network_remote_has_no_project(tmp_path, origin):
+    # #112 decided: such a repository stores its facts with no project, like one with no origin.
+    assert project.key(_repo(tmp_path / "work", origin)) is None
