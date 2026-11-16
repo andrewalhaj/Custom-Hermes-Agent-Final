@@ -12,6 +12,9 @@ import urllib.request
 MODEL = "qwen3-embedding:4b"
 DIMENSIONS = 2560
 OLLAMA_URL = "http://127.0.0.1:11434"
+# Ollama is on this machine, so its requests, which carry the text they embed, never go through a proxy
+# that the environment or the system names (OPERATIONS.md section 2).
+_DIRECT = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
 class EmbedUnavailable(Exception):
@@ -26,7 +29,7 @@ def _ollama(url, path, body=None, *, timeout):
     data = None if body is None else json.dumps(body).encode()
     request = urllib.request.Request(url + path, data=data, headers={"Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with _DIRECT.open(request, timeout=timeout) as response:
             return json.load(response)
     except OSError as exc:   # urllib's URLError and HTTPError, and socket timeouts, are all OSError
         raise EmbedUnavailable(f"{path}: {exc}") from exc
