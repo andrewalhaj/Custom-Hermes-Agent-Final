@@ -165,6 +165,7 @@ def test_the_catalog_holds_the_architecture_codes():
     assert set(failures.CATALOG) == {
         "embed.unavailable", "embed.model_mismatch", "db.unreachable", "db.auth", "db.query", "recall.timeout",
         "judge.timeout", "judge.error", "rerank.fallback", "store.gate_error", "guard.crash", "guard.not_loaded",
+        "guard.bypassed",
         "write_gate.would_ask",
         "write_gate.would_block",
         "verify_gate.would_block",
@@ -173,6 +174,7 @@ def test_the_catalog_holds_the_architecture_codes():
         "fact_gate.would_withhold",
         "config.unsafe", "config.missing", "redact.failed", "memory.write_rejected", "events.write_failed",
         "job.failed", "job.missed", "job.no_output", "host.missing", "host.heartbeat", "unhandled",
+        "job.succeeded",
     }
 
 

@@ -128,15 +128,15 @@ There are no references at first, as there are no skills: the store is added whe
 ### 3.3 The write path
 
 1. **Three entrances.**
-   - The agent stores a fact on purpose.
+   - The agent stores a fact on purpose, with the provider's `store_fact` tool, saying what it rests on.
    - An extraction model reads the user's messages and tool results (command output, file contents, documentation lookups) and proposes facts. It never reads the agent's own replies, because a wrong reply would otherwise be recalled later as a known fact.
    - At the provider's `on_session_end` (section 2), a digest model writes one digest for each long session (section 3.6) that does not have one yet.
 2. **Redaction before any model sees the text.** The message, the tool output and the session transcript are redacted before they reach the extraction, digest or judge model, and before anything is stored (CONTRIBUTING.md rule L4). If redaction fails, nothing is sent or stored (`redact.failed`).
 3. **A filter on each.**
-   - A fact stored on purpose passes a pattern filter: it must meet the minimum length and must not match the narration patterns in the write-path configuration file.
+   - A fact stored on purpose passes a pattern filter: it must meet the minimum length and must not match the narration patterns in the write-path configuration file, `custom_build/memory/write_path.toml`, which also holds section 3.6's supersede thresholds and the wording of the judge's questions.
    - Extracted facts and digests go to a judge model, which drops the ones not worth keeping.
    - An extracted fact then gets a separate check: does its source turn support it? A fact its source does not support is not stored.
-   - If the judge errors, the fact is queued for retry, never stored unchecked (`store.gate_error`).
+   - If the judge errors, the fact is queued for retry, never stored unchecked (`store.gate_error`). It waits, redacted, in the plugin's own SQLite database on the machine (section 2), and the provider retries the queue each time it starts in a primary session (not a subagent, cron run or flush), least-tried facts first, stopping at the first judge failure; a retry that resolves a fact is recorded as `store.gate_error` with the result `degraded`.
 4. **One store function.** All three entrances then go through one function. It embeds the text and compares it with what is already stored in the same project. "Short" and "long" are defined in section 3.6.
 
    | Match with an existing fact | Result |
@@ -146,7 +146,7 @@ There are no references at first, as there are no skills: the store is added whe
    | Very close in meaning, long text, or somewhat close in meaning | The judge decides whether it is the same subject and whether the new fact supersedes the old |
 
 5. **Origin protects deliberate facts.** A fact stored on purpose can supersede an extracted one. The reverse is never allowed.
-6. **Every fact records its basis and source.** `basis` is `user_stated`, `tool_observed` or `assistant_inferred`; `source_turn` points to the turn it came from. A digest takes the weakest basis of its inputs, so a summary never turns an inferred claim into a stated one. Recalled notes show the basis.
+6. **Every fact records its basis and source.** `basis` is `user_stated`, `tool_observed` or `assistant_inferred`; `source_turn` points to the turn it came from: the session's user-turn number, as Hermes counts it for `on_turn_start`, since a provider tool is not given a message position (#113). A digest takes the weakest basis of its inputs, so a summary never turns an inferred claim into a stated one. Recalled notes show the basis.
 7. **Nothing is silently lost.** A superseded or retired fact stays in the table, marked, with a pointer to its replacement or the reason it was retired.
 
 ### 3.4 Retrieval
@@ -168,7 +168,7 @@ For the facts store:
 5. Blend recency back in, on a reranked pool only. A rerank score ignores age, so the final score adds a recency term from `last_verified_at`, or `created_at` for a fact never checked.[9] Its weight is set by the eval set. A pool whose rerank failed keeps its fused order (step 4).
 6. Return the top results. Each result records which searches found it and which stage ranked it.
 
-**Filtering and the vector index.** pgvector applies `WHERE` conditions after the HNSW scan, so a filtered search can return fewer rows than asked for.[10] The search functions set `hnsw.iterative_scan = relaxed_order` (pgvector 0.8.0 and later). The facts index is partial, over live rows only, and queries repeat that predicate exactly so the planner uses it.
+**Filtering and the vector index.** pgvector applies `WHERE` conditions after the HNSW scan, so a filtered search can return fewer rows than asked for.[10] The search functions set `hnsw.iterative_scan = relaxed_order` (pgvector 0.8.0 and later). The write path's lookup of the one nearest fact (section 3.3) sets `strict_order`, because it reads only the top row and needs the truly nearest one. The facts index is partial, over live rows only, and queries repeat that predicate exactly so the planner uses it.
 
 **Word queries.** The full-text side joins the query's words with OR and ranks with `ts_rank_cd`. `plainto_tsquery` and `websearch_to_tsquery` both join unquoted words with AND, so with either one a long question matches nothing.[11] Postgres full-text ranking is not BM25: it uses no statistics from the rest of the collection.[11] BM25 for references therefore runs in application code.
 
@@ -224,7 +224,6 @@ Still open, each tracked in its own issue:
 
 - Whether reference chunks move into the shared store, decided with eval-set numbers once there is a set of documents to search (#3).
 - Where the memory provider reads each message's uid, and what happens to a session chunk when its uid appears on more than one row, its text changes or the message has none, to a branch's copied history, and to facts drawn from messages a rewind removed, settled when the sessions store is built (section 3.1) (#17).
-- How the build detects a gateway session that runs without it: one created in safe mode, or with the profile's settings ignored (#23).
 - Whether a search by the picked action finds what a search by a freely written one would, and whether a low-probability pick should count (#26).
 
 ### 3.7 What leaves the host
@@ -232,7 +231,7 @@ Still open, each tracked in its own issue:
 Every deployment states this in its own documentation:
 
 - Stored facts, digests, session chunks and events go to the memory database, which keeps session chunks and events for 90 days (section 4.3).
-- Search candidates, candidate facts and support checks go to the judge model when it is hosted.
+- Search candidates, candidate facts and support checks go to the judge model when it is hosted, and so does each new fact with the stored fact closest to it, when the judge decides whether one supersedes the other (section 3.3).
 - Each user message, with the end of the assistant's previous reply, goes to the judge model for routing (section 3.5) when it is hosted and the action query is switched on.
 - User messages and tool output go to the extraction model when it is hosted.
 - Session transcripts go to the digest model when it is hosted.
@@ -282,7 +281,7 @@ create table memory.facts (
   project          text,                     -- project key (section 2); null when the session had none
   source           text not null,            -- the machine that wrote the row
   session_id       text,
-  source_turn      integer,                  -- message position of the turn the fact came from
+  source_turn      integer,                  -- the session's user-turn number the fact came from (#113)
   embedding        halfvec(2560) not null,
   embedding_model  text not null,            -- model name and build digest
   search_text      tsvector generated always as (to_tsvector('english', body)) stored,
@@ -474,8 +473,8 @@ Hermes's memory tool enforces the size limits of `MEMORY.md` and `USER.md` itsel
 - Any exemption, such as for subagents or system notifications, is written down. An exempt path produces unguarded claims.
 - A Hermes started by hand, outside the service, skips the startup check (section 5.5). Hermes logs a warning for a plugin that failed to load, and nothing in Hermes stops it; if the guards failed to load while the memory provider loaded, the provider records it (next item).
 - The startup check runs in a process of its own before Hermes starts. It does not prove the load in the process that serves requests, where a plugin's load has its own deadline and plugins can be reloaded while Hermes runs.[16] If the ordinary load fails there while the provider loads, the provider runs with no guards. The provider reports it: when it starts, it reads the `custom_build` entry in Hermes's plugin list (`list_plugins()`), and if that entry is missing, or shows an error or no registered hooks, it records `guard.not_loaded` and every recall it returns carries a notice that the guards are off. It checks once, when it starts, so a reload that fails later, while Hermes runs, is not caught.[16] A missing entry is what a gateway started by hand with `HERMES_SAFE_MODE` in its own environment shows: it skips plugin discovery, so the ordinary load never happens, while the memory provider still loads (#29).[16] A CLI or TUI launched with that variable, or with `--safe-mode`, does not take this path: it creates a safe-mode session (next item), and a gateway the CLI starts for itself drops the variable.[14]
-- Two kinds of gateway session run with no part of the build, and nothing records them. A session created in safe mode runs its turns in a worker process where Hermes starts no memory provider and runs no plugin hook. A session created with the profile's settings ignored runs on Hermes's code defaults, which do not select the build. How the build detects either is open (#23).[14]
-- Some of the build rests on Hermes behaviour that the developer guide does not describe: `kind: standalone` on a memory provider's directory and the two imports it causes (section 1), `register()` telling the two loads apart by its context, the startup check running as a plugin subcommand and calling Hermes's plugin loader and approval-mode readers directly, the memory provider reading Hermes's plugin list to find whether the guards loaded, the write gate's checks for an approval bypass, and the write gate reading which paths a `write_file` or `patch` call will write the way those tools resolve them. Each is re-tested on every Hermes upgrade (OPERATIONS.md section 5).
+- Two kinds of gateway session run with no part of the build. A session created in safe mode runs its turns in a worker process where Hermes starts no memory provider and runs no plugin hook. A session created with the profile's settings ignored runs on Hermes's code defaults, which do not select the build. The build can neither block such a session nor act in it, so the heartbeat job records each one after the fact as `guard.bypassed`, up to 6 hours late, from the launch policy Hermes keeps in its state database (#23). Only local sessions carry these flags: from the CLI, the terminal UI, the desktop app or an editor client over ACP. A policy the heartbeat cannot read is recorded too, because nothing shows the build ran in that session. Limits: a session deleted, or handed off to a messaging channel, before the heartbeat's next run takes its policy with it and is not recorded; once retention deletes a session's `guard.bypassed` row after 90 days, a session whose policy is still kept is recorded again (#95); and two heartbeats running at the same moment on one host can each record the same session.[14]
+- Some of the build rests on Hermes behaviour that the developer guide does not describe: `kind: standalone` on a memory provider's directory and the two imports it causes (section 1), `register()` telling the two loads apart by its context, the startup check running as a plugin subcommand and calling Hermes's plugin loader and approval-mode readers directly, the memory provider reading Hermes's plugin list to find whether the guards loaded, the write gate's checks for an approval bypass, the write gate reading which paths a `write_file` or `patch` call will write the way those tools resolve them, and the heartbeat reading each local session's launch policy from Hermes's state database. Each is re-tested on every Hermes upgrade (OPERATIONS.md section 5).
 - Hermes's approval gate approves without asking in four cases, and the write gate does not hold in them:[14]
   - yolo is on, by any route: the `--yolo` flag, the `HERMES_YOLO_MODE` variable, the `/yolo` command in a CLI or gateway session, or a one-shot run started with `hermes -z`;
   - `approvals.mode` is `off`;
@@ -506,6 +505,7 @@ Initial codes:
 | `judge.timeout`, `judge.error` | The judge model times out or errors |
 | `rerank.fallback` | The judge could not rerank, and the pool kept its fused order (degraded) |
 | `store.gate_error` | The judge failed during a write; the fact is queued |
+| `guard.bypassed` | The heartbeat found a local session started in safe mode or with the profile's settings ignored, which ran with no part of the build, or one whose launch policy it cannot read (section 5.6) |
 | `guard.crash`, `guard.not_loaded` | A guard raised during a turn (recorded instead of `unhandled`), or the startup check found a guard's hooks or the provider not loaded, or the memory provider found, when it started, that the guards had not loaded |
 | `write_gate.would_ask`, `write_gate.would_block` | Not failures: in `log` mode, the write gate saw a call on its list that `on` would send to a person for approval, or would block outright (section 5.3) |
 | `verify_gate.would_block`, `verify_gate.would_withhold` | Not failures: in `log` mode, a call would change a listed file or setting the session never read, or a reply stated a listed file's contents the session never read (section 5.3) |
@@ -516,6 +516,7 @@ Initial codes:
 | `memory.write_rejected` | Hermes refused a built-in memory write |
 | `events.write_failed` | An `events` row could not be written; logged locally at ERROR |
 | `job.failed`, `job.missed`, `job.no_output` | A scheduled job failed or the startup check crashed; a scheduled job did not run, or took input and produced nothing |
+| `job.succeeded` | Not a failure: a scheduled job's run finished. Its `detail` names the job as `job` and, where the job has them, its counts as `input` and `output`; the job-health check reads those three keys (section 6.3) |
 | `host.missing` | An agent host on the job-health check's list wrote no heartbeat in the last 24 hours |
 | `host.heartbeat` | Not a failure: the heartbeat job on an agent host writes one every 6 hours (section 6.3) |
 | `unhandled` | Anything not in the catalog, outside a guard. Recorded by the boundary wrapper or the job wrapper, with its traceback in the log. |
@@ -535,7 +536,7 @@ Retention is an exception to the first two rows. It runs inside the database, so
 
 ### 6.3 Absence checks
 
-Some failures raise nothing. A daily check flags any scheduled job other than the heartbeat with no fresh success (`job.missed`), and any job that processed input but produced no output for more than one run (`job.no_output`). The daily report is itself checked by its absence: a day with no report is treated as a failure (OPERATIONS.md section 4). A failed startup check is recorded in `events`, so it reaches the daily report when the host can reach the store. A host that cannot reach the store, or does not run at all, is caught by its absence: a heartbeat job on every agent host writes one `host.heartbeat` event every 6 hours, so one late or missed beat does not flag a live host (#43), and the job-health check, which has the list of agent hosts in its configuration, records `host.missing` for any host with no heartbeat in the last 24 hours.
+Some failures raise nothing. A daily check flags any scheduled job other than the heartbeat and the check itself with no `job.succeeded` event in the last 24 hours (`job.missed`), and any job that processed input but produced no output for more than one run (`job.no_output`). The daily report is itself checked by its absence: a day with no report is treated as a failure (OPERATIONS.md section 4). A failed startup check is recorded in `events`, so it reaches the daily report when the host can reach the store. A host that cannot reach the store, or does not run at all, is caught by its absence: a heartbeat job on every agent host writes one `host.heartbeat` event every 6 hours, so one late or missed beat does not flag a live host (#43), and the job-health check, which has the list of agent hosts in its configuration, records `host.missing` for any host with no heartbeat in the last 24 hours.
 
 ## 7. Logging
 
@@ -571,7 +572,7 @@ The rules are L1–L5 in CONTRIBUTING.md.
 - [11] [Controlling text search (PostgreSQL documentation)](https://www.postgresql.org/docs/current/textsearch-controls.html)
 - [12] [Wu et al., LongMemEval, arXiv 2410.10813](https://arxiv.org/abs/2410.10813)
 - [13] [Row security policies (PostgreSQL documentation)](https://www.postgresql.org/docs/current/ddl-rowsecurity.html)
-- [14] Hermes v0.23.1 source: `hermes_logging.py`, `hermes_state_messages.py`, `hermes_state_mutation_transcript.py`, `hermes_yaml.py`, `model_tools.py`, `agent/agent_init.py`, `agent/agent_init_memory_provider.py`, `agent/managed_worker.py`, `agent/memory_manager.py`, `agent/memory_provider.py`, `agent/message_metadata.py`, `agent/redact.py`, `agent/safe_worker_policy.py`, `agent/turn_context.py`, `gateway/session_finite.py`, `gateway/session_local.py`, `gateway/session_managed_worker.py`, `hermes_cli/cli_commands_mixin.py`, `hermes_cli/cli_commands_session_tools.py`, `hermes_cli/cli_session_mixin.py`, `hermes_cli/config_defaults.py`, `hermes_cli/gateway_chat.py`, `hermes_cli/gateway_runtime_start.py`, `hermes_cli/main.py`, `hermes_cli/plugins.py`, `hermes_cli/plugins_context.py`, `hermes_cli/plugins_dispatch.py`, `tools/approval.py`, `tools/approval_context.py`, `tools/approval_yolo.py`, `plugins/memory/__init__.py`, `toolsets.py`, `tools/skill_manager_tool.py`
+- [14] Hermes v0.23.1 source: `hermes_logging.py`, `hermes_state_messages.py`, `hermes_state_mutation_transcript.py`, `hermes_yaml.py`, `model_tools.py`, `agent/agent_init.py`, `agent/agent_init_memory_provider.py`, `agent/managed_worker.py`, `agent/memory_manager.py`, `agent/memory_provider.py`, `agent/message_metadata.py`, `agent/redact.py`, `agent/safe_worker_policy.py`, `agent/turn_context.py`, `gateway/session_finite.py`, `gateway/session_local.py`, `gateway/session_managed_worker.py`, `hermes_cli/cli_commands_mixin.py`, `hermes_cli/cli_commands_session_tools.py`, `hermes_cli/cli_session_mixin.py`, `hermes_cli/config_defaults.py`, `hermes_cli/gateway_chat.py`, `hermes_cli/gateway_runtime_start.py`, `hermes_cli/main.py`, `hermes_cli/plugins.py`, `hermes_cli/plugins_context.py`, `hermes_cli/plugins_dispatch.py`, `tools/approval.py`, `tools/approval_context.py`, `tools/approval_yolo.py`, `plugins/memory/__init__.py`, `toolsets.py`, `tools/skill_manager_tool.py`, `acp_adapter/gateway_server.py`, `gateway/session_policy.py`, `hermes_state_local.py`, `hermes_state_mutation_retirement.py`
 - [15] [Build a Hermes plugin (Hermes Agent developer guide)](https://hermes-agent.nousresearch.com/docs/developer-guide/plugins)
 - [16] Hermes v0.23.1 source, plugin loading: `agent/prompt_builder.py`, `hermes_cli/plugin_isolation.py`, `hermes_cli/plugins.py`, `hermes_cli/plugins_cmd_install.py`, `hermes_cli/plugins_content.py`, `hermes_cli/plugins_discovery.py`, `hermes_cli/plugins_ledger.py`, `hermes_cli/plugins_loader.py`, `hermes_cli/plugins_manifest.py`, `plugins/memory/__init__.py`, `plugins/plugin_storage.py`
 - [17] [xiaowu0162/longmemeval-cleaned (Hugging Face dataset card)](https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned)

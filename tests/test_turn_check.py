@@ -38,17 +38,21 @@ print(json.dumps({"blocks": blocks, "context": context}))
 """
 
 
-def run_turn(tmp_path, db, *, machine_name="host-a", database_url=True, mode="plain"):
+def run_turn(tmp_path, db, *, machine_name="host-a", judge_model="jev-1.14.0", database_url=True, judge_key=True,
+             mode="plain"):
     """Run one turn's pre_llm_call hooks; return (blocks, Hermes's output, events rows)."""
     home = tmp_path / "home"
     shutil.copytree(PLUGIN, home / "plugins" / "custom_build", ignore=shutil.ignore_patterns("__pycache__"))
-    entry = {"settings": {"machine_name": machine_name}} if machine_name else {}
+    settings = {name: value for name, value in (("machine_name", machine_name), ("judge_model", judge_model)) if value}
+    entry = {"settings": settings} if settings else {}
     config = {"memory": {"provider": "custom_build"},
               "plugins": {"enabled": ["custom_build"], "entries": {"custom_build": entry}}}
     (home / "config.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
     env = {"HERMES_HOME": str(home), "HOME": str(tmp_path), "PATH": "/usr/bin:/bin"}
     if database_url:
         env["CUSTOM_BUILD_DATABASE_URL"] = db["agent"] if database_url is True else database_url
+    if judge_key:
+        env["TYPESAFE_API_KEY"] = "test-key-not-a-real-one"
     result = subprocess.run([sys.executable, "-c", SCENARIO, mode], capture_output=True, text=True,
                             env=env, cwd=tmp_path, timeout=120, check=False)
     assert result.returncode == 0, result.stderr[-2000:]
@@ -79,6 +83,20 @@ def test_a_missing_database_url_blocks_the_turn(tmp_path, db):
     blocks, output, rows = run_turn(tmp_path, db, database_url=False)
     assert len(blocks) == 1, output
     assert "config.missing" in blocks[0] and "CUSTOM_BUILD_DATABASE_URL" in blocks[0]
+    assert rows == []
+
+
+def test_a_missing_judge_model_blocks_the_turn(tmp_path, db):
+    blocks, output, rows = run_turn(tmp_path, db, judge_model=None)
+    assert len(blocks) == 1, output
+    assert "config.missing" in blocks[0] and "plugins.entries.custom_build.settings.judge_model" in blocks[0], blocks
+    assert rows == []
+
+
+def test_a_missing_judge_key_blocks_the_turn(tmp_path, db):
+    blocks, output, rows = run_turn(tmp_path, db, judge_key=False)
+    assert len(blocks) == 1, output
+    assert "config.missing" in blocks[0] and "TYPESAFE_API_KEY" in blocks[0], blocks
     assert rows == []
 
 

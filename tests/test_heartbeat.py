@@ -5,6 +5,7 @@ real `hermes` CLI there in a process of its own, and reads what the heartbeat wr
 throwaway store from the `db` fixture (conftest.py).
 """
 
+import json
 import pathlib
 import re
 import shutil
@@ -18,7 +19,6 @@ import yaml
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 PLUGIN = ROOT / "custom_build"
 HERMES = "import sys; from hermes_cli.main import main; sys.argv = ['hermes', *sys.argv[1:]]; main()"
-WRAPPER = "custom-build-heartbeat.py"
 
 
 def make_home(tmp_path, db, *, machine_name="host-a", database_url="agent", failures_edit=None):
@@ -63,13 +63,14 @@ def test_the_heartbeat_records_one_event_and_prints_nothing(tmp_path, db):
 UNREACHABLE = "postgresql://u:p@127.0.0.1:1/x?connect_timeout=3"
 
 
-def run_under_cron(tmp_path, home):
+def run_under_cron(tmp_path, home, job="heartbeat", schedule="every 6h"):
     """Set the job up as OPERATIONS.md section 4 says and run it once; return Hermes's answer and the run's record."""
     (home / "scripts").mkdir()
     # From the installed plugin into the folder Hermes runs script-only jobs from.
-    shutil.copy(home / "plugins" / "custom_build" / "scripts" / WRAPPER, home / "scripts" / WRAPPER)
-    created = hermes(tmp_path, home, "cron", "create", "every 6h", "--name", "custom-build-heartbeat",
-                     "--script", WRAPPER, "--no-agent", "--deliver", "local")
+    wrapper = f"custom-build-{job}.py"
+    shutil.copy(home / "plugins" / "custom_build" / "scripts" / wrapper, home / "scripts" / wrapper)
+    created = hermes(tmp_path, home, "cron", "create", schedule, "--name", f"custom-build-{job}",
+                     "--script", wrapper, "--no-agent", "--deliver", "local")
     assert created.returncode == 0, created.stdout + created.stderr
     job_id = re.search(r"Created job: ([0-9a-f]+)", created.stdout).group(1)
     ran = hermes(tmp_path, home, "cron", "run", job_id)   # with no gateway serving the home, it runs at once
@@ -82,6 +83,70 @@ def test_hermes_cron_runs_the_wrapper_from_its_scripts_folder_and_delivers_nothi
     assert "Ran now: succeeded" in answer, answer
     assert rows(db) == [("host.heartbeat", "ok", None, "host-a", {})]
     assert "silent (empty output)" in run
+
+
+# Local sessions as a gateway stores them: each one's launch policy, built by Hermes's own builder, kept in
+# state_meta under gateway.local_policy.v1:<session id> (hermes_state_local.py).
+SEED = r"""
+import dataclasses, json, sys
+from pathlib import Path
+from gateway.session_policy import build_policy
+from hermes_state import SessionDB
+from hermes_state_local import POLICY_PREFIX
+
+home = Path(sys.argv[1])
+db = SessionDB(home / "state.db")
+for sid, flags in json.loads(sys.argv[2]).items():
+    if isinstance(flags, str):   # a receipt stored as given, such as a malformed one
+        receipt = flags
+    else:
+        extra = flags.pop("policy_extra", {})   # fields this Hermes does not know, as after an upgrade or downgrade
+        policy = {**dataclasses.asdict(build_policy({"source": "cli", "cwd": str(home), "model": "m", **flags}, {})),
+                  **extra}
+        receipt = json.dumps({"session_id": sid, "policy": policy})
+    db._execute_write(lambda c: c.execute("insert into state_meta(key, value) values (?, ?)", (POLICY_PREFIX + sid, receipt)))
+db.close()
+"""
+
+
+def seed(tmp_path, home, sessions):
+    seeded = subprocess.run([sys.executable, "-c", SEED, str(home), json.dumps(sessions)], capture_output=True,
+                            text=True, timeout=120, check=False, cwd=tmp_path,
+                            env={"HERMES_HOME": str(home), "HOME": str(tmp_path), "PATH": "/usr/bin:/bin"})
+    assert seeded.returncode == 0, seeded.stderr[-2000:]
+
+
+def test_the_heartbeat_records_each_session_run_without_the_build_once(tmp_path, db):
+    home = make_home(tmp_path, db)
+    seed(tmp_path, home, {"s-safe": {"safe_mode": True}, "s-ignored": {"ignore_user_config": True}, "s-plain": {}})
+    state = (home / "state.db").read_bytes()
+    with psycopg.connect(db["agent"], autocommit=True) as conn:   # another host's record does not count for this one
+        conn.execute("insert into memory.events (source, code, result, session_id) values ('host-b', 'guard.bypassed', 'failed', 's-safe')")
+    for _ in range(2):   # the second run finds both already recorded
+        result = hermes(tmp_path, home, "custom-build", "heartbeat")
+        assert result.returncode == 0, result.stdout + result.stderr
+    assert (home / "state.db").read_bytes() == state   # read-only: the gateway's database is never changed
+    with psycopg.connect(db["owner"]) as conn:
+        found = conn.execute("select code, result, session_id, source from memory.events where source = 'host-a'"
+                             " order by id").fetchall()
+    assert sorted(row for row in found if row[0] == "guard.bypassed") == [
+        ("guard.bypassed", "failed", "s-ignored", "host-a"), ("guard.bypassed", "failed", "s-safe", "host-a"),
+    ]
+    assert [row[0] for row in found].count("host.heartbeat") == 2
+
+
+def test_a_receipt_the_heartbeat_cannot_read_is_recorded_without_stopping_the_scan(tmp_path, db):
+    # Hermes leaves a malformed receipt in place; the build cannot show it ran there, so it is recorded (#23).
+    home = make_home(tmp_path, db)
+    seed(tmp_path, home, {"s-broken": "{not json", "s-newer": {"policy_extra": {"new_field": 1}},
+                          "s-safe": {"safe_mode": True}})
+    result = hermes(tmp_path, home, "custom-build", "heartbeat")
+    assert result.returncode == 0, result.stdout + result.stderr
+    with psycopg.connect(db["owner"]) as conn:
+        found = conn.execute("select session_id, reason from memory.events where code = 'guard.bypassed'"
+                             " order by session_id").fetchall()
+    assert found == [("s-broken", "unreadable launch policy"), ("s-newer", "unreadable launch policy"),
+                     ("s-safe", "safe_mode")]
 
 
 def test_a_failed_heartbeat_under_hermes_cron_alerts_with_its_code(tmp_path, db):

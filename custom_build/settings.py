@@ -1,6 +1,6 @@
-"""The build's two settings and the per-turn check on them (ARCHITECTURE.md section 5.5).
+"""The build's settings and the per-turn check on them (ARCHITECTURE.md section 5.5).
 
-The startup check reads the same two settings before Hermes starts; the plugin's `pre_llm_call` hook
+The startup check reads the same settings before Hermes starts; the plugin's `pre_llm_call` hook
 reads them again on every turn, in the process that serves it, which a hand-started Hermes never
 checked before.
 """
@@ -11,6 +11,9 @@ from . import failures
 
 MACHINE_NAME = "machine_name"   # plugins.entries.custom_build.settings.machine_name in config.yaml
 DATABASE_URL = "CUSTOM_BUILD_DATABASE_URL"   # a secret, in the profile's .env
+JUDGE_MODEL = "judge_model"   # plugins.entries.custom_build.settings.judge_model: the judge, pinned by version
+JUDGE_KEY = "TYPESAFE_API_KEY"   # a secret, in the profile's .env
+AGENT_HOSTS = "agent_hosts"   # plugins.entries.custom_build.settings.agent_hosts on the job host: each agent host's name
 CONNECT_TIMEOUT = 5   # seconds, well under Hermes's 30-second deadline for a hook
 
 
@@ -31,14 +34,33 @@ def _connection_string(value):
     return True
 
 
-def missing_settings(ctx):
-    """The names of the build's settings that are not set, set to something other than text, or, for the
-    connection string, set to text PostgreSQL cannot parse."""
+def missing_store_settings(ctx):
+    """The names of the two settings anything that writes to the store needs, the heartbeat included, that
+    are not set, set to something other than text, or, for the connection string, set to text PostgreSQL
+    cannot parse."""
     from agent.secret_scope import get_secret
 
     found = (("plugins.entries.custom_build.settings." + MACHINE_NAME, _usable(ctx.get_config(MACHINE_NAME))),
              (DATABASE_URL, _connection_string(get_secret(DATABASE_URL))))
     return [name for name, ok in found if not ok]
+
+
+def missing_settings(ctx):
+    """Every build setting that is missing or invalid: the store's two, then the judge's model and key."""
+    from agent.secret_scope import get_secret
+
+    found = (("plugins.entries.custom_build.settings." + JUDGE_MODEL, _usable(ctx.get_config(JUDGE_MODEL))),
+             (JUDGE_KEY, _usable(get_secret(JUDGE_KEY))))
+    return missing_store_settings(ctx) + [name for name, ok in found if not ok]
+
+
+def agent_hosts(ctx):
+    """The job host's list of agent host names, or None unless it is a non-empty list of distinct usable
+    names with no padding, each written as its host's `machine_name` is."""
+    value = ctx.get_config(AGENT_HOSTS)
+    ok = (isinstance(value, list) and value and all(_usable(name) and name == name.strip() for name in value)
+          and len(set(value)) == len(value))
+    return value if ok else None
 
 
 def machine(ctx):
