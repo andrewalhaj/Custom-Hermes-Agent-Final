@@ -12,7 +12,7 @@ from . import failures, settings
 
 
 def run(ctx):
-    """Record one host.heartbeat event; return the exit code, 0 or 1.
+    """Record one host.heartbeat event, then any session that ran without the build; return the exit code, 0 or 1.
 
     It prints nothing when it succeeds, so Hermes cron delivers nothing. Every failure exits non-zero, so
     Hermes cron delivers its error alert, and prints one line to stderr that the alert carries, naming
@@ -20,7 +20,8 @@ def run(ctx):
     - a missing setting is config.missing, logged with events.write_failed, as in the startup check;
     - a connection that fails to open is db.auth or db.unreachable, logged by the job wrapper;
     - a row the store does not take is events.write_failed;
-    - a crash is unhandled and job.failed, recorded by the job wrapper.
+    - a crash is unhandled and job.failed, recorded by the job wrapper; so is a state.db Hermes cannot
+      open or read, after the heartbeat itself is recorded.
     """
     machine = settings.machine(ctx)
     if missing := settings.missing_settings(ctx):
@@ -56,28 +57,42 @@ def beat(conn, machine):
 
 
 def bypassed_sessions():
-    """(session id, the flag) for each local session whose launch policy set safe_mode or ignore_user_config.
+    """(session id, reason) for each local session that ran without the build, from its launch policy (#23).
 
     Hermes keeps each local session's policy in its state database, and the build is in none of these
-    sessions, so they are found here, after the fact (#23). Each is read the way Hermes reads one,
-    `restore_policy(local_receipt(...))`, through a read-only SessionDB; Hermes lists no receipts, so the
-    ids come from one query shaped like its own (`hermes_state_local.moved_receipts`). A home with no
-    state.db has opened no local session. Safe mode always sets ignore_user_config, which
-    restore_policy enforces.
+    sessions, so they are found here, after the fact. The database is opened read-only through Hermes's
+    own SessionDB, and each policy is checked with Hermes's own reader, `restore_policy`. Hermes lists
+    no receipts, so they come from one query shaped like its own (`hermes_state_local.moved_receipts`),
+    which also reads each value, so a session deleted mid-scan cannot fail it. The reason is the flag
+    set, `safe_mode` or `ignore_user_config`; safe mode always sets the second, which restore_policy
+    enforces. A receipt that cannot be read (Hermes leaves a malformed one in place) is reported too, as
+    "unreadable launch policy", because the build cannot show it ran there. A home with no state.db has
+    opened no local session.
     """
+    import json
+
     from gateway.session_policy import restore_policy
     from hermes_constants import get_hermes_home
     from hermes_state import SessionDB
-    from hermes_state_local import POLICY_PREFIX, local_receipt
+    from hermes_state_local import POLICY_PREFIX
+    from hermes_state_runtime import RuntimeStoreError
 
     path = get_hermes_home() / "state.db"
     if not path.exists():
         return []
     db = SessionDB(path, read_only=True)
     try:
-        ids = [row[0] for row in db._read_all("select substr(key, ?) from state_meta where key glob ?",
-                                               (len(POLICY_PREFIX) + 1, POLICY_PREFIX + "*"))]
-        policies = [(sid, restore_policy(local_receipt(db, sid)["policy"])) for sid in ids]
+        rows = db._read_all("select substr(key, ?), value from state_meta where key glob ?",
+                            (len(POLICY_PREFIX) + 1, POLICY_PREFIX + "*"))
     finally:
         db.close()
-    return [(sid, "safe_mode" if p.safe_mode else "ignore_user_config") for sid, p in policies if p.ignore_user_config]
+    found = []
+    for sid, value in rows:
+        try:
+            policy = restore_policy(json.loads(value)["policy"])
+        except (ValueError, KeyError, TypeError, RuntimeStoreError):   # not JSON, no policy, or one Hermes refuses
+            found.append((sid, "unreadable launch policy"))
+            continue
+        if policy.ignore_user_config:
+            found.append((sid, "safe_mode" if policy.safe_mode else "ignore_user_config"))
+    return found
