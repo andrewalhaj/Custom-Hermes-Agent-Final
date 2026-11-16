@@ -1,6 +1,6 @@
-"""The pattern filter on facts stored on purpose (ARCHITECTURE.md section 3.3, step 3).
+"""The write path's configuration file, and its pattern filter on facts stored on purpose (3.3, step 3).
 
-Its minimum length and narration patterns are in `write_path.toml`, beside this module.
+The configuration is `write_path.toml`, beside this module.
 """
 
 import pathlib
