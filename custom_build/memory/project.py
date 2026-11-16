@@ -1,8 +1,8 @@
 """The project a fact belongs to (ARCHITECTURE.md section 2).
 
 The key comes from the repository, so it is the same on every machine: the normalised URL of its
-`origin` remote. A workspace that is not a repository has no project; neither, for now, has a
-repository with no `origin` (#112).
+`origin` remote. A workspace that is not a repository has no project, and neither has a repository
+whose `origin` is missing, a local path or a file URL (#112).
 """
 
 import os
@@ -28,10 +28,16 @@ def key(cwd):
 
 
 def _normalise(url):
-    if "://" not in url:   # scp-like: [user@]host:path
+    """`host/path`, or None for a remote that is not on a network: a local path or a file URL (#112)."""
+    if "://" not in url:
+        # git reads `[user@]host:path` as a remote only when a colon comes before any slash; else it is a path.
+        if ":" not in url or "/" in url.split(":", 1)[0]:
+            return None
         host, path = url.split(":", 1)
         host = host.rsplit("@", 1)[-1]
     else:
         parts = urllib.parse.urlsplit(url)
         host, path = parts.hostname, parts.path   # hostname drops credentials and port, and lowercases
+        if not host:
+            return None
     return f"{host.lower()}/{path.strip('/').removesuffix('.git')}"
