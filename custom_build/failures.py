@@ -78,6 +78,7 @@ SEVERITY = {
     "unhandled": "high",
 }
 # The codes the build shows in a turn today, as the block that ends it (settings.check_turn, crash_block).
+# For guard.crash that is the per-turn settings check's crash; a gate in log mode shows nothing when it crashes.
 SHOWN_IN_TURN = frozenset({"config.missing", "guard.crash"})
 
 RESULTS = ("ok", "empty", "failed", "degraded")
