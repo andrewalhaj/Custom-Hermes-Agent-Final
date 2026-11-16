@@ -210,6 +210,7 @@ def test_a_stalled_store_does_not_hold_a_search_open(home, db, owner, ollama):
     outcome = recall(home, db, ollama.url, mode="stall")   # the scenario holds a lock on facts during prefetch
     assert "recall.timeout" in outcome["notes"]
     assert outcome["waiting"] == 0   # two seconds later, the store has cancelled the stuck search
+    assert _codes(db) == ["recall.timeout"]   # a cancelled search is not also db.unreachable (#158 review)
 
 
 def test_a_digests_open_items_stay_under_its_provenance(home, db, owner, ollama):
