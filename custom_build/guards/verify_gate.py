@@ -71,8 +71,8 @@ def changes(config, tool_name, args, task_id):
     elif tool_name == TERMINAL and isinstance(command := args.get("command"), str):
         names, writes = _named(config, args, task_id)
         found += [(name, command) for name in names if writes]
-        if (match := HERMES_CONFIG.search(command)) and match[1] in ("set", "unset") and match[2] in config["settings"]:
-            found.append((match[2], command))
+        found += [(match[2], command) for match in HERMES_CONFIG.finditer(command)
+                  if match[1] in ("set", "unset") and match[2] in config["settings"]]
     return found
 
 
@@ -84,7 +84,7 @@ def reads(config, tool_name, args, task_id):
         return []
     names, writes = _named(config, args, task_id)
     found = [] if writes else names
-    if match := HERMES_CONFIG.search(command):
+    for match in HERMES_CONFIG.finditer(command):   # every one in a chained command
         if match[1] == "show":
             found += sorted(config["settings"])
         elif match[1] == "get" and match[2] in config["settings"]:
