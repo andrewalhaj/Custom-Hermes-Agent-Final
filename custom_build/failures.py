@@ -46,6 +46,9 @@ CATALOG = {
 
 RESULTS = ("ok", "empty", "failed", "degraded")
 REASON_LIMIT = 500
+# With settings.CONNECT_TIMEOUT, inside the 10 seconds a guard has for its whole run (ARCHITECTURE.md 5.5).
+# Set per transaction, because Supabase's pooler drops a timeout given at connect (supavisor#1272).
+RECORD_TIMEOUT = "3s"
 # Postgres's and Supabase's pooler's texts for a refused login; psycopg gives no SQL state on connect.
 # shortcut: matches English server messages only, extend if a server runs another lc_messages.
 REFUSED_LOGIN = ("password authentication failed", "no pg_hba.conf entry", "pg_hba.conf rejects",
@@ -68,7 +71,8 @@ def record(conn, code, result, *, source, reason=None, project=None, session_id=
     before anything is logged or written. When the row cannot be written, because `conn` is None (no
     store is configured) or the store failed or refused the insert (any psycopg.Error), the original
     line is already logged, and the loss is logged at ERROR as events.write_failed (rule F5); nothing
-    is returned either way.
+    is returned either way. An insert in a transaction of its own gives up after RECORD_TIMEOUT, so a
+    stalled store cannot hold a hook past Hermes's deadline; it is then a lost write like any other.
     """
     if code not in CATALOG:
         raise UnknownFailureCode(code)
@@ -83,7 +87,10 @@ def record(conn, code, result, *, source, reason=None, project=None, session_id=
         _log_lost_write(fields, "no connection to the store")
         return
     try:
+        own = conn.info.transaction_status == psycopg.pq.TransactionStatus.IDLE   # no caller's transaction is open
         with conn.transaction():
+            if own:   # set inside a caller's transaction, the bound would outlive this record
+                conn.execute(f"set local statement_timeout = '{RECORD_TIMEOUT}'")
             conn.execute(
                 "insert into memory.events (source, project, session_id, turn, code, result, reason, detail)"
                 " values (%s, %s, %s, %s, %s, %s, %s, %s)",
