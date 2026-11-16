@@ -37,6 +37,8 @@ CATALOG = {
     "job.failed": "A scheduled job failed or the startup check crashed",
     "job.missed": "A scheduled job did not run",
     "job.no_output": "A scheduled job took input and produced nothing",
+    "host.missing": "An agent host on the job-health check's list wrote no heartbeat in the last 24 hours",
+    "host.heartbeat": "Not a failure: an agent host's heartbeat job ran",
     "unhandled": "Anything not in the catalog, outside a guard, recorded with its traceback",
 }
 

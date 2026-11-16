@@ -148,8 +148,15 @@ def test_the_catalog_holds_the_architecture_codes():
         "embed.unavailable", "embed.model_mismatch", "db.unreachable", "db.auth", "db.query", "recall.timeout",
         "judge.timeout", "judge.error", "rerank.fallback", "store.gate_error", "guard.crash", "guard.not_loaded",
         "config.unsafe", "config.missing", "redact.failed", "memory.write_rejected", "events.write_failed",
-        "job.failed", "job.missed", "job.no_output", "unhandled",
+        "job.failed", "job.missed", "job.no_output", "host.missing", "host.heartbeat", "unhandled",
     }
+
+
+@pytest.mark.parametrize("code, result", [("host.heartbeat", "ok"), ("host.missing", "failed")])
+def test_the_host_codes_can_be_recorded(db, code, result):
+    with psycopg.connect(db["agent"], autocommit=True) as conn:
+        failures.record(conn, code, result, source="host-a")
+    assert [row[4:6] for row in _rows(db["agent"])] == [(code, result)]
 
 
 def test_record_without_a_connection_logs_the_loss(caplog):
