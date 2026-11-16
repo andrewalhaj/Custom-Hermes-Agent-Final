@@ -37,40 +37,44 @@ def find_rule(rules, tool_name, args, task_id):
     The target is the path Hermes resolves for a write_file or patch call, or the terminal's command.
     """
     from hermes_constants import get_hermes_home
+    from tools.file_tools_paths import _resolve_path_for_task
 
     home = get_hermes_home()
-    paths = {name: os.path.realpath(PLUGIN_DIR if path == "{plugin}" else home / path)
-             for name, (path, _) in rules.items() if path}
+    paths = {name: PLUGIN_DIR if path == "{plugin}" else home / path for name, (path, _) in rules.items() if path}
     if tool_name in FILE_TOOLS:
         # The paths the tool itself will write, as Hermes reads them from the call and resolves them.
         from agent.tool_dispatch_helpers import _extract_file_mutation_targets
-        from tools.file_tools_paths import _resolve_path_for_task
 
         for target in _extract_file_mutation_targets(tool_name, args):
             resolved = os.path.realpath(_resolve_path_for_task(target, task_id or "default"))
-            for name, root in paths.items():
+            for name, path in paths.items():
+                root = os.path.realpath(path)
                 if resolved == root or resolved.startswith(root + os.sep):
                     return name, resolved
     elif tool_name == TERMINAL and isinstance(command := args.get("command"), str):
+        where = _resolve_path_for_task(args.get("workdir") or ".", task_id or "default")   # where it runs
         for name, (_, pattern) in rules.items():
-            if name in paths and any(spelling in command for spelling in _spellings(paths[name], home)):
-                return name, command
-            if pattern and pattern.search(command):
+            if (name in paths and _names(command, paths[name], home, where)) or (pattern and pattern.search(command)):
                 return name, command
     return None
 
 
-def _spellings(root, home):
-    """How a command names `root`: absolutely, from the user's home (as in ~/.hermes/skills), or from
-    $HERMES_HOME (as in $HERMES_HOME/skills or ${HERMES_HOME}/skills)."""
-    user_home, hermes_home = os.path.realpath(os.path.expanduser("~")), os.path.realpath(home)
-    found = {root}
-    if root.startswith(user_home + os.sep):
-        found.add(os.path.relpath(root, user_home))
-    if root.startswith(hermes_home + os.sep):
-        relative = os.path.relpath(root, hermes_home)
-        found |= {f"HERMES_HOME/{relative}", f"HERMES_HOME}}/{relative}"}
-    return found
+def _names(command, path, home, where):
+    """True when a command names `path`: absolutely or by the path it links to; from the user's home (as in
+    ~/.hermes/skills) or from where the command runs; or as an entry of a Hermes home the command also
+    names (as in $HERMES_HOME/skills, or cd ~/.hermes && rm -r skills)."""
+    bases = {os.path.expanduser("~"), str(where)}
+    bases |= {os.path.realpath(base) for base in bases}
+    if any(spelling in command for spelling in _spellings({str(path), os.path.realpath(path)}, bases)):
+        return True
+    entry = os.path.relpath(path, home)   # as in .env, skills or plugins/custom_build
+    homes = _spellings({str(home), os.path.realpath(home)}, bases) | {"HERMES_HOME"}
+    return not entry.startswith("..") and entry in command and any(name in command for name in homes)
+
+
+def _spellings(paths, bases):
+    """Each path, and each path from a base it lies under (as in .hermes/skills from the user's home)."""
+    return set(paths) | {os.path.relpath(path, base) for path in paths for base in bases if path.startswith(base + os.sep)}
 
 
 def blocked_because():
