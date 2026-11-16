@@ -128,15 +128,15 @@ There are no references at first, as there are no skills: the store is added whe
 ### 3.3 The write path
 
 1. **Three entrances.**
-   - The agent stores a fact on purpose.
+   - The agent stores a fact on purpose, with the provider's `store_fact` tool, saying what it rests on.
    - An extraction model reads the user's messages and tool results (command output, file contents, documentation lookups) and proposes facts. It never reads the agent's own replies, because a wrong reply would otherwise be recalled later as a known fact.
    - At the provider's `on_session_end` (section 2), a digest model writes one digest for each long session (section 3.6) that does not have one yet.
 2. **Redaction before any model sees the text.** The message, the tool output and the session transcript are redacted before they reach the extraction, digest or judge model, and before anything is stored (CONTRIBUTING.md rule L4). If redaction fails, nothing is sent or stored (`redact.failed`).
 3. **A filter on each.**
-   - A fact stored on purpose passes a pattern filter: it must meet the minimum length and must not match the narration patterns in the write-path configuration file.
+   - A fact stored on purpose passes a pattern filter: it must meet the minimum length and must not match the narration patterns in the write-path configuration file, `custom_build/memory/write_path.toml`, which also holds section 3.6's supersede thresholds and the wording of the judge's questions.
    - Extracted facts and digests go to a judge model, which drops the ones not worth keeping.
    - An extracted fact then gets a separate check: does its source turn support it? A fact its source does not support is not stored.
-   - If the judge errors, the fact is queued for retry, never stored unchecked (`store.gate_error`).
+   - If the judge errors, the fact is queued for retry, never stored unchecked (`store.gate_error`). It waits, redacted, in the plugin's own SQLite database on the machine (section 2), and the provider retries it each time it starts; a retry that stores it is recorded as `store.gate_error` with the result `degraded`.
 4. **One store function.** All three entrances then go through one function. It embeds the text and compares it with what is already stored in the same project. "Short" and "long" are defined in section 3.6.
 
    | Match with an existing fact | Result |
@@ -232,7 +232,7 @@ Still open, each tracked in its own issue:
 Every deployment states this in its own documentation:
 
 - Stored facts, digests, session chunks and events go to the memory database, which keeps session chunks and events for 90 days (section 4.3).
-- Search candidates, candidate facts and support checks go to the judge model when it is hosted.
+- Search candidates, candidate facts and support checks go to the judge model when it is hosted, and so does each new fact with the stored fact closest to it, when the judge decides whether one supersedes the other (section 3.3).
 - Each user message, with the end of the assistant's previous reply, goes to the judge model for routing (section 3.5) when it is hosted and the action query is switched on.
 - User messages and tool output go to the extraction model when it is hosted.
 - Session transcripts go to the digest model when it is hosted.
