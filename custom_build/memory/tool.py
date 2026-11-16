@@ -40,6 +40,36 @@ def store_fact(args, *, machine, session_id, turn, embedder, judge_at, connect):
         return {"refused": reason}
     fact = store.Fact(body=body, basis=args["basis"], project=project.key(resolve_agent_cwd()), source=machine,
                       session_id=session_id, source_turn=turn)
+    return _with_store(machine, session_id, connect, lambda conn: _save(conn, fact, embedder=embedder, judge_at=judge_at))
+
+
+def mirror(action, content, metadata, *, machine, session_id, turn, embedder, judge_at, connect):
+    """Mirror one committed built-in memory write (ARCHITECTURE.md section 2): an added entry is stored as a
+    fact the user stated, a replaced one supersedes the old entry's fact, a removed one retires it.
+
+    A person approved the entry (`memory.write_approval`), so the stored-on-purpose filter does not apply
+    (#142); redaction and the supersede check do. Failures are recorded with their codes; Hermes has
+    already committed the write, so nothing is returned to it.
+    """
+    body = redact_sensitive_text(str(content), force=True)
+    key = project.key(resolve_agent_cwd())
+
+    def work(conn):
+        if action == "remove":
+            store.retire(conn, key, body, "removed from built-in memory")
+            return
+        fact = store.Fact(body=body, basis="user_stated", project=key, source=machine, session_id=session_id,
+                          source_turn=turn)
+        outcome = _save(conn, fact, embedder=embedder, judge_at=judge_at)
+        new = outcome.get("stored") or outcome.get("already_stored")
+        if action == "replace" and new and metadata.get("previous_content"):
+            store.supersede(conn, key, redact_sensitive_text(str(metadata["previous_content"]), force=True), new)
+
+    _with_store(machine, session_id, connect, work)
+
+
+def _with_store(machine, session_id, connect, work):
+    """work(conn) on a new connection, or {"error": code} when it cannot open, recorded as db.auth or db.unreachable."""
     try:
         conn = connect()
     except psycopg.OperationalError as exc:
@@ -49,12 +79,17 @@ def store_fact(args, *, machine, session_id, turn, embedder, judge_at, connect):
         failures.record(None, "db.unreachable", "failed", source=machine, reason=str(exc), session_id=session_id)
         return {"error": "db.unreachable"}
     with conn:
-        outcome = attempt(conn, fact, embedder=embedder, judge_at=judge_at)
-        if outcome.get("error") in ("judge.error", "judge.timeout"):
-            queue.add(fact)
-            failures.record(conn, "store.gate_error", "failed", source=machine, session_id=session_id,
-                            reason=f"{outcome['error']}; the fact is queued for retry")
-            return {"error": "store.gate_error", "queued": True}
+        return work(conn)
+
+
+def _save(conn, fact, *, embedder, judge_at):
+    """attempt(), with a fact the judge could not decide on queued for retry (store.gate_error)."""
+    outcome = attempt(conn, fact, embedder=embedder, judge_at=judge_at)
+    if outcome.get("error") in ("judge.error", "judge.timeout"):
+        queue.add(fact)
+        failures.record(conn, "store.gate_error", "failed", source=fact.source, session_id=fact.session_id,
+                        reason=f"{outcome['error']}; the fact is queued for retry")
+        return {"error": "store.gate_error", "queued": True}
     return outcome
 
 

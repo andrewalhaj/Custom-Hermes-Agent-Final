@@ -95,3 +95,15 @@ def _replaced(nearest, body, judge):
                                               timeout=judge_api.DEADLINE)
         return old_id if judge_api.supersedes(answers) else None
     return None
+
+
+def supersede(conn, project, old_body, new_id):
+    """Point the live fact holding `old_body` in the project at `new_id`, the fact that replaced it."""
+    conn.execute(f"update memory.facts set superseded_by = %s where project is not distinct from %s and body_hash = %s"
+                 f" and id <> %s and {LIVE}", (new_id, project, body_hash(old_body), new_id))
+
+
+def retire(conn, project, body, reason):
+    """Retire the live fact holding `body` in the project, with the reason; the row stays (4.1)."""
+    conn.execute(f"update memory.facts set retired_at = now(), retired_reason = %s where project is not distinct from %s"
+                 f" and body_hash = %s and {LIVE}", (reason, project, body_hash(body)))
