@@ -36,6 +36,10 @@ def unsafe_settings():
     """Hermes settings with a value the build does not support (`config.unsafe`)."""
     from hermes_cli.config import load_config_readonly
     from hermes_cli.gateway_migrate_guards import auto_migration_opted_out
+    from hermes_cli.gateway_multiplex_mode import (
+        explicit_multiplex_flag,
+        settled_explicit_flag,
+    )
     from hermes_cli.plugins import _resolve_hook_callback_timeout
     from hermes_constants import get_default_hermes_root
     from tools.approval_context import _binary_approval_mode, _get_approval_mode
@@ -59,6 +63,9 @@ def unsafe_settings():
     # The check runs only at start; with this on, a running gateway also serves a profile added later (#85).
     if not auto_migration_opted_out(get_default_hermes_root()):
         found.append("gateway.auto_multiplex_migration is not false")
+    # Read the way boot reads it: true serves every profile from start, and the opt-out is never consulted.
+    if settled_explicit_flag(explicit_multiplex_flag(get_default_hermes_root())):
+        found.append("gateway.multiplex_profiles (or GATEWAY_MULTIPLEX_PROFILES) is true")
     return found
 
 
