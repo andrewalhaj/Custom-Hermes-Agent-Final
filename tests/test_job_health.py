@@ -65,13 +65,24 @@ def test_a_listed_job_with_no_recent_success_or_no_output_is_recorded(tmp_path, 
     module = home / "plugins" / "custom_build" / "job_health.py"
     text = module.read_text(encoding="utf-8")
     assert "JOBS = ()" in text   # the list starts empty; the report and retention add themselves
-    module.write_text(text.replace("JOBS = ()", 'JOBS = ("nightly", "digest", "fresh", "never-ran")'), encoding="utf-8")
+    jobs = ("nightly", "digest", "fresh", "never-ran", "one-empty", "idle", "ordered", "uncounted")
+    module.write_text(text.replace("JOBS = ()", f"JOBS = {jobs!r}"), encoding="utf-8")
     seed(db, ("host.heartbeat", "host-a", 1, {}),
          ("job.succeeded", "host-a", 30, {"job": "nightly"}),                         # last ran 30 hours ago
          ("job.succeeded", "host-a", 20, {"job": "digest", "input": 5, "output": 0}),
          ("job.succeeded", "host-a", 2, {"job": "digest", "input": 4, "output": 0}),   # two runs in, nothing out
          ("job.succeeded", "host-a", 26, {"job": "fresh", "input": 3, "output": 0}),
-         ("job.succeeded", "host-a", 1, {"job": "fresh", "input": 3, "output": 3}))   # one empty run, then output
+         ("job.succeeded", "host-a", 1, {"job": "fresh", "input": 3, "output": 3}),   # one empty run, then output
+         # Not flagged: one empty run alone; nothing to do (no input); only the newest two runs count;
+         # a run that reports no output count is no evidence of none.
+         ("job.succeeded", "host-a", 1, {"job": "one-empty", "input": 2, "output": 0}),
+         ("job.succeeded", "host-a", 20, {"job": "idle", "input": 0, "output": 0}),
+         ("job.succeeded", "host-a", 2, {"job": "idle", "input": 0, "output": 0}),
+         ("job.succeeded", "host-a", 30, {"job": "ordered", "input": 2, "output": 0}),
+         ("job.succeeded", "host-a", 20, {"job": "ordered", "input": 2, "output": 0}),
+         ("job.succeeded", "host-a", 1, {"job": "ordered", "input": 2, "output": 2}),
+         ("job.succeeded", "host-a", 20, {"job": "uncounted", "input": 2}),
+         ("job.succeeded", "host-a", 2, {"job": "uncounted", "input": 2}))
     result = hermes(tmp_path, home, "custom-build", "job-health")
     assert result.returncode == 0, result.stdout + result.stderr
     assert recorded(db) == [
