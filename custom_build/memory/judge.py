@@ -4,8 +4,8 @@ The judge is TypeSafe's System One API (OPERATIONS.md section 2). Its questions,
 that reads their answers, are in `write_path.toml`.
 """
 
+import http.client
 import json
-import urllib.error
 import urllib.request
 
 from . import write_path
@@ -32,16 +32,14 @@ def supersede_answers(stored, new, *, url, key, model, timeout):
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             answers = json.load(response)["answers"]
+        return {name: answers[name]["noul"] for name in questions}
     except TimeoutError as exc:
         raise JudgeTimeout(f"no answer within {timeout} seconds") from exc
-    except urllib.error.URLError as exc:   # HTTPError too; a deadline missed while connecting arrives inside one
-        if isinstance(exc.reason, TimeoutError):
-            raise JudgeTimeout(f"no answer within {timeout} seconds") from exc
-        raise JudgeError(str(exc)) from exc
-    except OSError as exc:   # the connection dropped while the answer was read
-        raise JudgeError(str(exc)) from exc
-    return {name: answers[name]["noul"] for name in questions}
-
+    # urllib's URLError and HTTPError, and a dropped connection, are OSError; an answer cut off while it is
+    # read is http.client's IncompleteRead (HTTPException); an answer that is not JSON is a ValueError, and
+    # one without the questions' answers a KeyError or TypeError.
+    except (OSError, http.client.HTTPException, ValueError, KeyError, TypeError) as exc:
+        raise JudgeError(f"{type(exc).__name__}: {exc}"[:200]) from exc
 
 def supersedes(answers):
     """The decision, in code: every answer at or above the threshold."""
