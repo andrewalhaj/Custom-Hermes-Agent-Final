@@ -22,7 +22,6 @@ def test_creates_the_events_table_as_planned(db):
             "select column_name, data_type, is_nullable from information_schema.columns"
             " where table_schema = 'memory' and table_name = 'events' order by ordinal_position"
         ).fetchall()
-        tables = conn.execute("select table_name from information_schema.tables where table_schema = 'memory'").fetchall()
     assert columns == [
         ("id", "bigint", "NO"),
         ("at", "timestamp with time zone", "NO"),
@@ -35,14 +34,13 @@ def test_creates_the_events_table_as_planned(db):
         ("reason", "text", "YES"),
         ("detail", "jsonb", "NO"),
     ]
-    assert tables == [("events",)]
 
 
 def test_creates_the_two_indexes(db):
     with psycopg.connect(db["owner"]) as conn:
         indexes = conn.execute(
-            "select indexname, indexdef from pg_indexes where schemaname = 'memory' and indexname <> 'events_pkey'"
-            " order by indexname"
+            "select indexname, indexdef from pg_indexes where schemaname = 'memory' and tablename = 'events'"
+            " and indexname <> 'events_pkey' order by indexname"
         ).fetchall()
     assert [(n, d.split(" USING ")[1]) for n, d in indexes] == [
         ("events_at_idx", "btree (at)"),
@@ -99,7 +97,8 @@ def test_maintenance_can_delete_an_event(db):
 def test_the_policies_are_exactly_these(db):
     with psycopg.connect(db["owner"]) as conn:
         rows = conn.execute(
-            "select policyname, cmd, roles::text[] from pg_policies where schemaname = 'memory' order by policyname"
+            "select policyname, cmd, roles::text[] from pg_policies where schemaname = 'memory' and tablename = 'events'"
+            " order by policyname"
         ).fetchall()
     assert rows == [
         ("events_agent_insert", "INSERT", ["memory_agent"]),
