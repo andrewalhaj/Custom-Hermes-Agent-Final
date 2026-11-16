@@ -6,6 +6,7 @@ differs from one already in the store embeds nothing (`embed.model_mismatch`), a
 cannot embed is `embed.unavailable`: there is no substitute model.
 """
 
+import http.client
 import json
 import urllib.request
 
@@ -31,7 +32,9 @@ def _ollama(url, path, body=None, *, timeout):
     try:
         with _DIRECT.open(request, timeout=timeout) as response:
             return json.load(response)
-    except OSError as exc:   # urllib's URLError and HTTPError, and socket timeouts, are all OSError
+    # urllib's URLError and HTTPError and socket timeouts are OSError; an answer cut off or garbled while it
+    # is read raises http.client's IncompleteRead or BadStatusLine, which are HTTPException.
+    except (OSError, http.client.HTTPException) as exc:
         raise EmbedUnavailable(f"{path}: {exc}") from exc
 
 
@@ -69,7 +72,8 @@ class Embedder:
         if self.build is None:
             self.check(conn, timeout=timeout)
         vectors = _ollama(self.url, "/api/embed", {"model": MODEL, "input": texts}, timeout=timeout)["embeddings"]
-        if [len(vector) for vector in vectors] != [DIMENSIONS] * len(texts):
-            raise ModelMismatch(f"Ollama returned {len(vectors)} vectors of {sorted({len(v) for v in vectors})} "
-                                f"numbers for {len(texts)} texts, not {DIMENSIONS} numbers each")
+        if len(vectors) != len(texts):
+            raise EmbedUnavailable(f"Ollama returned {len(vectors)} vectors for {len(texts)} texts")
+        if any(len(vector) != DIMENSIONS for vector in vectors):
+            raise ModelMismatch(f"Ollama returned vectors of {sorted({len(v) for v in vectors})} numbers, not {DIMENSIONS}")
         return vectors
