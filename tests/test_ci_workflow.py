@@ -303,10 +303,14 @@ def test_workflow_runs_on_pull_requests_and_main():
     assert "python -m pytest -q" in commands
 
 
-def test_tests_get_a_postgres_17_to_apply_migrations_to():
+# The store runs Postgres 17.6 with pgvector 0.8.0 (read from the Supabase project on 2026-11-16; #96).
+PGVECTOR_IMAGE = "pgvector/pgvector:0.8.0-pg17@sha256:40b404964359299eefdd5f8518facf1886c562848cf4de13b6eaf91cb70c2b87"
+
+
+def test_tests_get_a_postgres_17_with_pgvector_to_apply_migrations_to():
     job = yaml.safe_load(WORKFLOW.read_text())["jobs"]["tests"]
     service = job["services"]["postgres"]
-    assert service["image"].startswith("postgres:17")
+    assert service["image"] == PGVECTOR_IMAGE
     assert "5432:5432" in service["ports"]
     assert job["env"]["TEST_DATABASE_URL"].startswith("postgresql://postgres:")
     assert job["env"]["TEST_DATABASE_URL"].endswith("@localhost:5432/postgres")
