@@ -207,7 +207,8 @@ These are configuration values. Change one through an issue, with eval-set numbe
 | Minimum fact length | 10 characters |
 | Supersede without the judge | Cosine similarity 0.92 or higher, short texts only |
 | Ask the judge | Cosine similarity from 0.80 up to 0.92, or 0.92 and higher for long texts. The judge returns two probabilities, "same subject" and "the new fact supersedes the old"; both must be 0.75 or higher. |
-| Judge gate | Drops at a drop score of 0.70 or higher |
+| Judge gate | Drops at a drop score of 0.70 or higher: 1 minus the judge's probability that the fact is worth keeping (#152) |
+| Support check (extracted facts) | Kept only when the judge's probability that its source turn supports it is 0.75 or higher. A starting value; the eval set confirms or changes it. |
 | Results per message | 5; 8 on a question about past work; 3 for the action query |
 | Score floor | 0.30, on facts the judge reranked, where the score is the judge's probability that the fact helps answer the message: under 0.3 reads as no, as in the "Asks for work at all" row. No floor on results ranked by fusion alone. A starting value; the eval set confirms or changes it. |
 | Recall deadline (`prefetch()`) | 6 seconds |
