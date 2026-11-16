@@ -48,7 +48,7 @@ def run_turn(tmp_path, db, *, machine_name="host-a", database_url=True, mode="pl
     (home / "config.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
     env = {"HERMES_HOME": str(home), "HOME": str(tmp_path), "PATH": "/usr/bin:/bin"}
     if database_url:
-        env["CUSTOM_BUILD_DATABASE_URL"] = db["agent"]
+        env["CUSTOM_BUILD_DATABASE_URL"] = db["agent"] if database_url is True else database_url
     result = subprocess.run([sys.executable, "-c", SCENARIO, mode], capture_output=True, text=True,
                             env=env, cwd=tmp_path, timeout=120, check=False)
     assert result.returncode == 0, result.stderr[-2000:]
@@ -79,6 +79,14 @@ def test_a_missing_database_url_blocks_the_turn(tmp_path, db):
     blocks, output, rows = run_turn(tmp_path, db, database_url=False)
     assert len(blocks) == 1, output
     assert "config.missing" in blocks[0] and "CUSTOM_BUILD_DATABASE_URL" in blocks[0]
+    assert rows == []
+
+
+def test_a_database_url_postgresql_cannot_parse_blocks_the_turn(tmp_path, db):
+    blocks, output, rows = run_turn(tmp_path, db, database_url="not a url")
+    assert len(blocks) == 1, output
+    assert "config.missing" in blocks[0] and "CUSTOM_BUILD_DATABASE_URL" in blocks[0], blocks
+    assert "PostgreSQL can parse" in blocks[0], blocks   # the notice says how to fix it, not only "set it as text"
     assert rows == []
 
 

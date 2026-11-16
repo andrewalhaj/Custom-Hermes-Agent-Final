@@ -20,13 +20,25 @@ def _usable(value):
     return isinstance(value, str) and bool(value.strip())
 
 
+def _connection_string(value):
+    """Usable, and a connection string PostgreSQL's client library can parse (#83)."""
+    if not _usable(value):
+        return False
+    try:
+        psycopg.conninfo.conninfo_to_dict(value)
+    except psycopg.ProgrammingError:   # what conninfo_to_dict raises for a malformed string
+        return False
+    return True
+
+
 def missing_settings(ctx):
-    """The names of the build's settings that are not set, or set to something other than text."""
+    """The names of the build's settings that are not set, set to something other than text, or, for the
+    connection string, set to text PostgreSQL cannot parse."""
     from agent.secret_scope import get_secret
 
-    found = (("plugins.entries.custom_build.settings." + MACHINE_NAME, ctx.get_config(MACHINE_NAME)),
-             (DATABASE_URL, get_secret(DATABASE_URL)))
-    return [name for name, value in found if not _usable(value)]
+    found = (("plugins.entries.custom_build.settings." + MACHINE_NAME, _usable(ctx.get_config(MACHINE_NAME))),
+             (DATABASE_URL, _connection_string(get_secret(DATABASE_URL))))
+    return [name for name, ok in found if not ok]
 
 
 def machine(ctx):
@@ -56,7 +68,8 @@ def check_turn(ctx, **kwargs):
                     session_id=kwargs.get("session_id"))
     return {"action": "block", "message": f"The custom build blocked this turn: config.missing ({names}). "
                                           "Set each one as text, quoting a value YAML would read as a number "
-                                          "or date, then send your message again."}
+                                          "or date, and the connection string as one PostgreSQL can parse, "
+                                          "then send your message again."}
 
 
 def crash_block(exc):
