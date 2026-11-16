@@ -162,16 +162,16 @@ def _record_job_crash(conn, name, source, exc):
 
 
 def boundary(source, connect, on_crash):
-    """Wrap a guard that Hermes calls on `pre_llm_call` (ARCHITECTURE.md section 2).
+    """Wrap a guard that Hermes calls (ARCHITECTURE.md section 2).
 
     On any exception the guard raises, log it with its traceback, record `guard.crash` with the
-    exception's type and message as the reason, and return `on_crash(exc)`, the block that ends the
-    turn: Hermes would otherwise log the error and let the turn go ahead. `source()` names the machine
-    and `connect()` opens a connection for the record, or gives None when there is no store. A
-    connection that fails to open is logged as `db.auth` or `db.unreachable`, as in `run_job`; with no
-    connection, or an insert the store refuses, the record is logged with events.write_failed, and the
-    block is still returned. Only this row of section 2's table is built; the others arrive with their
-    entry points.
+    exception's type and message as the reason, and return `on_crash(exc)`: for a guard on
+    `pre_llm_call`, the block that ends the turn, which Hermes would otherwise let go ahead; for a
+    guard in log mode, None, so the call goes ahead. `source()` names the machine and `connect()`
+    opens a connection for the record, or gives None when there is no store. A connection that fails
+    to open is logged as `db.auth` or `db.unreachable`, as in `run_job`; with no connection, or an
+    insert the store refuses, the record is logged with events.write_failed, and `on_crash(exc)` is
+    still returned. The other rows of section 2's table arrive with their entry points.
     """
     def wrap(guard):
         @functools.wraps(guard)

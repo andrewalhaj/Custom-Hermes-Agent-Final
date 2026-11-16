@@ -43,13 +43,15 @@ def register(ctx) -> None:
         return
 
     from . import failures, settings
+    from .guards import write_gate
 
     @failures.boundary(lambda: settings.machine(ctx), settings.connect, settings.crash_block)
     def check_turn(**kwargs):
         return settings.check_turn(ctx, **kwargs)
 
-    # Before the subcommand: if this fails, Hermes drops the load and the startup check cannot pass.
+    # Before the subcommand: if either fails, Hermes drops the load and the startup check cannot pass.
     ctx.register_hook("pre_llm_call", check_turn)
+    write_gate.register(ctx)
 
     def run_check(args) -> int:
         from . import startup_check

@@ -29,6 +29,11 @@
 /custom_build/*
 !/custom_build/*.py
 !/custom_build/plugin.yaml
+!/custom_build/guards/
+
+/custom_build/guards/*
+!/custom_build/guards/*.py
+!/custom_build/guards/*.toml
 
 /.githooks/*
 !/.githooks/pre-commit
