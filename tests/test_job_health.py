@@ -1,0 +1,60 @@
+"""Prove the job-health check, `hermes custom-build job-health` (issue #134, ARCHITECTURE.md section 6.3).
+
+Each case runs the real `hermes` CLI in a throwaway Hermes home, with the harness of test_heartbeat.py,
+against events seeded in the throwaway store from the `db` fixture (conftest.py).
+"""
+
+import psycopg
+import pytest
+import yaml
+
+from tests.test_heartbeat import hermes, make_home
+
+
+def with_hosts(home, hosts):
+    """Set the job host's list of agent hosts, `plugins.entries.custom_build.settings.agent_hosts`."""
+    path = home / "config.yaml"
+    config = yaml.safe_load(path.read_text(encoding="utf-8"))
+    config["plugins"]["entries"]["custom_build"]["settings"]["agent_hosts"] = hosts
+    path.write_text(yaml.safe_dump(config), encoding="utf-8")
+    return home
+
+
+def seed(db, *events):
+    """Insert (code, source, hours ago, detail) rows, as earlier runs on any host would have."""
+    with psycopg.connect(db["owner"], autocommit=True) as conn:
+        for code, source, hours, detail in events:
+            conn.execute("insert into memory.events (at, source, code, result, detail)"
+                         " values (now() - make_interval(hours => %s), %s, %s, 'ok', %s)",
+                         (hours, source, code, psycopg.types.json.Jsonb(detail)))
+
+
+def recorded(db):
+    with psycopg.connect(db["owner"]) as conn:
+        return conn.execute("select code, result, source, detail from memory.events"
+                            " where at > now() - interval '1 minute' order by id").fetchall()
+
+
+def test_a_host_with_no_heartbeat_in_24_hours_is_recorded_as_missing(tmp_path, db):
+    home = with_hosts(make_home(tmp_path, db), ["host-a", "host-b", "host-c"])
+    seed(db, ("host.heartbeat", "host-a", 5, {}), ("host.heartbeat", "host-b", 25, {}))
+    result = hermes(tmp_path, home, "custom-build", "job-health")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout == ""   # Hermes cron would deliver anything printed; the report sends the findings
+    assert recorded(db) == [
+        ("host.missing", "failed", "host-a", {"host": "host-b"}),
+        ("host.missing", "failed", "host-a", {"host": "host-c"}),
+        ("job.succeeded", "ok", "host-a", {"job": "job-health"}),
+    ]
+
+
+@pytest.mark.parametrize("hosts", [None, [], ["host-a", ""], "host-a", [7]],
+                         ids=["unset", "empty", "a blank name", "not a list", "not text"])
+def test_a_missing_or_invalid_host_list_stops_the_check_with_config_missing(tmp_path, db, hosts):
+    home = make_home(tmp_path, db)
+    if hosts is not None:
+        with_hosts(home, hosts)
+    result = hermes(tmp_path, home, "custom-build", "job-health")
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert "config.missing" in result.stderr and "agent_hosts" in result.stderr, result.stderr
+    assert recorded(db) == []
