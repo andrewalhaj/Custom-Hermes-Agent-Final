@@ -13,3 +13,22 @@ narration = [
   '\b(my own methodology|my instincts?|my gut)\b',
   '''^\s*(let me|let's|I will|I'll|I am going to|I'm going to|now I|next I)\b''',
 ]
+
+# The supersede decision (section 3.3, step 4; defaults in 3.6), on the cosine similarity between a
+# new fact and the nearest live fact of the same project.
+[supersede]
+without_judge = 0.92    # at or above, with both texts short, the new fact supersedes without asking
+ask_judge_from = 0.80   # from here up, or at without_judge with a long text, the judge decides
+judge_threshold = 0.75  # both of the judge's answers must reach it
+short_text = 300        # characters; short is this many or fewer
+
+# The judge's two questions about the pair, each answered with a probability (a TypeSafe Noul).
+[supersede.questions.same_subject]
+instructions = "Are `stored` and `new` about the same subject?"
+criteria.true = "Both state something about the same thing: the same setting, machine, person, decision or preference."
+criteria.false = "They are about different things, even where they share words."
+
+[supersede.questions.supersedes]
+instructions = "Does `new` replace what `stored` says, so that `stored` should no longer be relied on?"
+criteria.true = "`new` updates, corrects or restates `stored`, so `stored` is out of date or redundant."
+criteria.false = "`stored` stays true and useful beside `new`: `new` adds something else, or is about another thing."
