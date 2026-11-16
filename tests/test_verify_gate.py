@@ -232,3 +232,10 @@ def test_a_chained_hermes_config_command_is_read_whole(tmp_path, db):
     steps = [["pre", "s1", "terminal", {"command": "hermes config get approvals.mode && hermes config set approvals.mode off"}]]
     _, output, rows = run_gate(tmp_path, db, steps)
     assert [rule for _, rule in rules(rows)] == ["approvals.mode"], output
+
+
+def test_a_chained_hermes_config_command_counts_every_read(tmp_path, db):
+    steps = [["post", "s1", "terminal", {"command": "hermes config set memory.provider x && hermes config get approvals.mode"}, "ok"],
+             ["pre", "s1", "terminal", {"command": "hermes config set approvals.mode manual"}]]
+    _, output, rows = run_gate(tmp_path, db, steps)
+    assert rows == [], output
