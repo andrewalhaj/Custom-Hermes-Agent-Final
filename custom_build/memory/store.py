@@ -71,6 +71,11 @@ def store(conn, fact, *, embedder, judge, timeout):
     return {"stored": row[0], "superseded": old}
 
 
+def identical(conn, project, body):
+    """The id of the live fact in the project with the same text as `body`, or None."""
+    return _identical(conn, project, body_hash(body))
+
+
 def _identical(conn, project, digest):
     row = conn.execute(f"select id from memory.facts where project is not distinct from %s and body_hash = %s and {LIVE}",
                        (project, digest)).fetchone()

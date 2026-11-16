@@ -141,8 +141,11 @@ def attempt(conn, fact, *, embedder, judge_at):
     """store.store(), with each failure it expects recorded under its code and returned as {"error": code}."""
     fields = {"source": fact.source, "project": fact.project, "session_id": fact.session_id, "turn": fact.source_turn}
     try:
-        if fact.gate is not None and not _kept(fact, judge_at):
-            return {"dropped": "the judge did not keep it"}
+        if fact.gate is not None:   # an extracted fact: its gate first, unless the same text is already live
+            if existing := store.identical(conn, fact.project, fact.body):
+                return {"already_stored": existing}
+            if not _kept(fact, judge_at):
+                return {"dropped": "the judge did not keep it"}
         return store.store(conn, fact, embedder=embedder, judge=judge_at, timeout=TIMEOUT)
     except embedding.EmbedUnavailable as exc:
         failures.record(conn, "embed.unavailable", "failed", reason=str(exc), **fields)
@@ -182,6 +185,7 @@ def retry_queued(conn, *, embedder, judge_at):
                 return
             continue
         queue.done(row_id)
+        reason = f"dropped on retry: {outcome['dropped']}" if "dropped" in outcome else "resolved on retry"
         failures.record(conn, "store.gate_error", "degraded", source=fact.source, project=fact.project,
-                        session_id=fact.session_id, turn=fact.source_turn, reason="resolved on retry",
+                        session_id=fact.session_id, turn=fact.source_turn, reason=reason,
                         detail={"attempts": attempts + 1})

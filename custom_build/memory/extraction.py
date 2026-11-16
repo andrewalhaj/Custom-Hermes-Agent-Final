@@ -14,6 +14,8 @@ TASK = "custom_build_extraction"
 DEFAULTS = {"provider": "claude-subscription-directsdk-experimental", "model": "haiku"}
 BASES = ("user_stated", "tool_observed")
 REFUSED = (401, 402, 403)   # the provider refused the account: logged out, billing, forbidden
+# Hermes's reasons for the same refusals when its fallback answered instead (agent/auxiliary_error_policy.py).
+REFUSED_REASONS = ("auth error", "payment error")
 MAX_TOKENS = 1024
 
 PROMPT = (
@@ -58,16 +60,25 @@ def source(user_content, messages):
 
 def propose(turn_source):
     """The facts the model proposes, as (body, basis) pairs. Raises ExtractRefused or ExtractError."""
+    route = {}
     try:
         response = auxiliary_client.call_llm(
-            task=TASK, temperature=0, max_tokens=MAX_TOKENS,
+            task=TASK, temperature=0, max_tokens=MAX_TOKENS, route_info=route,
             messages=[{"role": "system", "content": PROMPT},
                       {"role": "user", "content": json.dumps(turn_source, ensure_ascii=False)}])
     except Exception as exc:   # whatever the provider raises; its status says whether the account was refused
-        reason = _redact(f"{type(exc).__name__}: {exc}"[:200])
+        reason = _redact(f"{type(exc).__name__}: {exc}")[:200]   # redacted before the cut, so no key is halved
         if getattr(exc, "status_code", None) in REFUSED:
             raise ExtractRefused(reason) from exc
         raise ExtractError(reason) from exc
+    if route.get("fallback_label"):
+        # Hermes answered from another model after the task's own provider failed: not the decided route, so
+        # its facts are not used, and the provider's failure is raised as if Hermes had not hidden it (#148).
+        failure = str(route.get("failure", ""))
+        reason = _redact(f"fell back to {route['fallback_label']} after {failure}")[:200]
+        if failure.startswith(REFUSED_REASONS):
+            raise ExtractRefused(reason)
+        raise ExtractError(reason)
     text = auxiliary_client.extract_content_or_reasoning(response).strip()
     text = text.removeprefix("```json").removeprefix("```").removesuffix("```").strip()   # a fenced answer
     try:
