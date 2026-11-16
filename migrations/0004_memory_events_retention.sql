@@ -4,6 +4,17 @@
 -- login joins memory_maintenance" is out of date: no login joins it; this function runs as it.
 -- Session chunks have no table yet; their retention arrives with it. Facts and digests are kept.
 
+-- The grants below go to the login applying this file. Under SET ROLE they would go to the wrong role and
+-- leave the switched-to role able to act as memory_maintenance, so refuse before anything changes.
+do $$
+begin
+  if session_user <> current_user then
+    raise exception '0004: apply as the login itself, not under SET ROLE (session %, current %)',
+      session_user, current_user;
+  end if;
+end
+$$;
+
 -- To record each run (#92): the policy admits retention's own success row and nothing else.
 grant insert on memory.events to memory_maintenance;
 create policy events_maintenance_insert on memory.events for insert to memory_maintenance
