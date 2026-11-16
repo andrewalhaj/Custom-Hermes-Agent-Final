@@ -21,7 +21,8 @@ HERMES = "import sys; from hermes_cli.main import main; sys.argv = ['hermes', *s
 
 def safe_config():
     return {
-        "memory": {"provider": "custom_build"},
+        "memory": {"provider": "custom_build", "write_approval": True},
+        "skills": {"write_approval": True},
         "plugins": {"enabled": ["custom_build"], "entries": {"custom_build": {"settings": {"machine_name": "host-a"}}}},
     }
 
@@ -74,6 +75,13 @@ def _with(path, value):
 
 @pytest.mark.parametrize("label, kwargs, setting", [
     ("another memory provider", {"config": _with(("memory", "provider"), "holographic")}, "memory.provider"),
+    ("memory writes not approved", {"config": _with(("memory", "write_approval"), False)}, "memory.write_approval"),
+    ("skill writes not approved", {"config": _with(("skills", "write_approval"), False)}, "skills.write_approval"),
+    ("skill write approval unset", {"config": {**safe_config(), "skills": {}}}, "skills.write_approval"),
+    ("secret redaction off", {"config": _with(("security", "redact_secrets"), False)}, "security.redact_secrets"),
+    # The gateway exports the key over the variable (gateway/run.py), so its child processes redact nothing.
+    ("redaction off in config, on by variable", {"config": _with(("security", "redact_secrets"), False),
+                                                 "env": {"HERMES_REDACT_SECRETS": "true"}}, "security.redact_secrets"),
     ("approvals off, unquoted", {"raw_config": "approvals:\n  mode: off\n"}, "approvals.mode"),
     ("cron mode approve", {"config": _with(("approvals", "cron_mode"), "approve")}, "approvals.cron_mode"),
     ("single-query mode yes", {"config": _with(("approvals", "single_query_mode"), "yes")}, "approvals.single_query_mode"),
