@@ -117,6 +117,12 @@ def test_each_rule_records_its_failing_case_and_the_call_goes_ahead(tmp_path, db
     assert rows[4][2] == "python3 -m pip install requests"
 
 
+def test_an_install_from_a_lock_file_is_an_install(tmp_path, db):
+    commands = ["npm ci", "uv sync", "poetry install", "bundle install", "composer install"]
+    _, output, rows = run_gate(tmp_path, db, [["terminal", {"command": c}] for c in commands])
+    assert [(detail["rule"], reason) for _, _, reason, detail, _, _ in rows] == [("install", c) for c in commands], output
+
+
 def test_a_command_naming_a_path_in_the_users_home_records_it(tmp_path, db):
     report, output, rows = run_gate(tmp_path, db, [["terminal", {"command": "rm -r ~/home/skills/note-taking"}]])
     assert report["blocks"] == [None], output
