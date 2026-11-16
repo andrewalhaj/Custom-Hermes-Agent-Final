@@ -40,7 +40,8 @@ def recorded(db):
 def test_a_host_with_no_heartbeat_in_24_hours_is_recorded_as_missing(tmp_path, db):
     home = with_hosts(make_home(tmp_path, db), ["host-a", "host-b", "host-c"])
     seed(db, ("host.heartbeat", "host-a", 5, {}), ("host.heartbeat", "host-b", 25, {}),
-         ("job.succeeded", "host-a", 23, {"job": "daily-report"}))
+         ("job.succeeded", "host-a", 23, {"job": "daily-report"}),
+         ("job.succeeded", "database", 20, {"job": "retention"}))
     result = hermes(tmp_path, home, "custom-build", "job-health")
     assert result.returncode == 0, result.stdout + result.stderr
     assert result.stdout == ""   # Hermes cron would deliver anything printed; the report sends the findings
@@ -97,7 +98,8 @@ def test_a_listed_job_with_no_recent_success_or_no_output_is_recorded(tmp_path, 
 
 
 def test_hermes_cron_runs_the_check_daily_from_its_scripts_folder_and_delivers_nothing(tmp_path, db):
-    seed(db, ("host.heartbeat", "host-a", 1, {}), ("job.succeeded", "host-a", 23, {"job": "daily-report"}))
+    seed(db, ("host.heartbeat", "host-a", 1, {}), ("job.succeeded", "host-a", 23, {"job": "daily-report"}),
+         ("job.succeeded", "database", 20, {"job": "retention"}))
     answer, run = run_under_cron(tmp_path, with_hosts(make_home(tmp_path, db), ["host-a"]), "job-health", "45 6 * * *")
     assert "Ran now: succeeded" in answer, answer
     assert "silent (empty output)" in run
@@ -111,7 +113,8 @@ def test_a_finding_the_store_refuses_fails_the_check(tmp_path, db):
                      " $$ begin raise exception 'refused'; end $$")
         conn.execute("create trigger refuse_missing before insert on memory.events for each row"
                      " when (new.code = 'host.missing') execute function memory.refuse()")
-    seed(db, ("job.succeeded", "host-a", 23, {"job": "daily-report"}))
+    seed(db, ("job.succeeded", "host-a", 23, {"job": "daily-report"}),
+         ("job.succeeded", "database", 20, {"job": "retention"}))
     result = hermes(tmp_path, with_hosts(make_home(tmp_path, db), ["host-b"]), "custom-build", "job-health")
     assert result.returncode != 0, result.stdout + result.stderr   # so Hermes cron delivers its error alert
     assert "events.write_failed" in result.stderr, result.stderr
@@ -123,3 +126,10 @@ def test_a_day_the_report_did_not_run_is_recorded_as_missed(tmp_path, db):
     result = hermes(tmp_path, with_hosts(make_home(tmp_path, db), ["host-a"]), "custom-build", "job-health")
     assert result.returncode == 0, result.stdout + result.stderr
     assert ("job.missed", "failed", "host-a", {"job": "daily-report"}) in recorded(db)
+
+
+def test_a_day_retention_did_not_run_is_recorded_as_missed(tmp_path, db):
+    seed(db, ("host.heartbeat", "host-a", 1, {}), ("job.succeeded", "database", 26, {"job": "retention"}))
+    result = hermes(tmp_path, with_hosts(make_home(tmp_path, db), ["host-a"]), "custom-build", "job-health")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert ("job.missed", "failed", "host-a", {"job": "retention"}) in recorded(db)
