@@ -170,3 +170,51 @@ def test_a_crash_in_the_gate_is_recorded_and_the_turn_goes_ahead(tmp_path, db):
     assert report["answers"] == [["", []]], output
     assert [(code, reason, session) for code, _, reason, _, _, session in rows] == [
         ("guard.crash", "KeyError: 'boom'", "s1")], output
+
+
+def test_a_turn_keeps_its_count_when_compression_gives_the_session_a_new_id(tmp_path, db):
+    # Hermes's compression can rotate agent.session_id mid-turn; the turn's id stays the same.
+    steps = [["turn", "s1", "u1", "How many facts are in the store?"], ["post", "s1-rotated", "u1", "terminal", "ok"],
+             ["reply", "s1-rotated", "u1", "There are 42."],
+             ["turn", "s1", "u2", "How many facts are in the store?"], ["reply", "s1-rotated", "u2", "There are 42."]]
+    _, output, rows = run_gate(tmp_path, db, steps)
+    assert [(code, rule, why) for code, rule, why in events(rows) if code == "fact_gate.would_withhold"] == [
+        ("fact_gate.would_withhold", "count", "no lookup")], output
+
+
+def test_a_turn_is_judged_once_and_its_reply_text_is_never_stored(tmp_path, db):
+    reply = "There are exactly 4242 facts."
+    steps = [["turn", "s1", "u1", "How many facts are in the store?"], ["reply", "s1", "u1", reply],
+             ["reply", "s1", "u1", reply]]   # a second call for the same turn finds it already judged
+    _, output, rows = run_gate(tmp_path, db, steps)
+    assert [code for code, _, _ in events(rows)] == ["fact_gate.armed", "fact_gate.would_withhold"], output
+    assert "4242" not in json.dumps(rows)
+
+
+def test_only_the_1000_most_recent_armed_turns_are_held(tmp_path, db):
+    ask = "How many facts are in the store?"
+    steps = [["turn", "s1", f"u{n}", ask] for n in range(1001)] + [["reply", "s1", "u0", "42."], ["reply", "s1", "u1000", "42."]]
+    _, output, rows = run_gate(tmp_path, db, steps)
+    assert [code for code, _, _ in events(rows)].count("fact_gate.would_withhold") == 1, output   # u0 was dropped
+
+
+def test_common_phrasings_of_a_checkable_question_arm_the_turn(tmp_path, db):
+    questions = {
+        "what's the default timeout for hooks?": "value",
+        "Which python version do I have?": "version",
+        "Does Postgres 17 support MERGE?": "support",
+        "is the docker daemon running": "state",
+        "Is port 5432 open?": "state",
+        "Why do I keep getting these errors?": "error",
+    }
+    steps = [["turn", "s1", f"u{n}", message] for n, message in enumerate(questions)]
+    _, output, rows = run_gate(tmp_path, db, steps)
+    assert [rule for _, rule, _ in events(rows)] == list(questions.values()), output
+
+
+def test_a_turn_that_delegates_its_lookup_counts_as_looked_up(tmp_path, db):
+    # A subagent's own tool calls carry its session and turn, so the parent sees only delegate_task.
+    steps = [["turn", "s1", "u1", "How many facts are in the store?"], ["post", "s1", "u1", "delegate_task", "ok"],
+             ["reply", "s1", "u1", "There are 42."]]
+    _, output, rows = run_gate(tmp_path, db, steps)
+    assert [code for code, _, _ in events(rows)] == ["fact_gate.armed"], output
