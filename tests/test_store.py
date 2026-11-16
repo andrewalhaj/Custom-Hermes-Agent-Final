@@ -165,3 +165,21 @@ def test_a_digest_is_stored_as_one_and_never_supersedes_a_fact(conn, ollama, typ
     assert typesafe.requests == []
     row = conn.execute("select kind, origin, basis from memory.facts where id = %s", (outcome["stored"],)).fetchone()
     assert row == ("digest", "digest", "assistant_inferred")
+
+
+def test_a_digest_from_an_earlier_turn_never_replaces_the_sessions_later_one(conn, ollama, typesafe):
+    # #156, decided B: a later digest supersedes the session's live one, but a queued older one must not.
+    later = _store(conn, ollama, typesafe, "The session's digest at turn 9.", kind="digest", origin="digest",
+                   basis="assistant_inferred", source_turn=9)["stored"]
+    outcome = _store(conn, ollama, typesafe, "The session's digest at turn 7.", kind="digest", origin="digest",
+                     basis="assistant_inferred", source_turn=7)
+    assert outcome == {"already_stored": later}
+    assert _live(conn) == [("The session's digest at turn 9.",)]
+
+
+def test_a_later_digest_supersedes_the_sessions_earlier_one(conn, ollama, typesafe):
+    earlier = _store(conn, ollama, typesafe, "The session's digest at turn 7.", kind="digest", origin="digest",
+                     basis="assistant_inferred", source_turn=7)["stored"]
+    outcome = _store(conn, ollama, typesafe, "The session's digest at turn 9.", kind="digest", origin="digest",
+                     basis="assistant_inferred", source_turn=9)
+    assert outcome["superseded"] == earlier

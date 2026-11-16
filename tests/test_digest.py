@@ -160,10 +160,29 @@ def test_a_short_session_gets_no_digest(home, db, ollama, typesafe):
     assert sent == [] and _rows(db) == []
 
 
-def test_a_session_that_has_a_digest_gets_no_second_one(home, db, ollama, typesafe):
+FIRST, LATER = SUMMARY, SUMMARY + " It also fixed the unit file."
+TWO = json.dumps([{"summary": FIRST, "open_items": []}, {"summary": LATER, "open_items": []}])
+
+
+def _live_digests(db):
+    with psycopg.connect(db["owner"]) as conn:
+        return [row[0] for row in conn.execute("select body from memory.facts where kind = 'digest'"
+                                               " and superseded_by is null and retired_at is null")]
+
+
+def test_a_later_digest_of_the_session_replaces_the_earlier_one(home, db, ollama, typesafe):
+    # #156, decided B: Hermes ends a session at each compression too, and the later digest is the fuller one.
     typesafe.answers = {"worth_keeping": 0.8}
-    sent, _ = end(home, db, ollama.url, typesafe.url, ANSWER, [_session(10), _session(12)])
-    assert len(sent) == 1 and len(_rows(db)) == 1
+    sent, _ = end(home, db, ollama.url, typesafe.url, TWO, [_session(10), _session(12)])
+    assert len(sent) == 2 and len(_rows(db)) == 2
+    assert _live_digests(db) == [LATER]
+
+
+def test_a_session_with_a_digest_gets_a_later_one_even_when_its_transcript_is_short_now(home, db, ollama, typesafe):
+    # After an in-place compression the transcript is short, but the session is still a long one.
+    typesafe.answers = {"worth_keeping": 0.8}
+    end(home, db, ollama.url, typesafe.url, TWO, [_session(10), _session(3)])
+    assert _live_digests(db) == [LATER]
 
 
 def test_a_digest_the_judge_does_not_keep_is_dropped(home, db, ollama, typesafe):
@@ -208,15 +227,13 @@ def test_a_secret_in_the_session_never_reaches_the_model_the_judge_the_store_or_
     assert FAKE_KEY not in output
 
 
-def test_two_digests_queued_for_one_session_store_only_one(home, db, ollama, typesafe):
-    # #155 review: a session ended twice while the judge is down queues two; the retry stores one.
+def test_two_digests_queued_for_one_session_leave_one_live(home, db, ollama, typesafe):
+    # #155 review: a session ended twice while the judge is down queues two; the retry leaves the later live.
     typesafe.status = 500
-    two = json.dumps([{"summary": SUMMARY, "open_items": []}, {"summary": SUMMARY + " It also fixed the unit.",
-                                                               "open_items": []}])
-    end(home, db, ollama.url, typesafe.url, two, [_session(10), _session(12)])
+    end(home, db, ollama.url, typesafe.url, TWO, [_session(10), _session(12)])
     typesafe.status, typesafe.answers = 200, {"worth_keeping": 0.8}
     end(home, db, ollama.url, typesafe.url, ANSWER, [])   # the next start retries the queue
-    assert [row[1] for row in _rows(db)] == ["digest"]
+    assert _live_digests(db) == [LATER]
 
 
 def test_a_newest_message_over_the_cap_is_cut_not_left_out():
