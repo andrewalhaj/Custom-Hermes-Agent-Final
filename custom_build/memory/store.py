@@ -16,13 +16,15 @@ LIVE = "superseded_by is null and retired_at is null"   # the facts index's pred
 
 @dataclasses.dataclass(frozen=True)
 class Fact:
-    """A fact stored on purpose, already redacted."""
+    """A fact to store, already redacted: stored on purpose (`explicit`) or `extracted`."""
     body: str
     basis: str
     project: str | None
     source: str
     session_id: str | None
     source_turn: int | None
+    origin: str = "explicit"
+    gate: dict | None = None   # an extracted fact's source turn, which the judge checks it against first
 
 
 @dataclasses.dataclass(frozen=True)
@@ -50,13 +52,15 @@ def store(conn, fact, *, embedder, judge, timeout):
         return {"already_stored": existing}
     [vector] = embedder.embed(conn, [fact.body], timeout=timeout)
     nearest = _nearest(conn, fact.project, str(vector))
-    old = _replaced(nearest, fact.body, judge) if nearest else None
+    # Rule 5 (3.3): an extracted fact never supersedes one stored on purpose.
+    protected = nearest and fact.origin == "extracted" and nearest[3] == "explicit"
+    old = _replaced(nearest[:3], fact.body, judge) if nearest and not protected else None
     with conn.transaction():
         row = conn.execute(
             "insert into memory.facts (body, body_hash, kind, origin, basis, project, source, session_id, source_turn,"
-            " embedding, embedding_model) values (%s, %s, 'fact', 'explicit', %s, %s, %s, %s, %s, %s, %s)"
+            " embedding, embedding_model) values (%s, %s, 'fact', %s, %s, %s, %s, %s, %s, %s, %s)"
             f" on conflict (project, body_hash) where {LIVE} do nothing returning id",
-            (fact.body, digest, fact.basis, fact.project, fact.source, fact.session_id, fact.source_turn,
+            (fact.body, digest, fact.origin, fact.basis, fact.project, fact.source, fact.session_id, fact.source_turn,
              str(vector), embedder.build),
         ).fetchone()
         if row is None:   # the same text was stored since the check above
@@ -67,6 +71,11 @@ def store(conn, fact, *, embedder, judge, timeout):
     return {"stored": row[0], "superseded": old}
 
 
+def identical(conn, project, body):
+    """The id of the live fact in the project with the same text as `body`, or None."""
+    return _identical(conn, project, body_hash(body))
+
+
 def _identical(conn, project, digest):
     row = conn.execute(f"select id from memory.facts where project is not distinct from %s and body_hash = %s and {LIVE}",
                        (project, digest)).fetchone()
@@ -74,12 +83,12 @@ def _identical(conn, project, digest):
 
 
 def _nearest(conn, project, vector):
-    """The nearest live fact of kind `fact` in the project: (id, body, cosine similarity), or None."""
+    """The nearest live fact of kind `fact` in the project: (id, body, cosine similarity, origin), or None."""
     with conn.transaction():   # `set local` lasts for this transaction only
         # Filters apply after the index scan; keep scanning until a row passes them (pgvector 0.8.0).
         conn.execute("set local hnsw.iterative_scan = strict_order")
         return conn.execute(
-            f"select id, body, 1 - (embedding <=> %s) from memory.facts where project is not distinct from %s"
+            f"select id, body, 1 - (embedding <=> %s), origin from memory.facts where project is not distinct from %s"
             f" and kind = 'fact' and {LIVE} order by embedding <=> %s limit 1", (vector, project, vector),
         ).fetchone()
 

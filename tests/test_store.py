@@ -20,8 +20,9 @@ def _at(cosine):
     return [cosine, math.sqrt(1 - cosine ** 2)] + [0.0] * 2558
 
 
-def _store(conn, ollama, typesafe, body, *, project="p1"):
-    fact = store.Fact(body=body, basis="user_stated", project=project, source="host-a", session_id="s1", source_turn=3)
+def _store(conn, ollama, typesafe, body, *, project="p1", **fields):
+    fact = store.Fact(**{"body": body, "basis": "user_stated", "project": project, "source": "host-a", "session_id": "s1",
+                         "source_turn": 3, **fields})
     return store.store(conn, fact, embedder=embedding.Embedder(ollama.url),
                        judge=store.Judge(url=typesafe.url, key="test-key", model="jev-1.14.0"), timeout=2)
 
@@ -133,3 +134,21 @@ def test_facts_with_no_project_are_compared_with_each_other(conn, ollama, typesa
     ollama.vectors = {STORED: BASE, new: _at(0.95)}
     old = _store(conn, ollama, typesafe, STORED, project=None)["stored"]
     assert _store(conn, ollama, typesafe, new, project=None)["superseded"] == old
+
+
+def test_an_extracted_fact_is_stored_with_its_origin(conn, ollama, typesafe):
+    outcome = _store(conn, ollama, typesafe, STORED, origin="extracted", basis="tool_observed")
+    row = conn.execute("select origin, basis from memory.facts where id = %s", (outcome["stored"],)).fetchone()
+    assert row == ("extracted", "tool_observed")
+
+
+@pytest.mark.parametrize("cosine", [0.95, 0.85])   # without the judge, and in the judge's band
+def test_an_extracted_fact_never_supersedes_one_stored_on_purpose(conn, ollama, typesafe, cosine):
+    # Rule 5 (ARCHITECTURE.md 3.3, #148): both stay live, and the judge is not asked.
+    new = "The mini's gateway runs as the hermes user."
+    ollama.vectors = {STORED: BASE, new: _at(cosine)}
+    _store(conn, ollama, typesafe, STORED)
+    outcome = _store(conn, ollama, typesafe, new, origin="extracted")
+    assert outcome["superseded"] is None
+    assert _live(conn) == [(STORED,), (new,)]
+    assert typesafe.requests == []

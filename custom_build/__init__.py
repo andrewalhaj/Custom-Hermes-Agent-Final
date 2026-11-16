@@ -36,6 +36,7 @@ class CustomBuildProvider(MemoryProvider):
 
     session_id = None
     turn = None
+    primary = False
 
     @property
     def name(self) -> str:
@@ -50,6 +51,8 @@ class CustomBuildProvider(MemoryProvider):
         then retry the facts queued for the judge."""
         self.session_id = session_id
         self.embedder = embedding.Embedder(embedding.OLLAMA_URL)
+        # Hermes asks providers to write only in a primary session, not a subagent, cron run or flush.
+        self.primary = kwargs.get("agent_context", "primary") == "primary"
         machine = _machine()
         if missing := settings.missing_settings(settings.plugin_context()):
             failures.record(None, "config.missing", "failed", source=machine, reason=", ".join(missing),
@@ -71,8 +74,7 @@ class CustomBuildProvider(MemoryProvider):
             except embedding.ModelMismatch as exc:
                 failures.record(conn, "embed.model_mismatch", "failed", source=machine, reason=str(exc),
                                 session_id=session_id)
-            # Hermes asks providers to write only in a primary session, not a subagent, cron run or flush.
-            if self.embedder.build is not None and kwargs.get("agent_context", "primary") == "primary":
+            if self.embedder.build is not None and self.primary:
                 tool.retry_queued(conn, embedder=self.embedder, judge_at=_judge())
 
     def on_turn_start(self, turn_number: int, message: str, **kwargs) -> None:
@@ -91,6 +93,21 @@ class CustomBuildProvider(MemoryProvider):
             return
         tool.mirror(action, content, metadata or {}, machine=machine, session_id=self.session_id, turn=self.turn,
                     embedder=self.embedder, judge_at=_judge(), connect=settings.connect)
+
+    @failures.boundary(_machine, settings.connect, failures.PROVIDER)
+    def sync_turn(self, user_content: str, assistant_content: str, *, session_id: str = "",
+                  messages: list | None = None, **kwargs) -> None:
+        """Extract facts from the finished turn (ARCHITECTURE.md 3.3). Hermes runs this on its background
+        worker; the assistant's reply is never read."""
+        if not self.primary:
+            return
+        machine = _machine()
+        if missing := settings.missing_settings(settings.plugin_context()):
+            failures.record(None, "config.missing", "failed", source=machine, reason=", ".join(missing),
+                            session_id=self.session_id)
+            return
+        tool.extract(user_content, messages or [], machine=machine, session_id=self.session_id, turn=self.turn,
+                     embedder=self.embedder, judge_at=_judge(), connect=settings.connect)
 
     def get_tool_schemas(self) -> list:
         return [tool.SCHEMA]
@@ -127,6 +144,11 @@ def register(ctx) -> None:
 
     from . import failures, settings
     from .guards import fact_gate, verify_gate, write_gate
+    from .memory import extraction
+
+    ctx.register_auxiliary_task(extraction.TASK, display_name="Custom build: fact extraction",
+                                description="Proposes facts from each turn's user message and tool results (#148)",
+                                defaults=extraction.DEFAULTS)
 
     @failures.boundary(lambda: settings.machine(ctx), settings.connect, settings.crash_block)
     def check_turn(**kwargs):

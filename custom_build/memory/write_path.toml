@@ -32,3 +32,18 @@ criteria.false = "They are about different things, even where they share words."
 instructions = "Does `new` replace what `stored` says, so that `stored` should no longer be relied on?"
 criteria.true = "`new` updates, corrects or restates `stored`, so `stored` is out of date or redundant."
 criteria.false = "`stored` stays true and useful beside `new`: `new` adds something else, or is about another thing."
+
+# The gate on an extracted fact (section 3.3 step 3, #148): one request, two Nouls about the fact and the
+# turn it came from (the user's message and the turn's tool results). Both answers must reach the threshold.
+[extraction]
+judge_threshold = 0.75
+
+[extraction.questions.worth_keeping]
+instructions = "Is `fact` worth remembering in a later session with this user?"
+criteria.true = "It states something lasting: a preference, a decision, a setting, or how one of the user's machines, projects or tools is set up."
+criteria.false = "It is true only for this moment or this task, such as a passing error, a step in progress, or small talk."
+
+[extraction.questions.supported]
+instructions = "Does `source` state what `fact` says?"
+criteria.true = "The user's message says it outright, or a tool result shows it directly, such as in a command's output or a file."
+criteria.false = "`source` does not say it, only hints at it, or says something different."
