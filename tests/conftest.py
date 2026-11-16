@@ -62,8 +62,9 @@ def db():
 
 class FakeOllama(http.server.ThreadingHTTPServer):
     """A stand-in for the two Ollama endpoints the build calls, `/api/tags` and `/api/embed`, so the
-    tests need no model. A test sets the models it lists, the length of the vectors it returns and an
-    HTTP status to answer with instead; `embedded` collects every input sent to `/api/embed`."""
+    tests need no model. A test sets the models it lists, the length of the vectors it returns, how many
+    vectors to leave out of an answer (`drop`), an HTTP status to answer with instead, and whether to cut
+    the answer off mid-body (`cut_off`); `embedded` collects every input sent to `/api/embed`."""
 
     digest = "df5bd2e3c74cd8d069d21dc038f1b359fcdc9458fce1c99bd43c9eb1518ff907"
     build = f"qwen3-embedding:4b@sha256:{digest}"
@@ -72,6 +73,8 @@ class FakeOllama(http.server.ThreadingHTTPServer):
         super().__init__(("127.0.0.1", 0), _OllamaHandler)
         self.models = [{"name": "qwen3-embedding:4b", "model": "qwen3-embedding:4b", "digest": self.digest}]
         self.dimensions = 2560
+        self.drop = 0
+        self.cut_off = False
         self.status = 200
         self.embedded = []
         self.url = f"http://127.0.0.1:{self.server_address[1]}"
@@ -82,7 +85,7 @@ class _OllamaHandler(http.server.BaseHTTPRequestHandler):
         payload = json.dumps(body if self.server.status == 200 else {"error": "refused"}).encode()
         self.send_response(self.server.status)
         self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Content-Length", str(len(payload) + (10 if self.server.cut_off else 0)))
         self.end_headers()
         self.wfile.write(payload)
 
@@ -92,7 +95,8 @@ class _OllamaHandler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         self.server.embedded.append(request["input"])
-        self._answer({"embeddings": [[0.01] * self.server.dimensions for _ in request["input"]]})
+        vectors = [[0.01] * self.server.dimensions for _ in request["input"]]
+        self._answer({"embeddings": vectors[:len(vectors) - self.server.drop]})
 
     def log_message(self, *args):
         pass

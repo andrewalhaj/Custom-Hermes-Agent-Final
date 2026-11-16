@@ -94,6 +94,22 @@ def test_an_http_error_while_embedding_is_unavailable(ollama, db):
             embedder.embed(conn, ["one"], timeout=5)
 
 
+def test_an_answer_cut_off_mid_body_is_unavailable(ollama, db):
+    embedder = embedding.Embedder(ollama.url)
+    with psycopg.connect(db["agent"]) as conn:
+        embedder.check(conn, timeout=5)
+        ollama.cut_off = True
+        with pytest.raises(embedding.EmbedUnavailable):
+            embedder.embed(conn, ["one"], timeout=5)
+
+
+def test_fewer_vectors_than_texts_is_unavailable_not_a_mismatch(ollama, db):
+    ollama.drop = 1
+    embedder = embedding.Embedder(ollama.url)
+    with psycopg.connect(db["agent"]) as conn, pytest.raises(embedding.EmbedUnavailable):
+        embedder.embed(conn, ["one", "two"], timeout=5)
+
+
 def test_a_vector_of_another_length_is_a_model_mismatch(ollama, db):
     ollama.dimensions = 1024
     embedder = embedding.Embedder(ollama.url)
