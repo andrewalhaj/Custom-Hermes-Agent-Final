@@ -102,12 +102,16 @@ def extract(user_content, messages, *, machine, session_id, turn, embedder, judg
 
 
 def write_digest(messages, *, machine, session_id, turn, embedder, judge_at, connect):
-    """Write the session's digest if it is long and has none yet (3.3, #155): the digest model, then the
-    judge's gate, then the store function, as kind and origin `digest`."""
-    if not session_id or not digest.is_long(messages):
+    """Write the session's digest (3.3, #155): the digest model, then the judge's gate, then the store
+    function, as kind and origin `digest`, replacing the session's earlier digest (#156). A session gets one when
+    it is long, or when it already has one: after an in-place compression its transcript is short again."""
+    if not session_id:
         return
-    if _with_store(machine, session_id, connect, lambda conn: store.digest_of(conn, session_id) is None) is not True:
-        return   # it has one, or the store could not be reached (recorded)
+    has = _with_store(machine, session_id, connect, lambda conn: store.live_digest(conn, session_id) is not None)
+    if not isinstance(has, bool):
+        return   # the store could not be reached (recorded)
+    if not has and not digest.is_long(messages):
+        return
     fields = {"source": machine, "project": project.key(resolve_agent_cwd()), "session_id": session_id, "turn": turn}
     failure, body = None, None
     try:   # with no connection open: the call can take as long as its auxiliary timeout
@@ -174,9 +178,6 @@ def attempt(conn, fact, *, embedder, judge_at):
     """store.store(), with each failure it expects recorded under its code and returned as {"error": code}."""
     fields = {"source": fact.source, "project": fact.project, "session_id": fact.session_id, "turn": fact.source_turn}
     try:
-        # One digest per session, checked here too, so a second one queued for the same session is not stored.
-        if fact.kind == "digest" and (existing := store.digest_of(conn, fact.session_id)):
-            return {"already_stored": existing}
         if fact.gate is not None or fact.kind == "digest":   # gated: unless the same text is already live
             if existing := store.identical(conn, fact.project, fact.body):
                 return {"already_stored": existing}

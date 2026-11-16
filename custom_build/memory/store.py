@@ -51,12 +51,18 @@ def store(conn, fact, *, embedder, judge, timeout):
     digest = body_hash(fact.body)
     if existing := _identical(conn, fact.project, digest):
         return {"already_stored": existing}
+    live = live_digest(conn, fact.session_id) if fact.kind == "digest" else None
+    if live and (live[1] or 0) > (fact.source_turn or 0):   # a queued older digest never replaces a later one
+        return {"already_stored": live[0]}
     [vector] = embedder.embed(conn, [fact.body], timeout=timeout)
-    # A digest is never compared with facts, so it never supersedes one (#155).
-    nearest = _nearest(conn, fact.project, str(vector)) if fact.kind == "fact" else None
-    # Rule 5 (3.3): an extracted fact never supersedes one stored on purpose.
-    protected = nearest and fact.origin == "extracted" and nearest[3] == "explicit"
-    old = _replaced(nearest[:3], fact.body, judge) if nearest and not protected else None
+    if fact.kind == "digest":
+        # A digest is never compared with facts; it replaces only its session's earlier digest (#155, #156).
+        old = live[0] if live else None
+    else:
+        nearest = _nearest(conn, fact.project, str(vector))
+        # Rule 5 (3.3): an extracted fact never supersedes one stored on purpose.
+        protected = nearest and fact.origin == "extracted" and nearest[3] == "explicit"
+        old = _replaced(nearest[:3], fact.body, judge) if nearest and not protected else None
     with conn.transaction():
         row = conn.execute(
             "insert into memory.facts (body, body_hash, kind, origin, basis, project, source, session_id, source_turn,"
@@ -73,11 +79,10 @@ def store(conn, fact, *, embedder, judge, timeout):
     return {"stored": row[0], "superseded": old}
 
 
-def digest_of(conn, session_id):
-    """The id of the session's digest, live or not, or None (3.3: one for each long session)."""
-    row = conn.execute("select id from memory.facts where session_id = %s and kind = 'digest' limit 1",
-                       (session_id,)).fetchone()
-    return row[0] if row else None
+def live_digest(conn, session_id):
+    """The session's live digest as (id, source_turn), or None. A later digest replaces it (#156)."""
+    return conn.execute(f"select id, source_turn from memory.facts where session_id = %s and kind = 'digest' and {LIVE}"
+                        " order by created_at desc limit 1", (session_id,)).fetchone()
 
 
 def identical(conn, project, body):
