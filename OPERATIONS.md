@@ -31,7 +31,7 @@ These placeholders appear in the documentation. Each deployment sets them in its
 | Fact extraction | `<extraction-model>`, local or hosted. The first deployment uses Claude Haiku 5.5 (`claude-haiku-5-5`), hosted, through the Anthropic API. |
 | Session digests | `<digest-model>`, hosted. The first deployment uses the same model as fact extraction. |
 | The memory store | One Supabase project, `<project-ref>`, shared by every machine in `<agent-hosts>` |
-| Scheduled jobs | Hermes cron on `<job-host>`, and the heartbeat job on every machine in `<agent-hosts>`. A machine that sleeps cannot be the only job host: a job that does not run is reported as `job.missed`, but nothing runs it. |
+| Scheduled jobs | Hermes cron on `<job-host>`, the heartbeat job on every machine in `<agent-hosts>`, and retention inside the database, run by Supabase's `pg_cron` (section 4). A machine that sleeps cannot be the only job host: a job that does not run is reported as `job.missed`, but nothing runs it. |
 
 The memory store outlives any one machine and is shared by all of them. What each hosted part receives is listed in ARCHITECTURE.md section 3.7; each deployment confirms that list against its own `<judge-model>`, `<extraction-model>` and `<digest-model>`.
 
@@ -91,12 +91,12 @@ Every machine that runs the agent:
 
 | Job | Runs | What it does | Its own failure |
 |---|---|---|---|
-| Retention | Daily | Deletes `events` rows and session chunks older than 90 days. Misses worth keeping are copied into the eval set before then (ARCHITECTURE.md section 3.8). Runs inside the database: a function a migration adds, scheduled by Supabase's `pg_cron`, so no host holds a login that can delete (ARCHITECTURE.md section 4.3).[9] | A run records a success event; a missing one is `job.missed` |
+| Retention | Daily | Deletes `events` rows and session chunks older than 90 days. Misses worth keeping are copied into the eval set before then (ARCHITECTURE.md section 3.8). Runs inside the database: a function a migration adds, scheduled by Supabase's `pg_cron`, so no host holds a login that can delete (ARCHITECTURE.md section 4.3). `pg_cron` 1.6.4 is available on the project but not yet installed.[9] | A run records a success event; a missing one is `job.missed` |
 | Heartbeat | Every 6 hours, on every agent host (#43) | Writes one `host.heartbeat` event | `job.failed`; a heartbeat that never runs is caught by the job-health check |
 | Job-health check | Daily, before the report | Flags any job with no fresh success (`job.missed`) and any job that took input but produced nothing for more than one run (`job.no_output`), and records `host.missing` for any machine in `<agent-hosts>` with no heartbeat in the last 24 hours (ARCHITECTURE.md section 6.3). A host's missing heartbeat is reported as `host.missing` only, not also as `job.missed`. | Reported by the report's absence |
 | Daily failure report | Daily at 07:00, the job host's local time | Sends the day's failures from `events`, grouped by code and machine, and every "always" answer given to the write gate that day, as a dated Markdown file to `<operators-channel>`. With nothing to report it sends a one-line all-clear that names the jobs that ran. | A missing report |
 
-Every job runs through the job wrapper (ARCHITECTURE.md section 6.1), so a crash is recorded in `events` as `unhandled` and `job.failed` before the job exits non-zero.
+Every job other than retention runs through the job wrapper (ARCHITECTURE.md section 6.1), so a crash is recorded in `events` as `unhandled` and `job.failed` before the job exits non-zero.
 
 **A missing report is an alarm.** The report always sends something, so silence never means "all clear". If no report arrives by its expected time, the job host, the report job or the channel has failed, and an operator investigates.
 
