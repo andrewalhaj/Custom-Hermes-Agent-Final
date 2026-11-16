@@ -111,6 +111,8 @@ def test_the_policies_are_exactly_these(db):
 
 @pytest.mark.parametrize("statement", [
     "insert into memory.events (source, code, result) values ('test-host', 'job.failed', 'ok')",   # only retention's row
+    ("insert into memory.events (source, code, result, detail) values ('test-host', 'job.succeeded', 'ok',"
+     " '{\"job\": \"daily-report\"}')"),
     "update memory.events set reason = 'x'",
     "alter table memory.events add column extra text",
     "truncate memory.events",
