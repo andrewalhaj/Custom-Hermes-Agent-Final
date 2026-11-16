@@ -73,10 +73,11 @@ def store(conn, fact, *, embedder, judge, timeout):
     return {"stored": row[0], "superseded": old}
 
 
-def has_digest(conn, session_id):
-    """Whether the session already has a digest, live or not (3.3: one for each long session)."""
-    return conn.execute("select 1 from memory.facts where session_id = %s and kind = 'digest' limit 1",
-                        (session_id,)).fetchone() is not None
+def digest_of(conn, session_id):
+    """The id of the session's digest, live or not, or None (3.3: one for each long session)."""
+    row = conn.execute("select id from memory.facts where session_id = %s and kind = 'digest' limit 1",
+                       (session_id,)).fetchone()
+    return row[0] if row else None
 
 
 def identical(conn, project, body):

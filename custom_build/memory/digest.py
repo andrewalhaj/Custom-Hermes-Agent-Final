@@ -38,9 +38,12 @@ def transcript(messages, *, max_chars=MAX_CHARS):
         content = _redact(_text(message.get("content")))
         if not content:
             continue
+        room = max_chars - size
+        if len(content) > room:
+            if kept:
+                break
+            content = content[:room]   # the newest message alone is over the cap: cut it, never send nothing
         size += len(content)
-        if size > max_chars:
-            break
         kept.append({"role": message.get("role"), "content": content})
     return list(reversed(kept))
 

@@ -106,7 +106,7 @@ def write_digest(messages, *, machine, session_id, turn, embedder, judge_at, con
     judge's gate, then the store function, as kind and origin `digest`."""
     if not session_id or not digest.is_long(messages):
         return
-    if _with_store(machine, session_id, connect, lambda conn: store.has_digest(conn, session_id)) is not False:
+    if _with_store(machine, session_id, connect, lambda conn: store.digest_of(conn, session_id) is None) is not True:
         return   # it has one, or the store could not be reached (recorded)
     fields = {"source": machine, "project": project.key(resolve_agent_cwd()), "session_id": session_id, "turn": turn}
     failure, body = None, None
@@ -174,6 +174,9 @@ def attempt(conn, fact, *, embedder, judge_at):
     """store.store(), with each failure it expects recorded under its code and returned as {"error": code}."""
     fields = {"source": fact.source, "project": fact.project, "session_id": fact.session_id, "turn": fact.source_turn}
     try:
+        # One digest per session, checked here too, so a second one queued for the same session is not stored.
+        if fact.kind == "digest" and (existing := store.digest_of(conn, fact.session_id)):
+            return {"already_stored": existing}
         if fact.gate is not None or fact.kind == "digest":   # gated: unless the same text is already live
             if existing := store.identical(conn, fact.project, fact.body):
                 return {"already_stored": existing}
