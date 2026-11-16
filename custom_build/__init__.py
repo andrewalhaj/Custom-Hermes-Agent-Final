@@ -124,19 +124,23 @@ class CustomBuildProvider(MemoryProvider):
                           embedder=self.embedder, judge_at=_judge(), connect=settings.connect)
 
     def get_tool_schemas(self) -> list:
-        return [tool.SCHEMA]
+        return [tool.SCHEMA, tool.SEARCH_SCHEMA]
 
     @failures.boundary(_machine, settings.connect, failures.PROVIDER)
     def handle_tool_call(self, tool_name: str, args: dict, **kwargs) -> str:
-        if tool_name != tool.SCHEMA["name"]:
+        if tool_name not in (tool.SCHEMA["name"], tool.SEARCH_SCHEMA["name"]):
             return super().handle_tool_call(tool_name, args, **kwargs)
         machine = _machine()
         if missing := settings.missing_settings(settings.plugin_context()):
             failures.record(None, "config.missing", "failed", source=machine, reason=", ".join(missing),
                             session_id=self.session_id)
             return json.dumps({"error": "config.missing"})
-        outcome = tool.store_fact(args, machine=machine, session_id=self.session_id, turn=self.turn,
-                                  embedder=self.embedder, judge_at=_judge(), connect=settings.connect)
+        if tool_name == tool.SEARCH_SCHEMA["name"]:
+            outcome = tool.memory_search(args, machine=machine, session_id=self.session_id, turn=self.turn,
+                                         embedder=self.embedder, connect=settings.connect)
+        else:
+            outcome = tool.store_fact(args, machine=machine, session_id=self.session_id, turn=self.turn,
+                                      embedder=self.embedder, judge_at=_judge(), connect=settings.connect)
         return json.dumps(outcome, default=str)   # fact ids are UUIDs
 
 

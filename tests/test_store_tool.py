@@ -91,7 +91,7 @@ def _facts(db):
 
 def test_the_provider_offers_the_store_tool(home, db, ollama, typesafe):
     report, _ = run(home, db, ollama.url, typesafe.url, [])
-    assert report["tools"] == ["store_fact"]
+    assert report["tools"] == ["store_fact", "memory_search"]   # memory_search from #158
 
 
 def test_a_fact_is_stored_with_its_project_session_and_turn(home, db, ollama, typesafe):
