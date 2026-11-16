@@ -1,6 +1,6 @@
 """The fact gate, in log mode (ARCHITECTURE.md sections 5.3 and 5.4; #133).
 
-Three hooks, keyed by session and turn. `pre_llm_call` arms a turn whose message asks a checkable
+Three hooks, keyed by the turn. `pre_llm_call` arms a turn whose message asks a checkable
 question and records `fact_gate.armed`. `post_tool_call` counts a lookup Hermes reports `ok`.
 `transform_llm_output` records `fact_gate.would_withhold` for an armed turn's reply with no lookup, or
 with a procedure or diagnosis and no documentation lookup. In `log` mode no reminder is added and nothing
@@ -17,7 +17,9 @@ from .. import failures, settings
 CONFIG = pathlib.Path(__file__).with_suffix(".toml")
 MODES = ("log", "off")   # `on` arrives with enforcement (ARCHITECTURE.md 5.4 item 6)
 TURNS_KEPT = 1000   # armed turns held while their replies are pending, in this process
-_turns = {}   # (session_id, turn_id) -> {"rule": ..., "looked": bool, "documented": bool}
+# turn_id -> {"rule": ..., "looked": bool, "documented": bool}. Keyed by the turn alone: Hermes's turn ids
+# embed a uuid, and compression can give the session a new id mid-turn.
+_turns = {}
 _turns_lock = threading.Lock()
 
 
@@ -46,7 +48,7 @@ def arm(ctx, config, *, session_id="", turn_id="", user_message=None, **kwargs):
     if (rule := armed_by(config, user_message)) is None:
         return
     with _turns_lock:
-        _turns[(session_id, turn_id)] = {"rule": rule, "looked": False, "documented": False}
+        _turns[turn_id] = {"rule": rule, "looked": False, "documented": False}
         while len(_turns) > TURNS_KEPT:
             _turns.pop(next(iter(_turns)))
     _record(ctx, session_id=session_id, rule=rule, why=None)
@@ -57,7 +59,7 @@ def count(ctx, config, *, tool_name, session_id="", turn_id="", status=None, **k
     if status != "ok" or tool_name not in config["lookups"]:
         return
     with _turns_lock:
-        if turn := _turns.get((session_id, turn_id)):
+        if turn := _turns.get(turn_id):
             turn["looked"] = True
             turn["documented"] = turn["documented"] or tool_name in config["documentation"]
 
@@ -66,7 +68,7 @@ def check(ctx, config, *, response_text, session_id="", turn_id="", **kwargs):
     """`transform_llm_output`: record an armed turn's reply that would be withheld. Returns nothing, so
     the reply is delivered as written."""
     with _turns_lock:
-        turn = _turns.pop((session_id, turn_id), None)
+        turn = _turns.pop(turn_id, None)
     if turn is None:
         return
     if not turn["looked"]:
