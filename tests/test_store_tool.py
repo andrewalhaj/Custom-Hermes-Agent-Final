@@ -38,7 +38,8 @@ if mode == "crash":
     def crash(*args, **kwargs):
         raise KeyError("boom")
     modules["store"].store = crash
-provider.initialize(session_id="s1", hermes_home=sys.argv[5], platform="cli")
+context = "cron" if mode == "cron" else "primary"   # a cron run starts the provider too
+provider.initialize(session_id="s1", hermes_home=sys.argv[5], platform="cli", agent_context=context)
 if mode == "switch":   # /new, /resume or /branch while the process runs
     provider.on_session_switch("s2", parent_session_id="s1")
 provider.on_turn_start(4, "a user message")
@@ -65,10 +66,11 @@ def home(tmp_path):
     return home
 
 
-def run(home, db, ollama_url, judge_url, calls, *, mode="plain"):
+def run(home, db, ollama_url, judge_url, calls, *, mode="plain", env_extra=None):
     """Start the provider and call store_fact once per entry of `calls`; return (report, log output)."""
     env = {"HERMES_HOME": str(home), "HOME": str(home.parent), "PATH": "/usr/bin:/bin",
            "CUSTOM_BUILD_DATABASE_URL": db["agent"], "TYPESAFE_API_KEY": "test-key-not-a-real-one"}
+    env.update(env_extra or {})
     result = subprocess.run(
         [sys.executable, "-c", SCENARIO, ollama_url, judge_url, mode, json.dumps(calls), str(home)],
         capture_output=True, text=True, env=env, cwd=home.parent / "work", timeout=120, check=False)
@@ -106,7 +108,7 @@ def test_after_a_session_switch_a_fact_records_the_new_session(home, db, ollama,
 
 def test_a_refused_fact_is_not_stored_and_says_why(home, db, ollama, typesafe):
     report, _ = run(home, db, ollama.url, typesafe.url, [{"fact": "Let me check the logs now.", "basis": "user_stated"}])
-    assert report["results"][0]["stored"] is False
+    assert set(report["results"][0]) == {"refused"}
     assert report["results"][0]["refused"].startswith("narration")
     assert _facts(db) == []
 
@@ -142,13 +144,15 @@ def test_a_secret_never_reaches_the_store_the_judge_the_queue_or_a_log_line(home
     ollama.vectors = {STORED: [1.0] + [0.0] * 2559}
     ollama.other = [0.85, 0.5268] + [0.0] * 2558   # the secret fact lands in the judge's band
     typesafe.status = 500                          # so it is queued
+    # Hermes's own redaction switched off: the build's redaction is forced, so it must hold anyway.
+    off = {"HERMES_REDACT_SECRETS": "false"}
     _, first = run(home, db, ollama.url, typesafe.url,
-                   [{"fact": STORED, "basis": "user_stated"}, {"fact": secret_fact, "basis": "user_stated"}])
+                   [{"fact": STORED, "basis": "user_stated"}, {"fact": secret_fact, "basis": "user_stated"}], env_extra=off)
     queue = list((home / "plugin-data" / "custom_build").glob("store_queue.db*"))
     assert queue and all(FAKE_KEY.encode() not in path.read_bytes() for path in queue)
     typesafe.status = 200
     typesafe.answers = {"same_subject": 0.1, "supersedes": 0.1}
-    _, second = run(home, db, ollama.url, typesafe.url, [])   # the retry stores it beside the first
+    _, second = run(home, db, ollama.url, typesafe.url, [], env_extra=off)   # the retry stores it beside the first
     stored = [row[0] for row in _facts(db)]
     assert len(stored) == 2 and FAKE_KEY not in stored[1], stored
     assert len(typesafe.requests) == 2 and all(FAKE_KEY not in json.dumps(r["body"]) for r in typesafe.requests)
@@ -162,3 +166,26 @@ def test_a_crash_is_recorded_as_unhandled_and_re_raised(home, db, ollama, typesa
     assert report["results"] == [{"raised": "KeyError"}]
     # A tool call carries no session id for the wrapper to record.
     assert [row[:3] for row in _events(db)] == [("unhandled", "failed", "host-a")]
+
+
+def test_a_start_outside_a_primary_session_leaves_the_queue(home, db, ollama, typesafe):
+    ollama.vectors = {STORED: [1.0] + [0.0] * 2559, CLOSE: [0.85, 0.5268] + [0.0] * 2558}
+    typesafe.status = 500
+    run(home, db, ollama.url, typesafe.url, [{"fact": STORED, "basis": "user_stated"}, {"fact": CLOSE, "basis": "user_stated"}])
+    typesafe.status, typesafe.answers = 200, {"same_subject": 0.1, "supersedes": 0.1}
+    run(home, db, ollama.url, typesafe.url, [], mode="cron")   # a cron run's start writes nothing
+    assert [row[0] for row in _facts(db)] == [STORED]
+    run(home, db, ollama.url, typesafe.url, [])   # the next primary start does
+    assert [row[0] for row in _facts(db)] == [STORED, CLOSE]
+
+
+def test_a_retry_stops_at_the_first_judge_failure(home, db, ollama, typesafe):
+    ollama.vectors = {STORED: [1.0] + [0.0] * 2559}
+    ollama.other = [0.85, 0.5268] + [0.0] * 2558   # every other fact lands in the judge's band
+    typesafe.status = 500
+    run(home, db, ollama.url, typesafe.url, [{"fact": STORED, "basis": "user_stated"},
+                                             {"fact": CLOSE, "basis": "user_stated"},
+                                             {"fact": "The report goes out at seven each morning.", "basis": "user_stated"}])
+    asked = len(typesafe.requests)
+    run(home, db, ollama.url, typesafe.url, [])   # the judge is still down: one try, not one per queued fact
+    assert len(typesafe.requests) == asked + 1
