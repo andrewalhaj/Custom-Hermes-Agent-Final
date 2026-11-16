@@ -154,6 +154,7 @@ def test_a_database_url_postgresql_cannot_parse_fails_with_config_missing(tmp_pa
     code, output, rows = run_check(tmp_path, db, database_url="not a url")
     assert code != 0
     assert "config.missing" in output and "CUSTOM_BUILD_DATABASE_URL" in output, output
+    assert "PostgreSQL can parse" in output, output   # the hint says how to fix it, not only "set it as text"
     assert "Traceback" not in output
     assert rows == []
 

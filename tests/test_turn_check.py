@@ -86,6 +86,7 @@ def test_a_database_url_postgresql_cannot_parse_blocks_the_turn(tmp_path, db):
     blocks, output, rows = run_turn(tmp_path, db, database_url="not a url")
     assert len(blocks) == 1, output
     assert "config.missing" in blocks[0] and "CUSTOM_BUILD_DATABASE_URL" in blocks[0], blocks
+    assert "PostgreSQL can parse" in blocks[0], blocks   # the notice says how to fix it, not only "set it as text"
     assert rows == []
 
 
