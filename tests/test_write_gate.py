@@ -103,7 +103,9 @@ def run_gate(tmp_path, db, calls, *, mode="log", scenario="plain", approvals=Non
     report = json.loads(result.stdout.strip().splitlines()[-1])
     output = result.stderr + "".join(p.read_text(encoding="utf-8") for p in sorted((home / "logs").glob("*.log")))
     with psycopg.connect(db["owner"]) as conn:
-        rows = conn.execute("select code, result, reason, detail, source, session_id from memory.events order by id").fetchall()
+        # This gate's rows and crashes only: the other guards record their own events on the same calls.
+        rows = conn.execute("select code, result, reason, detail, source, session_id from memory.events"
+                            " where code like 'write_gate.%' or code = 'guard.crash' order by id").fetchall()
     return report, output, rows
 
 
@@ -254,7 +256,7 @@ def test_a_call_on_would_block_outright_is_recorded_and_goes_ahead(tmp_path, db,
 def test_off_registers_no_hook_and_records_nothing(tmp_path, db):
     report, output, rows = run_gate(tmp_path, db, [["terminal", {"command": "systemctl restart x"}]], mode="off")
     assert report["entry"]["error"] is None, output
-    assert report["entry"]["hooks"] == 1   # only the per-turn settings check
+    assert report["entry"]["hooks"] == 4   # the per-turn settings check and the verify gate's three
     assert report["blocks"] == [None]
     assert rows == []
 
