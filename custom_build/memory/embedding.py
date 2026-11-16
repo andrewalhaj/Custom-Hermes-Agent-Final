@@ -69,10 +69,17 @@ class Embedder:
         self.build = build
 
     def embed(self, conn, texts, *, timeout):
-        """One vector of DIMENSIONS numbers per text."""
+        """One vector of DIMENSIONS numbers per text, from the checked build only.
+
+        The build is read again after each request, so a model replaced while Hermes runs never has its
+        vectors labelled with the old build (#120); the next call checks against the store again.
+        """
         if self.build is None:
             self.check(conn, timeout=timeout)
         vectors = _ollama(self.url, "/api/embed", {"model": MODEL, "input": texts}, timeout=timeout)["embeddings"]
+        if (build := machine_build(self.url, timeout=timeout)) != self.build:
+            checked, self.build = self.build, None
+            raise ModelMismatch(f"this machine's build changed from {checked} to {build}")
         if len(vectors) != len(texts):
             raise EmbedUnavailable(f"Ollama returned {len(vectors)} vectors for {len(texts)} texts")
         if any(len(vector) != DIMENSIONS for vector in vectors):
