@@ -23,7 +23,9 @@ DATE_FORMAT = "%Y/%m/%d (%a) %H:%M"   # LongMemEval's haystack_dates
 
 
 def _modules():
-    """The plugin's modules as the provider load imported them, by their last name (for a test's fakes)."""
+    """The plugin's modules as the provider load imported them, by their last name (for a test's fakes). The
+    plugin is in memory twice, from discovery and from the provider load; the later load wins the name, so
+    this relies on main() discovering plugins before it loads the provider."""
     return {name.rsplit(".", 1)[-1]: module for name, module in sys.modules.items() if "custom_build" in name}
 
 
