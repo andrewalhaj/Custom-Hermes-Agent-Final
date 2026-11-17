@@ -12,6 +12,18 @@ def search(conn, embedder, query, project, *, wanted, timeout):
     return candidates(conn, embedder, query, project, wanted=wanted, timeout=timeout)[:wanted]
 
 
+def newest_digests(conn, project, count):
+    """The project's newest `count` live digests, newest first (3.5 point 4): not a similarity search."""
+    rows = conn.execute(
+        "select body, kind, origin, basis, created_at, last_verified_at from memory.facts"
+        " where kind = 'digest' and superseded_by is null and retired_at is null and project is not distinct from %s"
+        " order by created_at desc, id desc limit %s", (project, count)).fetchall()   # id: ties keep an order
+    return [{"body": body, "kind": kind, "origin": origin, "basis": basis, "stored": created.date().isoformat(),
+             "last_verified": verified.date().isoformat() if verified else None, "found_by": ["newest"],
+             "ranked_by": "newest"}
+            for body, kind, origin, basis, created, verified in rows]
+
+
 def candidates(conn, embedder, query, project, *, wanted, timeout):
     """The whole fused candidate pool for `wanted` results (3.6), best first, for delivery's slot rules."""
     limits = write_path.load()["recall"]

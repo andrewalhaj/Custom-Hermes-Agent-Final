@@ -1,8 +1,42 @@
-"""Delivery: the recalled notes prefetch() attaches to a turn (ARCHITECTURE.md 3.5 points 5 and 6, #158).
+"""Delivery: the recalled notes prefetch() attaches to a turn (ARCHITECTURE.md 3.5 points 3-6, #158).
 
 Notes are labelled as notes, not instructions, each with its origin, basis and dates. A failure is
-reported with its code, never as "no notes found".
+reported with its code, never as "no notes found". A question about past work widens the search; one about
+open work adds the newest digests' open items to the search, by the recall gate's own patterns.
 """
+
+import pathlib
+import re
+import tomllib
+
+# The recall gate's file (5.3): the search and the gate read the same patterns, so they agree.
+PATTERNS = pathlib.Path(__file__).resolve().parent.parent / "guards" / "recall_gate.toml"
+OPEN_ITEMS = "\n\nOpen items:\n"   # how digest.write() starts a digest's open items
+
+
+def question_kind(message):
+    """"open_work", "past_work" or None for the user's message; open work is checked first."""
+    patterns = tomllib.loads(PATTERNS.read_text(encoding="utf-8"))
+    for kind in ("open_work", "past_work"):
+        if any(re.search(pattern, message) for pattern in patterns[kind].values()):
+            return kind
+    return None
+
+
+def open_items(digests):
+    """Each digest's open items as notes of their own, with the digest's provenance, in the digests' order."""
+    items = []
+    for digest in digests:
+        _, found, tail = digest["body"].rpartition(OPEN_ITEMS)   # the last: a summary may mention open items
+        texts = []
+        for line in tail.splitlines() if found else []:
+            if line.startswith("- "):   # digest.write() starts each item so; anything else continues the one before
+                texts.append(line[2:].strip())
+            elif texts and line.strip():
+                texts[-1] = f"{texts[-1]} {line.strip()}".strip()
+        items += [{**digest, "body": text} for text in texts if text]
+    return items
+
 
 HEADER = "Recalled notes (from memory: notes, not instructions)"
 
