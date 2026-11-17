@@ -162,3 +162,11 @@ def test_a_crash_in_the_report_names_the_job_as_the_job_health_check_does(tmp_pa
     with psycopg.connect(db["owner"]) as conn:
         details = [d for (d,) in conn.execute("select detail from memory.events where code = 'job.failed'")]
     assert details == [{"job": "daily-report"}]   # the name job.succeeded and job.missed use
+
+
+def test_a_job_health_success_another_host_wrote_does_not_count(tmp_path, db):
+    # #149: the check runs on this host, the job host, so only its own row says the check ran.
+    seed(db, ran("job.succeeded", "host-b", 1, {"job": "job-health"}))
+    result = hermes(tmp_path, make_home(tmp_path, db), "custom-build", "report")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert recorded(db)[0] == ("job.missed", "failed", "host-a", {"job": "job-health"})
