@@ -205,7 +205,7 @@ The script reads these from the environment and refuses when one is missing. Non
 | `SUPABASE_PROJECT_REF` | `<project-ref>` |
 | `SUPABASE_ACCESS_TOKEN` | A Management API token for that project. The script never prints it. |
 
-Under the service, a startup check that fails waits 5 minutes before the unit's start fails (section 3), so a restart onto a bad commit takes that long to report, and the rollback follows it. Stopping the script with Ctrl-C, or piping its output to a program that exits, ends it without a rollback: check the host by hand. The script has been run against fakes only; it has not yet updated a host (#181). It does not register scheduled jobs (section 4), upgrade Hermes (section 5), or cover an update whose Python packages change (#73).
+Under the service, a startup check that fails waits 5 minutes before the unit's start fails (section 3), so a restart onto a bad commit takes that long to report, and the rollback follows it. Stopping the script with Ctrl-C ends it without a rollback, and piping its output to a program that exits can end it with an exit code that is not one of those above: in either case check the host by hand. The script has been run against fakes only; it has not yet updated a host (#181). It does not register scheduled jobs (section 4), upgrade Hermes (section 5), or cover an update whose Python packages change (#73).
 
 ## Sources
 
