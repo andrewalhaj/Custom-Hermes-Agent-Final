@@ -147,11 +147,14 @@ def test_an_armed_turn_without_both_searches_is_recorded_and_delivered(tmp_path,
     assert report["holds_stream"] is False   # log mode holds no reply back from the stream
 
 
-def test_an_armed_turn_that_ran_both_searches_records_only_that_it_was_armed(tmp_path, db):
-    steps = [["turn", "s1", "u1", ASK], ["post", "s1", "u1", "session_search", "ok"],
+def test_an_armed_turn_that_ran_both_searches_is_recorded_as_passed(tmp_path, db):
+    # #188: every armed turn that gets a reply ends in a row, so an armed row with none means no reply came.
+    steps = [["turn", "s1", "u1", ASK, "telegram"], ["post", "s1", "u1", "session_search", "ok"],   # any platform but a subagent's
              ["post", "s1", "u1", "memory_search", "ok"], ["reply", "s1", "u1", "We fixed it on Tuesday."]]
     _, output, rows = run_gate(tmp_path, db, steps)
-    assert [code for code, *_ in events(rows)] == ["recall_gate.armed"], output
+    assert [(code, detail) for code, _, _, detail, _, _ in rows] == [
+        ("recall_gate.armed", {"kind": "past_work", "rule": "did_we", "turn_id": "u1"}),
+        ("recall_gate.passed", {"kind": "past_work", "rule": "did_we", "turn_id": "u1"})], output
 
 
 def test_a_turn_that_does_not_ask_about_past_work_records_nothing(tmp_path, db):

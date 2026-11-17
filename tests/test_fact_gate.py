@@ -162,12 +162,20 @@ def test_a_subagents_turn_arms_nothing(tmp_path, db):
     assert rows == [], output
 
 
-def test_each_event_carries_its_turns_id(tmp_path, db):
-    # #188: an armed row joins to its turn's later row by the id, or shows that it has none.
-    steps = [["turn", "s1", "u1", "How many facts are in the store?"], ["reply", "s1", "u1", "There are 42."]]
+def test_each_event_carries_its_turns_id_and_every_judged_turn_ends_in_a_row(tmp_path, db):
+    # #188: an armed row joins to its turn's later row by the id; an armed row with none means no reply came.
+    ask = "How many facts are in the store?"
+    steps = [["turn", "s1", "u1", ask], ["reply", "s1", "u1", "There are 42."],
+             ["turn", "s1", "u2", ask, "telegram"], ["post", "s1", "u2", "terminal", "ok"],   # any platform but a subagent's
+             ["reply", "s1", "u2", "The root cause is the timeout."],
+             ["turn", "s1", "u3", ask], ["post", "s1", "u3", "terminal", "ok"], ["reply", "s1", "u3", "There are 42."],
+             ["turn", "s1", "u4", ask]]   # no reply
     _, output, rows = run_gate(tmp_path, db, steps)
-    assert [(code, detail["turn_id"]) for code, _, _, detail, _, _ in rows] == [
-        ("fact_gate.armed", "u1"), ("fact_gate.would_withhold", "u1")], output
+    assert [(code, detail["turn_id"], detail.get("why")) for code, _, _, detail, _, _ in rows] == [
+        ("fact_gate.armed", "u1", None), ("fact_gate.would_withhold", "u1", "no lookup"),
+        ("fact_gate.armed", "u2", None), ("fact_gate.would_withhold", "u2", "no documentation lookup"),
+        ("fact_gate.armed", "u3", None), ("fact_gate.passed", "u3", None),
+        ("fact_gate.armed", "u4", None)], output
 
 
 def test_off_registers_no_hook_and_records_nothing(tmp_path, db):
@@ -235,7 +243,7 @@ def test_a_turn_that_delegates_its_lookup_counts_as_looked_up(tmp_path, db):
     steps = [["turn", "s1", "u1", "How many facts are in the store?"], ["post", "s1", "u1", "delegate_task", "ok"],
              ["reply", "s1", "u1", "There are 42."]]
     _, output, rows = run_gate(tmp_path, db, steps)
-    assert [code for code, _, _ in events(rows)] == ["fact_gate.armed"], output
+    assert [code for code, _, _ in events(rows)] == ["fact_gate.armed", "fact_gate.passed"], output
 
 
 def test_a_turn_that_searches_memory_counts_as_looked_up(tmp_path, db):
