@@ -187,8 +187,23 @@ def register(ctx) -> None:
     def check_turn(**kwargs):
         return settings.check_turn(ctx, **kwargs)
 
+    # The action query (3.5 point 2). A crash is recorded as unhandled and the turn gets a "recall failed" note,
+    # so the turn and the message query go ahead (section 2's table).
+    @failures.boundary(lambda: settings.machine(ctx), settings.connect,
+                       failures.Returns(lambda exc: {"context": recall.failed("unhandled")}))
+    def action_query(**kwargs):
+        if settings.missing_settings(ctx):   # the turn check blocks this turn
+            return None
+        text = tool.action_notes(kwargs.get("user_message"), kwargs.get("conversation_history"),
+                                 machine=settings.machine(ctx), session_id=kwargs.get("session_id"),
+                                 embedder=embedding.Embedder(embedding.OLLAMA_URL), judge_at=_judge(),
+                                 connect=settings.connect)
+        return {"context": text} if text else None
+
     # Before the subcommand: if any fails, Hermes drops the load and the startup check cannot pass.
     ctx.register_hook("pre_llm_call", check_turn)
+    if tool.action_config()["on"]:   # off registers no hook, as each guard's off does (#26 switches it on)
+        ctx.register_hook("pre_llm_call", action_query)
     write_gate.register(ctx)
     verify_gate.register(ctx)
     fact_gate.register(ctx)

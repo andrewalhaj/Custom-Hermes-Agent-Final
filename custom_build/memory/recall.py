@@ -55,11 +55,11 @@ def capped(results, *, wanted, digests):
     return kept
 
 
-def notes(results):
+def notes(results, header=HEADER):
     """The notes block, or "" when nothing was found."""
     if not results:
         return ""
-    lines = [HEADER]
+    lines = [header]
     for result in results:
         provenance = [result["origin"], result["basis"], f"stored {result['stored']}"]
         if result["last_verified"]:
