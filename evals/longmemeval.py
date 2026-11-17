@@ -116,7 +116,7 @@ def database(postgres):
     owner = psycopg.conninfo.make_conninfo(**{**info, "dbname": name})
     with psycopg.connect(postgres, autocommit=True) as admin:
         found = [row[0] for row in admin.execute("select rolname from pg_roles where rolname = any(%s)",
-                                                 (list(GROUP_ROLES),))]
+                                                 ([MACHINE, *GROUP_ROLES],))]
         if found:
             raise EvalError(f"this Postgres already has {', '.join(found)}: point the runner at a throwaway "
                             "server; it never drops a role it did not create")
