@@ -7,8 +7,9 @@ issue #181). The steps run in order and the first one that fails stops the deplo
 2. read the store's migration history and the commit the host runs now, so nothing changes if either is unreadable;
 3. apply the pending migrations, in file-name order, after the operator types `yes`;
 4. install the commit on the host and run the startup check, then restart the gateway and smoke-test it;
-5. on a failure in step 4, install the previous commit again, restart and smoke-test. Migrations stay applied:
-   each one works with the plugin deployed before it (CONTRIBUTING.md rule C10).
+5. on a failure in step 4, install the previous commit again, check, restart and smoke-test, unless the install
+   failed and left the previous commit in place. Migrations stay applied: each one works with the plugin
+   deployed before it (CONTRIBUTING.md rule C10).
 
 Deployment values come from the environment, never from this repository (OPERATIONS.md section 1). The script
 runs outside Hermes with the operator reading its output, so it records no failure code: every refusal and

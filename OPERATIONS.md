@@ -182,15 +182,15 @@ The files in `migrations/` are applied to `<project-ref>` in file-name order, ea
 
 ## 8. Deploying to an agent host
 
-`python scripts/deploy.py <commit>`, run from a checkout on the operator's machine, does section 7 and section 3's Update step for one agent host, in a fixed order, and stops at the first step that fails. `<commit>` is the full hash of a commit on `main`.
+`python scripts/deploy.py <commit>`, run from a checkout on the operator's machine, applies pending migrations the way section 7 describes and does section 3's Update step for one agent host, in a fixed order, and stops at the first step that fails. `<commit>` is the full hash of a commit on `main`.
 
 1. **Refuses an unproven commit:** one that is not on `origin/main`, or whose CI runs did not all succeed. No run yet is a refusal.
 2. **Reads before it changes anything:** the store's migration history, and the commit the host runs now, from the record Hermes keeps of a pinned install (`plugins/.install-metadata.json` in the Hermes home).[3] If either cannot be read, nothing has changed. A host with no pinned install is refused: the first install is done by hand (section 3).
-3. **Applies the pending migrations,** in file-name order, only after it lists them and the operator types `yes`, and reads the history back after each.
+3. **Applies the pending migrations,** in file-name order, only after it lists them and the operator types `yes`, and reads the history back after each. It sends each file's name without `.sql`, which is how the first four are recorded (read from the store on 2026-11-16), and matches a recorded name with or without that ending. It does not do section 7's read of `pg_auth_members`.
 4. **Updates the host:** the Update command from section 3, then `hermes custom-build check` before any restart, then the restart, then a smoke test: the service is active and `hermes custom-build heartbeat` exits 0, so the new code loads and reaches the store.
-5. **Rolls back** when step 4 fails anywhere: it installs the previous commit, restarts and smoke-tests again, and says whether that passed. A migration is never rolled back.
+5. **Rolls back** when step 4 fails: it installs the previous commit, checks, restarts and smoke-tests again, and says whether that passed. The one exception is an install that failed and left the previous commit in place, which Hermes's own record shows: nothing is restarted then. A migration is never rolled back.
 
-It exits 0 when deployed, 1 when it refused with the host unchanged, 2 when it rolled back, and 3 when the rollback itself failed, which leaves the host for the operator to check by hand. It runs outside Hermes, so it writes nothing to `events` itself; the heartbeat in its smoke test does.
+It exits 0 when deployed, 1 when it stopped with the host unchanged (migrations it had already applied stay applied, and it names them), 2 when it rolled back, 3 when the rollback itself failed, which leaves the host for the operator to check by hand, and 64 when it is not given exactly one commit. It runs outside Hermes, so it writes nothing to `events` itself; the heartbeat in its smoke test does.
 
 The script reads these from the environment and refuses when one is missing. None of them belongs in this repository (section 1).
 
@@ -199,9 +199,9 @@ The script reads these from the environment and refuses when one is missing. Non
 | `DEPLOY_REPO` | `<owner>/<repo>`, as in section 3's install command |
 | `DEPLOY_SSH` | The ssh target for the account that owns the Hermes home on the agent host |
 | `DEPLOY_HERMES` | The full path of the `hermes` command on the host, as in the unit's `ExecStart=` |
-| `DEPLOY_HERMES_HOME` | The full path of the Hermes home on the host |
+| `DEPLOY_HERMES_HOME` | The full path of the Hermes home on the host, not one that starts with `~` |
 | `DEPLOY_UNIT` | The gateway's systemd unit |
-| `DEPLOY_RESTART` | The whole command that restarts that unit, run on the operator's machine. Restarting a system unit needs root, so this is usually an ssh command with a login that may do it. |
+| `DEPLOY_RESTART` | The whole command that restarts that unit, run on the operator's machine. Restarting a system unit needs root, so this is usually an ssh command with a login that may do it. It is run without a shell. |
 | `SUPABASE_PROJECT_REF` | `<project-ref>` |
 | `SUPABASE_ACCESS_TOKEN` | A Management API token for that project. The script never prints it. |
 
