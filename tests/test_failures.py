@@ -288,10 +288,53 @@ def test_boundary_answers_within_its_bound_when_the_store_never_answers(caplog, 
         else:
             assert call(session_id="s1") == {"action": "block", "message": "blocked after KeyError"}
         assert time.monotonic() - started < 5
+        lost = [line for level, line in _json_lines(caplog) if line["code"] == "events.write_failed"]
+        # The loss is logged with the fields a lost write's line carries, and says what was lost (rule F5).
+        assert [(line["detail"], line["source"], line["session_id"]) for line in lost] == [({"lost_code": code}, "host-a", "s1")]
+        assert "within 0.5 seconds" in lost[0]["reason"] and "KeyError: 'boom'" in lost[0]["reason"]
     finally:
         released.set()
-    lost = [line for level, line in _json_lines(caplog) if line["code"] == "events.write_failed"]
-    assert [line["detail"] for line in lost] == [{"lost_code": code}]   # the loss is logged (rule F5)
+        for thread in threading.enumerate():   # so this case's worker cannot log into the next one
+            if thread.name == "custom_build.crash":
+                thread.join(10)
+
+
+def test_boundary_logs_the_loss_when_the_record_itself_raises(caplog):
+    # A bug in the record must not replace the hook's answer, and must not vanish with the worker.
+    caplog.set_level(logging.INFO, logger=failures.__name__)
+
+    class Broken:   # a connection whose every use raises something no handler expects
+        def __getattr__(self, name):
+            raise AttributeError(name)
+
+    guard = failures.boundary(_host_a, Broken, _block)(_guard_that_crashes)
+    assert guard(session_id="s1") == {"action": "block", "message": "blocked after KeyError"}
+    assert [line["detail"] for _, line in _json_lines(caplog) if line["code"] == "events.write_failed"] == [
+        {"lost_code": "guard.crash"}]
+
+
+def test_boundary_keeps_only_a_few_workers_waiting_on_a_silent_store(caplog, monkeypatch):
+    # Each crash against a store that never answers would otherwise leave a thread and a connection behind.
+    caplog.set_level(logging.INFO, logger=failures.__name__)
+    monkeypatch.setattr(failures, "CRASH_RECORD_WAIT", 0.1, raising=False)
+    released, opened = threading.Event(), []
+
+    def silent():
+        opened.append(1)
+        released.wait(30)
+
+    guard = failures.boundary(_host_a, silent, _block)(_guard_that_crashes)
+    try:
+        for _ in range(6):
+            assert guard(session_id="s1") == {"action": "block", "message": "blocked after KeyError"}
+        assert len(opened) == 3   # the rest were not started
+        lost = [line["reason"] for _, line in _json_lines(caplog) if line["code"] == "events.write_failed"]
+        assert len(lost) == 6 and sum("already waiting" in reason for reason in lost) == 3
+    finally:
+        released.set()
+        for thread in threading.enumerate():
+            if thread.name == "custom_build.crash":
+                thread.join(10)
 
 
 def test_boundary_passes_a_normal_answer_through_without_opening_a_connection():
