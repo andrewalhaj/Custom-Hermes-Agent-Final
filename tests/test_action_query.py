@@ -29,6 +29,7 @@ PREVIOUS = "x" * 600 + " and the parser test still fails on an empty file."
 HISTORY = [{"role": "user", "content": "run the tests"}, {"role": "assistant", "content": PREVIOUS},
            {"role": "user", "content": MESSAGE}]
 FAILED = "Recall failed ({}): memory could not be searched this turn, so its notes are unknown, not empty."
+FAKE_KEY = "sb_" + "secret_" + "N7UNd0UgjKTV-Uodkm0Hg0_xSvQ7d3m"   # assembled at run time, never a literal key
 
 SCENARIO = r"""
 import json, os, sys
@@ -181,6 +182,17 @@ def test_a_crash_is_recorded_as_unhandled_and_the_turn_goes_ahead(home, db, olla
     assert seen["context"] == [FAILED.format("unhandled")]
     assert "unhandled" in _codes(db)
     assert not any(isinstance(r, dict) and r.get("action") == "block" for r in seen["results"])
+
+
+def test_a_secret_in_the_message_or_the_previous_reply_never_reaches_the_judge(home, db, ollama, typesafe):
+    # CONTRIBUTING.md rule L4: the routing request is text sent off the host. Hermes redacts the user's message
+    # before hooks see it only when its own setting is on; the build's redaction is forced.
+    switch_on(home)
+    typesafe.answers, typesafe.default = {"asks_for_work": 0.9}, 0.5
+    history = [{"role": "assistant", "content": f"set the key to {FAKE_KEY} and restart"},
+               {"role": "user", "content": f"why does {FAKE_KEY} fail"}]
+    turn(home, db, ollama, typesafe, message=f"why does {FAKE_KEY} fail", history=history)
+    assert _routing(typesafe) and all(FAKE_KEY not in json.dumps(r["body"]) for r in typesafe.requests)
 
 
 def test_the_skip_has_its_own_code_which_is_not_a_failure():
