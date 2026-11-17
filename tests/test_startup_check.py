@@ -281,3 +281,4 @@ def test_a_machine_name_that_is_not_the_logins_name_fails(tmp_path, db):
     assert code != 0, output
     assert "config.missing" in output and "host-z" in output and "host-a" in output
     assert rows == [] and "not recorded in events" in output   # the store refuses a row under the wrong name
+    assert "events.write_failed" in output   # and the lost row is logged as every lost row is (rule F5)
