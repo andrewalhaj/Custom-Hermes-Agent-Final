@@ -194,7 +194,10 @@ def one(entry, *, postgres, command, template, judge_model, judge_key):
         home, work = hermes_home(tmp, template, judge_model)
         question = tmp / "question.json"
         question.write_text(json.dumps(entry), encoding="utf-8")
-        env = {**os.environ, "HERMES_HOME": str(home), "PYTHONPATH": str(ROOT), "CUSTOM_BUILD_DATABASE_URL": agent,
+        # Not the caller's Claude or Anthropic settings (a Claude Code shell's base URL, account and organisation):
+        # the subscription provider refuses them, and its own setting picks the eval's login (#170).
+        inherited = {name: value for name, value in os.environ.items() if not name.startswith(("ANTHROPIC", "CLAUDE"))}
+        env = {**inherited, "HERMES_HOME": str(home), "PYTHONPATH": str(ROOT), "CUSTOM_BUILD_DATABASE_URL": agent,
                "TYPESAFE_API_KEY": judge_key or os.environ.get("TYPESAFE_API_KEY", "")}
         stopped = replay(command, "ingest", question, home, work, env)["stopped"]
         with psycopg.connect(owner, autocommit=True) as conn:   # each row dated by its session (for recency)
