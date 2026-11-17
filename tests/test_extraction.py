@@ -216,6 +216,12 @@ def test_a_request_the_judge_refuses_is_recorded_with_its_cause_and_not_queued(h
     assert "max_tokens_exceeded" in rows[0][2] and rows[1][2].endswith("the fact is dropped")
 
 
+def test_a_400_that_does_not_name_the_request_as_too_big_still_queues_the_fact(home, db, ollama, typesafe):
+    typesafe.status = 400   # the fake's plain "refused": not a cause known to repeat
+    turn(home, db, ollama.url, typesafe.url, ONE_FACT)
+    assert _queued(home) == 1
+
+
 def test_queued_facts_the_judge_refuses_leave_the_queue_in_one_pass(home, db, ollama, typesafe):
     typesafe.status = 500
     turn(home, db, ollama.url, typesafe.url, TWO_FACTS)

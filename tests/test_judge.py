@@ -135,6 +135,33 @@ def test_the_gate_stops_asking_once_one_part_supports_the_fact(typesafe):
     assert len(typesafe.requests) == 1
 
 
+def test_no_request_holds_more_question_text_than_the_request_budget(typesafe):
+    # Review of #251: only the first request was held to the budget.
+    typesafe.default = 0.1
+    _big_gate(typesafe, ["x" * 30_000] * 4)
+    for request in typesafe.requests:
+        parts = [q["instructions"].split(": ", 1)[1] for name, q in request["body"]["questions"].items()
+                 if name != "worth_keeping"]
+        assert sum(map(len, parts)) <= 60_000   # the budget is the parts' own text
+    assert [len(request["body"]["questions"]) for request in typesafe.requests] == [3, 2, 1]   # the gate, the message and
+    # one result; two results; the last result
+
+
+def test_a_fact_not_worth_keeping_is_not_asked_about_past_its_first_request(typesafe):
+    typesafe.answers, typesafe.default = {"worth_keeping": 0.1}, 0.1
+    assert _big_gate(typesafe, ["x" * 25_000] * 6)["worth_keeping"] == 0.1
+    assert len(typesafe.requests) == 1
+
+
+@pytest.mark.parametrize("detail", ["refused", {"error_type": "invalid_model"}])
+def test_a_400_for_another_reason_is_an_ordinary_judge_error(typesafe, detail):
+    # Review of #251: only a request over the judge's context is known to be refused every time.
+    typesafe.status, typesafe.detail = 400, detail
+    with pytest.raises(judge.JudgeError) as caught:
+        _gate(typesafe)
+    assert not isinstance(caught.value, judge.JudgeRefused)
+
+
 def test_a_request_the_judge_refuses_as_too_big_names_its_cause(typesafe):
     typesafe.status, typesafe.detail = 400, {"error_type": "max_tokens_exceeded"}
     with pytest.raises(judge.JudgeRefused, match="max_tokens_exceeded"):
@@ -143,7 +170,7 @@ def test_a_request_the_judge_refuses_as_too_big_names_its_cause(typesafe):
 
 def test_a_refusal_never_carries_text_the_judge_sent_back(typesafe):
     typesafe.status, typesafe.detail = 400, {"error_type": "the fact was: User=hermes on the mini"}
-    with pytest.raises(judge.JudgeRefused) as caught:
+    with pytest.raises(judge.JudgeError) as caught:
         _gate(typesafe)
     assert "hermes" not in str(caught.value)
 
