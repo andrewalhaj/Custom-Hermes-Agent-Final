@@ -43,15 +43,17 @@ def armed_by(config, message):
     return next((name for name, pattern in config["questions"].items() if pattern.search(message)), None)
 
 
-def arm(ctx, config, *, session_id="", turn_id="", user_message=None, **kwargs):
+def arm(ctx, config, *, session_id="", turn_id="", user_message=None, platform="", **kwargs):
     """`pre_llm_call`: arm a turn that asks a checkable question. Returns nothing, so the turn is unchanged."""
+    if platform == "subagent":   # its message is its parent's goal, not a user's question (#188)
+        return
     if (rule := armed_by(config, user_message)) is None:
         return
     with _turns_lock:
         _turns[turn_id] = {"rule": rule, "looked": False, "documented": False}
         while len(_turns) > TURNS_KEPT:
             _turns.pop(next(iter(_turns)))
-    _record(ctx, session_id=session_id, rule=rule, why=None)
+    _record(ctx, session_id=session_id, turn_id=turn_id, rule=rule, why=None)
 
 
 def count(ctx, config, *, tool_name, session_id="", turn_id="", status=None, **kwargs):
@@ -72,32 +74,34 @@ def check(ctx, config, *, response_text, session_id="", turn_id="", **kwargs):
     if turn is None:
         return
     if not turn["looked"]:
-        _record(ctx, session_id=session_id, rule=turn["rule"], why="no lookup")
+        _record(ctx, session_id=session_id, turn_id=turn_id, rule=turn["rule"], why="no lookup")
         return
     needs = next((name for name, pattern in config["needs_documentation"].items() if pattern.search(response_text or "")), None)
     if needs and not turn["documented"]:
-        _record(ctx, session_id=session_id, rule=needs, why="no documentation lookup")
+        _record(ctx, session_id=session_id, turn_id=turn_id, rule=needs, why="no documentation lookup")
 
 
-def _record(ctx, *, session_id, rule, why):
+def _record(ctx, *, session_id, turn_id, rule, why):
     """Write one event from a worker thread, so a store that stops answering never holds the turn (#117)."""
     from agent.memory_provider import spawn_context_thread
 
     machine = settings.machine(ctx)
-    event = {"source": machine, "session_id": session_id or None, "rule": rule, "why": why}
+    event = {"source": machine, "session_id": session_id or None, "turn_id": turn_id, "rule": rule, "why": why}
     write = failures.boundary(lambda: machine, settings.connect, lambda exc: None)(write_event)
     spawn_context_thread(write, name="custom_build.fact_gate", kwargs=event).start()
 
 
-def write_event(*, source, session_id, rule, why):
+def write_event(*, source, session_id, turn_id, rule, why):
     """Write one of the gate's events; runs on the worker thread `_record` starts. No message or reply
-    text is stored, only pattern and rule names (rule L5)."""
+    text is stored, only pattern and rule names (rule L5). Each carries Hermes's id for the turn, so an
+    armed row joins to its turn's later row, or shows that it has none (#188)."""
+    detail = {"rule": rule, "turn_id": turn_id}
     with failures.store(source, settings.connect) as conn:
         if why is None:
-            failures.record(conn, "fact_gate.armed", "ok", source=source, session_id=session_id, detail={"rule": rule})
+            failures.record(conn, "fact_gate.armed", "ok", source=source, session_id=session_id, detail=detail)
         else:
             failures.record(conn, "fact_gate.would_withhold", "ok", source=source, session_id=session_id,
-                            detail={"rule": rule, "why": why})
+                            detail={**detail, "why": why})
 
 
 def register(ctx):
