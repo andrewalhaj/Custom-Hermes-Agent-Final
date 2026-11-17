@@ -317,17 +317,19 @@ def test_a_crashed_replay_keeps_the_report_of_what_was_measured(tmp_path, datase
     assert written["stopped"].startswith("crashed") and written["questions"] == 1   # the first, already paid for
 
 
-def test_a_postgres_that_already_has_the_memory_roles_is_refused_and_left_alone(tmp_path, dataset, ollama, typesafe):
+@pytest.mark.parametrize("role", ["memory_agent", "eval"])   # a group role, and the eval's own login (#149)
+def test_a_postgres_that_already_has_a_role_the_runner_makes_is_refused_and_left_alone(
+        tmp_path, dataset, ollama, typesafe, role):
     # #167 review: the runner drops the cluster-wide roles it creates; on a cluster that has them, it would
     # drop someone else's. It refuses instead.
     with psycopg.connect(os.environ["TEST_DATABASE_URL"], autocommit=True) as admin:
-        admin.execute("create role memory_agent nologin")
+        admin.execute(psycopg.sql.SQL("create role {} nologin").format(psycopg.sql.Identifier(role)))
         try:
-            with pytest.raises(longmemeval.EvalError, match="memory_agent"):
+            with pytest.raises(longmemeval.EvalError, match=role):
                 run(tmp_path, dataset, ollama, typesafe)
-            assert admin.execute("select count(*) from pg_roles where rolname = 'memory_agent'").fetchone() == (1,)
+            assert admin.execute("select count(*) from pg_roles where rolname = %s", (role,)).fetchone() == (1,)
         finally:
-            admin.execute("drop role memory_agent")
+            admin.execute(psycopg.sql.SQL("drop role if exists {}").format(psycopg.sql.Identifier(role)))
 
 
 def test_with_parallel_two_questions_replay_at_the_same_time(tmp_path, dataset, ollama, typesafe):

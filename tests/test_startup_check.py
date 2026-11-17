@@ -273,3 +273,12 @@ def test_a_store_ahead_of_the_plugin_passes(tmp_path, db):
     assert code == 0, output
     assert rows == []
 
+
+def test_a_machine_name_that_is_not_the_logins_name_fails(tmp_path, db):
+    # The store admits a machine's events only under its login's name (#149), so a mismatch would lose every one.
+    config = _with(("plugins", "entries", "custom_build", "settings", "machine_name"), "host-z")
+    code, output, rows = run_check(tmp_path, db, config=config)
+    assert code != 0, output
+    assert "config.missing" in output and "host-z" in output and "host-a" in output
+    assert rows == [] and "not recorded in events" in output   # the store refuses a row under the wrong name
+    assert "events.write_failed" in output   # and the lost row is logged as every lost row is (rule F5)

@@ -120,7 +120,8 @@ def test_the_heartbeat_records_each_session_run_without_the_build_once(tmp_path,
     home = make_home(tmp_path, db)
     seed(tmp_path, home, {"s-safe": {"safe_mode": True}, "s-ignored": {"ignore_user_config": True}, "s-plain": {}})
     state = (home / "state.db").read_bytes()
-    with psycopg.connect(db["agent"], autocommit=True) as conn:   # another host's record does not count for this one
+    # Another host's record does not count for this one. Seeded as the owner: only that host could write it (#149).
+    with psycopg.connect(db["owner"], autocommit=True) as conn:
         conn.execute("insert into memory.events (source, code, result, session_id) values ('host-b', 'guard.bypassed', 'failed', 's-safe')")
     for _ in range(2):   # the second run finds both already recorded
         result = hermes(tmp_path, home, "custom-build", "heartbeat")

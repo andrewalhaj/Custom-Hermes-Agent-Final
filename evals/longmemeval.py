@@ -40,6 +40,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 PLUGIN = ROOT / "custom_build"
 MIGRATIONS = sorted((ROOT / "migrations").glob("*.sql"))
 GROUP_ROLES = ("memory_agent", "memory_maintenance")
+MACHINE = "eval"   # the eval host's machine name, and so its login's name
 # 0001's role statements, run once per run by roles() and left out of each question's 0001 (#219)
 ROLE_STATEMENTS = ("create role memory_agent nologin;", "create role memory_maintenance nologin;")
 SETUP = threading.Lock()   # one question's database is set up at a time
@@ -112,10 +113,11 @@ def estimate(entries):
 @contextlib.contextmanager
 def roles(postgres):
     """The migrations' group roles, made once for the whole run and dropped at its end. They are the whole
-    server's, so a server that already has them is refused, never touched: it is not a throwaway one."""
+    server's, so a server that already has them, or the eval's login, is refused, never touched: it is not a
+    throwaway one."""
     with psycopg.connect(postgres, autocommit=True) as admin:
         found = [row[0] for row in admin.execute("select rolname from pg_roles where rolname = any(%s)",
-                                                 (list(GROUP_ROLES),))]
+                                                 ([MACHINE, *GROUP_ROLES],))]
         if found:
             raise EvalError(f"this Postgres already has {', '.join(found)}: point the runner at a throwaway "
                             "server; it never drops a role it did not create")
@@ -143,7 +145,7 @@ def database(postgres):
     """A throwaway database with every migration applied, and a login in memory_agent: (owner, agent) URLs.
     The database and the login are dropped afterwards; the group roles are the run's (`roles()`)."""
     name = f"eval_{uuid.uuid4().hex[:12]}"
-    login, password = f"{name}_agent", uuid.uuid4().hex
+    login, password = MACHINE, uuid.uuid4().hex   # the store admits events only under the login's name (#149)
     info = psycopg.conninfo.conninfo_to_dict(postgres)
     owner = psycopg.conninfo.make_conninfo(**{**info, "dbname": name})
     texts = _migrations()
@@ -179,7 +181,7 @@ def hermes_home(tmp, template, judge_model):
     # Enabled as an agent host enables it: only then does it register its own route for extraction (#148)
     plugins["enabled"] = sorted({*(plugins.get("enabled") or ()), "custom_build"})
     entries = plugins.setdefault("entries", {})
-    entries.setdefault("custom_build", {})["settings"] = {"machine_name": "eval", "judge_model": judge_model}
+    entries.setdefault("custom_build", {})["settings"] = {"machine_name": MACHINE, "judge_model": judge_model}
     config_file.write_text(yaml.safe_dump(config), encoding="utf-8")
     work = tmp / "work"
     subprocess.run(["git", "init", "-q", str(work)], check=True)

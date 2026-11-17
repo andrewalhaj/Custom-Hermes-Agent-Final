@@ -38,7 +38,9 @@ def db():
     if not MIGRATIONS:
         pytest.fail("no migration files found under migrations/")
     name = f"t_{uuid.uuid4().hex[:12]}"
-    agent, maint = f"{name}_agent", f"{name}_maint"
+    # A machine's login is named as the machine (OPERATIONS.md section 3), and may write events only under
+    # that name (#149). The tests' machine is host-a.
+    agent, maint = "host-a", f"{name}_maint"
     password = uuid.uuid4().hex   # a throwaway login's password, so servers that require one (CI's) accept it
     info = psycopg.conninfo.conninfo_to_dict(url)
 
