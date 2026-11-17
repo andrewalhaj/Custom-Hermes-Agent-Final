@@ -6,9 +6,11 @@ and call sync_turn() as Hermes's background worker does after a turn; there `cal
 fake that answers as the scenario says and writes down what it was sent.
 """
 
+import contextlib
 import json
 import pathlib
 import shutil
+import sqlite3
 import subprocess
 import sys
 import types
@@ -154,15 +156,16 @@ ONE_FACT = json.dumps([{"body": FACT, "basis": "tool_observed"}])
 
 
 def test_a_fact_the_judge_keeps_is_stored_as_extracted(home, db, ollama, typesafe):
-    typesafe.answers = {"worth_keeping": 0.9, "supported": 0.9}
+    typesafe.answers = {"worth_keeping": 0.9, "s0": 0.9, "s1": 0.9}
     turn(home, db, ollama.url, typesafe.url, ONE_FACT)
     assert _facts(db) == [(FACT, "extracted", "tool_observed", "github.com/Owner/Repo", "host-a", "s1", 4)]
     [gate] = typesafe.requests
-    assert gate["body"]["state"] == {"fact": FACT, "source": {"user": "Why did the gateway fail?", "tool_results": [UNIT]}}
+    assert gate["body"]["state"] == {"fact": FACT}
+    assert UNIT in gate["body"]["questions"]["s1"]["instructions"]   # the tool result, in a question of its own (#251)
 
 
 def test_a_fact_the_judge_does_not_keep_is_dropped(home, db, ollama, typesafe):
-    typesafe.answers = {"worth_keeping": 0.9, "supported": 0.3}
+    typesafe.answers = {"worth_keeping": 0.9, "s0": 0.3, "s1": 0.3}
     turn(home, db, ollama.url, typesafe.url, ONE_FACT)
     assert _facts(db) == []
     assert _codes(db) == []
@@ -184,7 +187,7 @@ def test_a_judge_failure_queues_the_fact_and_the_retry_still_gates_it(home, db, 
     turn(home, db, ollama.url, typesafe.url, ONE_FACT)
     assert _facts(db) == []
     assert _codes(db) == ["judge.error", "store.gate_error"]
-    typesafe.status, typesafe.answers = 200, {"worth_keeping": 0.9, "supported": 0.2}
+    typesafe.status, typesafe.answers = 200, {"worth_keeping": 0.9, "s0": 0.2, "s1": 0.2}
     turn(home, db, ollama.url, typesafe.url, "[]")   # the next start retries the queue
     assert _facts(db) == []   # the retry asked the gate, which refused it
     assert typesafe.requests[-1]["body"]["state"]["fact"] == FACT
@@ -193,8 +196,47 @@ def test_a_judge_failure_queues_the_fact_and_the_retry_still_gates_it(home, db, 
             "store.gate_error", "degraded", "dropped on retry: the judge did not keep it")
 
 
+def _queued(home):
+    with contextlib.closing(sqlite3.connect(home / "plugin-data" / "custom_build" / "store_queue.db")) as queue:
+        return queue.execute("select count(*) from queued").fetchone()[0]
+
+
+TWO_FACTS = json.dumps([{"body": FACT, "basis": "tool_observed"},
+                        {"body": "The gateway's unit starts hermes gateway.", "basis": "tool_observed"}])
+
+
+def test_a_request_the_judge_refuses_is_recorded_with_its_cause_and_not_queued(home, db, ollama, typesafe):
+    # #251: the same request gets the same refusal, so a retry cannot fix it.
+    typesafe.status, typesafe.detail = 400, {"error_type": "max_tokens_exceeded"}
+    turn(home, db, ollama.url, typesafe.url, ONE_FACT)
+    assert _facts(db) == [] and _queued(home) == 0
+    with psycopg.connect(db["owner"]) as conn:
+        rows = conn.execute("select code, result, reason from memory.events order by id").fetchall()
+    assert [row[:2] for row in rows] == [("judge.error", "failed"), ("store.gate_error", "failed")]
+    assert "max_tokens_exceeded" in rows[0][2] and rows[1][2].endswith("the fact is dropped")
+
+
+def test_a_400_that_does_not_name_the_request_as_too_big_still_queues_the_fact(home, db, ollama, typesafe):
+    typesafe.status = 400   # the fake's plain "refused": not a cause known to repeat
+    turn(home, db, ollama.url, typesafe.url, ONE_FACT)
+    assert _queued(home) == 1
+
+
+def test_queued_facts_the_judge_refuses_leave_the_queue_in_one_pass(home, db, ollama, typesafe):
+    typesafe.status = 500
+    turn(home, db, ollama.url, typesafe.url, TWO_FACTS)
+    assert _queued(home) == 2
+    typesafe.status, typesafe.detail = 400, {"error_type": "max_tokens_exceeded"}
+    asked = len(typesafe.requests)
+    turn(home, db, ollama.url, typesafe.url, "[]")   # the next start retries the queue
+    assert _queued(home) == 0 and len(typesafe.requests) == asked + 2   # both tried: a refusal does not end the pass
+    with psycopg.connect(db["owner"]) as conn:
+        assert conn.execute("select code, result, reason from memory.events order by id desc limit 1").fetchone() == (
+            "store.gate_error", "failed", "dropped on retry: the judge refused the request")
+
+
 def test_a_fact_already_stored_does_not_ask_the_judge_again(home, db, ollama, typesafe):
-    typesafe.answers = {"worth_keeping": 0.9, "supported": 0.9}
+    typesafe.answers = {"worth_keeping": 0.9, "s0": 0.9, "s1": 0.9}
     turn(home, db, ollama.url, typesafe.url, ONE_FACT)
     turn(home, db, ollama.url, typesafe.url, ONE_FACT)
     assert len(typesafe.requests) == 1   # the second proposal is the same text, already live
@@ -208,7 +250,7 @@ def test_nothing_is_extracted_outside_a_primary_session(home, db, ollama, typesa
 
 
 def test_a_secret_in_the_turn_never_reaches_the_model_the_judge_the_store_or_a_log_line(home, db, ollama, typesafe):
-    typesafe.answers = {"worth_keeping": 0.9, "supported": 0.9}
+    typesafe.answers = {"worth_keeping": 0.9, "s0": 0.9, "s1": 0.9}
     user = f"The store key is {FAKE_KEY}, why does it fail?"
     messages = [{"role": "user", "content": user}, {"role": "tool", "tool_call_id": "c", "content": f"key={FAKE_KEY}"}]
     answer = json.dumps([{"body": f"The store key is {FAKE_KEY}.", "basis": "user_stated"}])

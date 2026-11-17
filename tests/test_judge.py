@@ -4,6 +4,8 @@ The `typesafe` fixture (conftest.py) stands in for TypeSafe's System One endpoin
 wording lives in the write path's configuration file, beside the thresholds that read the answers.
 """
 
+import json
+
 import pytest
 
 from custom_build.memory import judge
@@ -82,12 +84,95 @@ def _gate(typesafe):
     return judge.keep_answers(FACT, SOURCE, url=typesafe.url, key=KEY, model="jev-1.14.0", timeout=2)
 
 
-def test_one_request_asks_both_gate_questions_about_the_fact_and_its_source(typesafe):
-    typesafe.answers = {"worth_keeping": 0.9, "supported": 0.8}
-    assert _gate(typesafe) == {"worth_keeping": 0.9, "supported": 0.8}
+def test_the_gate_asks_about_each_part_of_the_source_in_a_question_of_its_own(typesafe):
+    # #251: the whole turn as state went over the judge's context. The state is the fact alone; the user's
+    # message and each tool result have a support question each, with the part's own text in it.
+    typesafe.answers = {"worth_keeping": 0.9, "s0": 0.1, "s1": 0.8}
+    assert _gate(typesafe) == {"worth_keeping": 0.9, "supported": 0.8}   # supported by any one part
     [request] = typesafe.requests
-    assert request["body"]["state"] == {"fact": FACT, "source": SOURCE}
-    assert sorted(request["body"]["questions"]) == ["supported", "worth_keeping"]
+    assert request["body"]["state"] == {"fact": FACT}
+    questions = request["body"]["questions"]
+    assert sorted(questions) == ["s0", "s1", "worth_keeping"]
+    assert "The user's message: Why did the gateway fail?" in questions["s0"]["instructions"]
+    assert "A tool result: User=hermes" in questions["s1"]["instructions"]
+    assert all(q["type"] == "noul" for q in questions.values())
+
+
+def _big_gate(typesafe, results):
+    return judge.keep_answers(FACT, {"user": "Why?", "tool_results": results}, url=typesafe.url, key=KEY,
+                              model="jev-1.14.0", timeout=2)
+
+
+def test_a_long_tool_result_is_asked_about_in_pieces_and_none_of_it_is_left_out(typesafe):
+    typesafe.answers, typesafe.default = {"worth_keeping": 0.9}, 0.1
+    long = "".join(f"line {n} of the unit file\n" for n in range(3500))   # about 90,000 characters
+    _big_gate(typesafe, [long])
+    pieces = [text.split("A tool result: ", 1)[1] for text in _texts(typesafe) if "A tool result: " in text]
+    assert len(pieces) > 1 and all(len(piece) <= 30_000 for piece in pieces)
+    assert "".join(pieces) == long
+
+
+def _texts(typesafe):
+    asked = {}
+    for request in typesafe.requests:
+        asked.update({name: q["instructions"] for name, q in request["body"]["questions"].items() if name != "worth_keeping"})
+    return [asked[name] for name in sorted(asked, key=lambda name: int(name[1:]))]
+
+
+def test_a_big_turn_is_split_over_requests_that_each_fit_the_judge(typesafe):
+    typesafe.answers, typesafe.default = {"worth_keeping": 0.9}, 0.1   # nothing supports it, so every part is asked about
+    _big_gate(typesafe, ["x" * 25_000] * 6)
+    assert len(typesafe.requests) > 1
+    for request in typesafe.requests:
+        assert len(json.dumps(request["body"])) <= 62_000   # the request budget, plus the questions' own wording
+    asked = [name for request in typesafe.requests for name in request["body"]["questions"]]
+    assert asked.count("worth_keeping") == 1 and len(asked) == len(set(asked)) == 8   # the message, 6 results, the gate
+
+
+def test_the_gate_stops_asking_once_one_part_supports_the_fact(typesafe):
+    typesafe.default = 0.9
+    assert _big_gate(typesafe, ["x" * 25_000] * 6) == {"worth_keeping": 0.9, "supported": 0.9}
+    assert len(typesafe.requests) == 1
+
+
+def test_no_request_holds_more_question_text_than_the_request_budget(typesafe):
+    # Review of #251: only the first request was held to the budget.
+    typesafe.answers, typesafe.default = {"worth_keeping": 0.9}, 0.1
+    _big_gate(typesafe, ["x" * 30_000] * 4)
+    for request in typesafe.requests:
+        parts = [q["instructions"].split(": ", 1)[1] for name, q in request["body"]["questions"].items()
+                 if name != "worth_keeping"]
+        assert sum(map(len, parts)) <= 60_000   # the budget is the parts' own text
+    assert [len(request["body"]["questions"]) for request in typesafe.requests] == [3, 2, 1]   # the gate, the message and
+    # one result; two results; the last result
+
+
+def test_a_fact_not_worth_keeping_is_not_asked_about_past_its_first_request(typesafe):
+    typesafe.answers, typesafe.default = {"worth_keeping": 0.1}, 0.1
+    assert _big_gate(typesafe, ["x" * 25_000] * 6)["worth_keeping"] == 0.1
+    assert len(typesafe.requests) == 1
+
+
+@pytest.mark.parametrize("detail", ["refused", {"error_type": "invalid_model"}])
+def test_a_400_for_another_reason_is_an_ordinary_judge_error(typesafe, detail):
+    # Review of #251: only a request over the judge's context is known to be refused every time.
+    typesafe.status, typesafe.detail = 400, detail
+    with pytest.raises(judge.JudgeError) as caught:
+        _gate(typesafe)
+    assert not isinstance(caught.value, judge.JudgeRefused)
+
+
+def test_a_request_the_judge_refuses_as_too_big_names_its_cause(typesafe):
+    typesafe.status, typesafe.detail = 400, {"error_type": "max_tokens_exceeded"}
+    with pytest.raises(judge.JudgeRefused, match="max_tokens_exceeded"):
+        _gate(typesafe)
+
+
+def test_a_refusal_never_carries_text_the_judge_sent_back(typesafe):
+    typesafe.status, typesafe.detail = 400, {"error_type": "the fact was: User=hermes on the mini"}
+    with pytest.raises(judge.JudgeError) as caught:
+        _gate(typesafe)
+    assert "hermes" not in str(caught.value)
 
 
 # ARCHITECTURE.md 3.6 (#152): the gate drops at a drop score (1 - "worth keeping") of 0.70 or higher; the

@@ -1,7 +1,8 @@
 """Facts whose supersede judgement failed, kept until the judge answers (ARCHITECTURE.md 3.3, step 3).
 
 They wait, already redacted, in the plugin's own SQLite database under the Hermes home (section 2),
-so a fact is never stored unchecked and never lost.
+so a fact is never stored unchecked. One whose request the judge refuses as over its context cannot be
+checked at all; it is dropped and recorded, not queued (#251).
 """
 
 import contextlib
