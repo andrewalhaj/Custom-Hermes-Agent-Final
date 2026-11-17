@@ -155,11 +155,17 @@ class HostedEmbedder:
     def check(self, conn, *, timeout):
         if not self.reference.exists():
             raise ModelMismatch(f"no reference vector recorded at {self.reference}")
-        reference = json.loads(self.reference.read_text(encoding="utf-8"))
-        [vector] = self._vectors([reference["text"]], timeout=timeout)
-        if (cosine := _cosine(vector, reference["vector"])) < reference["threshold"]:
+        try:
+            reference = json.loads(self.reference.read_text(encoding="utf-8"))
+            text, recorded, threshold = str(reference["text"]), reference["vector"], float(reference["threshold"])
+            if len(recorded) != DIMENSIONS:
+                raise ValueError(f"a vector of {len(recorded)} numbers, not {DIMENSIONS}")
+        except (OSError, ValueError, KeyError, TypeError) as exc:   # fails closed, as a different build would
+            raise ModelMismatch(f"the reference file {self.reference} cannot be read: {exc!r}") from exc
+        [vector] = self._vectors([text], timeout=timeout)
+        if (cosine := _cosine(vector, recorded)) < threshold:
             raise ModelMismatch(f"the reference sentence's vector has moved: cosine {cosine:.4f} with the recorded "
-                                f"one, under {reference['threshold']}")
+                                f"one, under {threshold}")
         if other := _other_build(conn, HOSTED_BUILD):
             raise ModelMismatch(f"the hosted route is {HOSTED_BUILD}; the store holds vectors from {other}")
         self.build = HOSTED_BUILD

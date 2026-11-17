@@ -133,7 +133,8 @@ class CustomBuildProvider(MemoryProvider):
     def prefetch(self, query: str, *, session_id: str = "") -> str:
         """The recalled notes for the coming turn (ARCHITECTURE.md 3.5), or a failure with its code."""
         machine = _machine()
-        if missing := settings.missing_store_settings(settings.plugin_context()):
+        ctx = settings.plugin_context()   # the embedding's too: Hermes runs this before the turn check (#239)
+        if missing := settings.missing_store_settings(ctx) + settings.missing_embedding_settings(ctx):
             failures.record(None, "config.missing", "failed", source=machine, reason=", ".join(missing),
                             session_id=self.session_id)
             return recall.failed("config.missing")

@@ -212,7 +212,9 @@ def _searched(query, *, machine, session_id, turn, embedder, judge_at, connect, 
         if deadline is not None:   # an int in milliseconds, so it is safe to write into the statement
             conn.execute(f"set statement_timeout = {int(deadline * 1000)}")
         try:
-            results = search.candidates(conn, embedder, query, key, wanted=wanted, timeout=TIMEOUT)
+            limit = (write_path.load()["embed"]["hosted_recall_timeout"]
+                     if isinstance(embedder, embedding.HostedEmbedder) else TIMEOUT)
+            results = search.candidates(conn, embedder, query, key, wanted=wanted, timeout=limit)
             # The judge's own deadline, or what is left of the recall's, less a margin to deliver the notes.
             left = judge.DEADLINE if deadline is None else min(
                 judge.DEADLINE, deadline - (time.monotonic() - started) - RERANK_MARGIN)

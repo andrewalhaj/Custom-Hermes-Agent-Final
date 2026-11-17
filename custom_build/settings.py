@@ -48,17 +48,26 @@ def missing_store_settings(ctx):
     return [name for name, ok in found if not ok]
 
 
-def missing_settings(ctx):
-    """Every build setting that is missing or invalid: the store's two, the judge's model and key, then the
-    embedding route, when it names none the build has, and the hosted route's key, when it is chosen."""
+def missing_embedding_settings(ctx):
+    """The embedding route, when it names none the build has, and the hosted route's key, when it is chosen
+    and not set (#239). Recall checks these too: Hermes runs prefetch before the turn check."""
     from agent.secret_scope import get_secret
 
     route = ctx.get_config(EMBEDDING)
-    found = (("plugins.entries.custom_build.settings." + JUDGE_MODEL, _usable(ctx.get_config(JUDGE_MODEL))),
-             (JUDGE_KEY, _usable(get_secret(JUDGE_KEY))),
-             ("plugins.entries.custom_build.settings." + EMBEDDING, route is None or route in EMBEDDING_ROUTES),
+    found = (("plugins.entries.custom_build.settings." + EMBEDDING, route is None or route in EMBEDDING_ROUTES),
              (EMBEDDING_KEY, route != "deepinfra" or _usable(get_secret(EMBEDDING_KEY))))
-    return missing_store_settings(ctx) + [name for name, ok in found if not ok]
+    return [name for name, ok in found if not ok]
+
+
+def missing_settings(ctx):
+    """Every build setting that is missing or invalid: the store's two, the judge's model and key, then the
+    embedding route's."""
+    from agent.secret_scope import get_secret
+
+    found = (("plugins.entries.custom_build.settings." + JUDGE_MODEL, _usable(ctx.get_config(JUDGE_MODEL))),
+             (JUDGE_KEY, _usable(get_secret(JUDGE_KEY))))
+    return (missing_store_settings(ctx) + [name for name, ok in found if not ok]
+            + missing_embedding_settings(ctx))
 
 
 def embedder(ctx):
