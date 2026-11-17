@@ -193,6 +193,18 @@ def test_the_tool_reports_an_embedding_failure_never_an_empty_result(home, db, o
     assert _codes(db)[-1] == "embed.unavailable"
 
 
+def test_an_empty_query_is_a_failure_that_hermes_reports_as_an_error(home, db, ollama):
+    # #187: the refusal had no error field, so Hermes reported the call ok, and the recall gate and the
+    # fact gate counted it as a search (ARCHITECTURE.md section 2 and 5.3).
+    outcome = tool(home, db, ollama.url, " ")
+    assert outcome == {"error": "query is empty"}
+    derive = ("import sys; from model_tools import _tool_result_observer_fields as fields;"
+              " print(fields('memory_search', sys.argv[1])[0])")
+    status = subprocess.run([sys.executable, "-c", derive, json.dumps(outcome)], capture_output=True, text=True, timeout=60,
+                            env={"HERMES_HOME": str(home), "HOME": str(home.parent), "PATH": "/usr/bin:/bin"}, check=True)
+    assert status.stdout.strip() == "error"   # the status Hermes v0.23.1 gives post_tool_call for this result
+
+
 def test_a_secret_in_the_query_never_reaches_ollama_the_store_or_a_log_line(home, db, owner, ollama):
     # CONTRIBUTING.md rule L4: the query goes to Ollama and the store; the build's redaction is forced.
     fake_key = "sb_" + "secret_" + "N7UNd0UgjKTV-Uodkm0Hg0_xSvQ7d3m"   # assembled at run time, never a literal key
