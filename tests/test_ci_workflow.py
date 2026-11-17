@@ -339,13 +339,22 @@ def test_dependencies_are_audited_once_everything_is_installed():
     assert commands.index('pip install -e ".[dev]"') < commands.index("pip-audit")
 
 
+def unpinned_actions(directory):
+    """Each `uses:` in the directory's workflow files, on a step or on a whole job, that is not a full commit SHA."""
+    found = []
+    for path in sorted(directory.glob("*.yml")):
+        for job in yaml.safe_load(path.read_text())["jobs"].values():
+            for used in [job.get("uses"), *(step.get("uses") for step in job.get("steps", []))]:
+                if used and not re.fullmatch(r"[\w.-]+/[\w./-]+@[0-9a-f]{40}", used):
+                    found.append(f"{path.name}: {used}")
+    return found
+
+
 def test_every_action_is_pinned_to_a_full_commit_sha():
     # GitHub's secure-use reference: a tag can be moved to other code, a full-length commit SHA cannot (#176).
-    jobs = yaml.safe_load(WORKFLOW.read_text())["jobs"]
-    used = [step["uses"] for job in jobs.values() for step in job["steps"] if "uses" in step]
-    assert used
-    for action in used:
-        assert re.fullmatch(r"[\w.-]+/[\w./-]+@[0-9a-f]{40}", action), action
+    steps = yaml.safe_load(WORKFLOW.read_text())["jobs"]["tests"]["steps"]
+    assert any("uses" in step for step in steps)    # there is something to check
+    assert unpinned_actions(WORKFLOW.parent) == []
 
 
 def test_dependabot_keeps_the_pinned_actions_current():
@@ -357,3 +366,14 @@ def test_dependabot_keeps_the_pinned_actions_current():
     assert actions["schedule"]["interval"] == "weekly"
     # Its pull request titles become commits on main, which carry a conventional prefix (CONTRIBUTING.md W4, 4.8).
     assert actions["commit-message"]["prefix"] == "ci"
+
+
+def test_the_pin_check_reads_every_workflow_file(tmp_path):
+    # The allow-list admits any .github/workflows/*.yml, so a second workflow must be held to the same pin (#183).
+    pinned = "name: a\njobs:\n  a:\n    steps:\n      - uses: actions/checkout@" + "3" * 40 + "\n"
+    (tmp_path / "ci.yml").write_text(pinned)
+    (tmp_path / "release.yml").write_text(
+        "name: b\njobs:\n  b:\n    steps:\n      - uses: actions/checkout@v7\n      - run: echo ok\n"
+        "  c:\n    uses: owner/repo/.github/workflows/shared.yml@main\n")
+    assert unpinned_actions(tmp_path) == [
+        "release.yml: actions/checkout@v7", "release.yml: owner/repo/.github/workflows/shared.yml@main"]
