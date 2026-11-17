@@ -15,11 +15,16 @@
 !/custom_build/
 !/.githooks/
 !/evals/
+!/scripts/
 
 # The eval runner's code and pinned data reference; never its data file or reports (ARCHITECTURE.md 3.8).
 /evals/*
 !/evals/*.py
 !/evals/*.toml
+
+# The operator's deploy script (OPERATIONS.md section 8); never its settings.
+/scripts/*
+!/scripts/*.py
 
 /.github/*
 !/.github/workflows/
