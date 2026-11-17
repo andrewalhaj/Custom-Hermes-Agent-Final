@@ -8,6 +8,7 @@ Needs `git`, `ruff` and `python` on PATH, as the CI job has them.
 """
 
 import pathlib
+import re
 import shutil
 import subprocess
 
@@ -336,3 +337,23 @@ def test_dependencies_are_audited_once_everything_is_installed():
     commands = [s.get("run", "") for s in steps]
     assert "pip-audit" in commands
     assert commands.index('pip install -e ".[dev]"') < commands.index("pip-audit")
+
+
+def test_every_action_is_pinned_to_a_full_commit_sha():
+    # GitHub's secure-use reference: a tag can be moved to other code, a full-length commit SHA cannot (#176).
+    jobs = yaml.safe_load(WORKFLOW.read_text())["jobs"]
+    used = [step["uses"] for job in jobs.values() for step in job["steps"] if "uses" in step]
+    assert used
+    for action in used:
+        assert re.fullmatch(r"[\w.-]+/[\w./-]+@[0-9a-f]{40}", action), action
+
+
+def test_dependabot_keeps_the_pinned_actions_current():
+    # A pinned SHA never moves by itself, so Dependabot proposes each new release as a pull request (#176).
+    config = yaml.safe_load((WORKFLOW.parent.parent / "dependabot.yml").read_text())
+    assert config["version"] == 2
+    actions = next(u for u in config["updates"] if u["package-ecosystem"] == "github-actions")
+    assert actions["directory"] == "/"
+    assert actions["schedule"]["interval"] == "weekly"
+    # Its pull request titles become commits on main, which carry a conventional prefix (CONTRIBUTING.md W4, 4.8).
+    assert actions["commit-message"]["prefix"] == "ci"
