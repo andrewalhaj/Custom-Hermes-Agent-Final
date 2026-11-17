@@ -30,7 +30,7 @@ def page(db):
     def get(path="/", method="GET"):
         request = urllib.request.Request(f"http://127.0.0.1:{server.server_address[1]}{path}", method=method)
         try:
-            with urllib.request.urlopen(request, timeout=10) as answer:   # noqa: S310 - a loopback URL built here
+            with urllib.request.urlopen(request, timeout=10) as answer:
                 return answer.status, answer.read().decode()
         except urllib.error.HTTPError as refused:
             return refused.code, refused.read().decode()
@@ -145,7 +145,7 @@ def test_a_store_that_does_not_answer_shows_the_error_and_not_the_connection_str
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
         with pytest.raises(urllib.error.HTTPError) as refused:
-            urllib.request.urlopen(f"http://127.0.0.1:{server.server_address[1]}/", timeout=10)   # noqa: S310
+            urllib.request.urlopen(f"http://127.0.0.1:{server.server_address[1]}/", timeout=10)
         body = refused.value.read().decode()
     finally:
         server.shutdown()
@@ -155,7 +155,7 @@ def test_a_store_that_does_not_answer_shows_the_error_and_not_the_connection_str
     assert "not-a-real-password" not in body
 
 
-@pytest.mark.parametrize("host", ["0.0.0.0", "192.168.1.10", "example.com", ""])   # noqa: S104 - the refused case
+@pytest.mark.parametrize("host", ["0.0.0.0", "192.168.1.10", "example.com", ""])
 def test_it_serves_on_a_loopback_address_only(host):
     with pytest.raises(events_viewer.ViewerError, match="loopback"):
         events_viewer.server(host, 0, "postgresql://unused")
