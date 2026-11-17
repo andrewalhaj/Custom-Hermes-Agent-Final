@@ -363,9 +363,12 @@ def _digest_from(pending, *, embedder, judge_at, connect):
 
 
 def write_orphaned_digests(*, machine, embedder, judge_at, connect):
-    """Each digest a stopped process queued and never finished (#156 item 2), written now and then taken off
-    the queue whatever happened, so a digest whose call fails again is recorded once, not at every start."""
-    for row_id, pending in queue.orphaned_digests():
+    """Each digest a stopped process queued and never finished (#156 item 2), claimed by this process so that
+    only one start writes it, written now, then taken off the queue whatever happened, so a digest whose call
+    fails again is recorded once, not at every start."""
+    for row_id, owner, pending in queue.orphaned_digests():
+        if not queue.claim(row_id, owner):   # another start took it first
+            continue
         try:
             _digest_from(pending, embedder=embedder, judge_at=judge_at, connect=connect)
         finally:
