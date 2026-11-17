@@ -26,7 +26,7 @@ def compose(conn, machine):
 
     # The job-health check cannot report its own absence, so the report does (OPERATIONS.md section 4).
     checked = conn.execute("select 1 from memory.events where code = 'job.succeeded' and detail->>'job' = 'job-health'"
-                           f" and at > now() - interval '{DAY}' limit 1").fetchone()
+                           f" and source = %s and at > now() - interval '{DAY}' limit 1", (machine,)).fetchone()
     if not checked and not failures.record(conn, "job.missed", "failed", source=machine, detail={"job": "job-health"}):
         return False   # the day's record is incomplete: print nothing, so Hermes alerts (events.write_failed)
     rows = conn.execute("select code, source, at, reason, detail, session_id from memory.events"

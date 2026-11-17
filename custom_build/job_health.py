@@ -11,6 +11,9 @@ from . import failures, jobs, settings
 # The jobs whose runs record job.succeeded. Not the heartbeat, which host.missing covers, nor this check,
 # whose own missing job.succeeded is the report's to notice. Retention runs in the database (pg_cron).
 JOBS = ("daily-report", "retention")
+# Where a job's success must come from to count (#149): retention's from the database, the others from the
+# job host itself, which runs this check. A row another host wrote under its own name hides nothing.
+DATABASE_JOBS = ("retention",)
 
 
 def run(ctx):
@@ -28,11 +31,12 @@ def check(conn, machine, hosts):
                             " and at > now() - interval '24 hours' limit 1", (host,)).fetchone():
             written.append(failures.record(conn, "host.missing", "failed", source=machine, detail={"host": host}))
     for job in JOBS:
+        source = "database" if job in DATABASE_JOBS else machine
         if not conn.execute("select 1 from memory.events where code = 'job.succeeded' and detail->>'job' = %s"
-                            " and at > now() - interval '24 hours' limit 1", (job,)).fetchone():
+                            " and source = %s and at > now() - interval '24 hours' limit 1", (job, source)).fetchone():
             written.append(failures.record(conn, "job.missed", "failed", source=machine, detail={"job": job}))
         last = conn.execute("select detail from memory.events where code = 'job.succeeded' and detail->>'job' = %s"
-                            " order by at desc limit 2", (job,)).fetchall()
+                            " and source = %s order by at desc limit 2", (job, source)).fetchall()
         if len(last) == 2 and all(d.get("input", 0) > 0 and d.get("output") == 0 for (d,) in last):
             written.append(failures.record(conn, "job.no_output", "failed", source=machine, detail={"job": job}))
     if not all(written):   # a run that lost a finding has not succeeded; jobs.run reports events.write_failed
