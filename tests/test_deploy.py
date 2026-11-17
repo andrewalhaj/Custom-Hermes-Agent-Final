@@ -55,6 +55,8 @@ class Fake:
         self.install_fails_after_publishing = False
         self.sticks = True              # whether an applied migration then shows in the history
         self.history_fails = False
+        self.history_answer = None       # when set, what the history read returns in place of the rows
+        self.history_fails_after = None  # when set, the history read fails once this many migrations are sent
         self.answers = ["yes"]
         self.questions = []
         self.lines = []
@@ -92,7 +94,10 @@ class Fake:
     def http(self, method, url, token, body=None):
         assert token == TOKEN
         if url.endswith("/database/query/read-only"):
-            if self.history_fails:
+            if self.history_answer is not None:
+                return self.history_answer
+            if self.history_fails or (self.history_fails_after is not None
+                                      and len(self.posted) >= self.history_fails_after):
                 from scripts import deploy as module
                 raise module.DeployError("POST /database/query/read-only: HTTP 500")
             return [{"name": name} for name in self.applied]
@@ -339,9 +344,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
             time.sleep(1)
         status = 500 if self.path.endswith("/broken") else 200
         self.send_response(status)
+        if self.path.endswith("/cut-off"):
+            self.send_header("Content-Length", "500")   # promises more than it sends, then hangs up
+            self.end_headers()
+            self.wfile.write(b'[{"name": ')
+            return
         self.end_headers()
         if self.path.endswith("/garbage"):
             self.wfile.write(b"<html>not json</html>")
+            return
+        if self.path.endswith("/binary"):
+            self.wfile.write(bytes([255, 254, 253]))
             return
         self.wfile.write(b'{"message": "it broke"}' if status == 500 else b'[{"name": "0001_a"}]')
 
@@ -582,3 +595,42 @@ def test_an_install_whose_ssh_connection_failed_is_not_taken_as_left_in_place(de
 
     assert deploy.deploy(NEW, ENV, run, fake.http, fake.ask, fake.out) == 2    # ssh's own exit code: unknown
     assert fake.steps() == ["install new", *BACK]
+
+
+# Unexpected answers from the store's API are named steps, not tracebacks (#194).
+
+@pytest.mark.parametrize("answer", [{"message": "not allowed"}, [{"name": None}], [["0001_a"]], "0001_a"])
+def test_a_history_answer_that_is_not_named_rows_is_a_refusal(deploy, answer):
+    fake = Fake()
+    fake.history_answer = answer
+    assert fake.go(deploy) == 1
+    assert "migrations" in fake.printed() and "history" in fake.printed()
+    assert fake.posted == [] and fake.steps() == []
+
+
+def test_a_stop_after_a_migration_names_what_was_applied(deploy):
+    fake = Fake()
+    fake.history_fails_after = 1     # the read-back after the first migration fails
+    assert fake.go(deploy) == 1
+    assert fake.posted == ["0002_b"] and fake.steps() == []
+    last = fake.lines[-1]
+    assert "the host is unchanged" in last
+    assert "0002_b" in last and "may" in last     # sent, and the store may hold it: its read-back failed
+
+
+def test_a_stop_before_any_migration_says_none_was_applied(deploy):
+    fake = Fake()
+    fake.answers = ["no"]
+    fake.go(deploy)
+    assert "no migration was sent" in fake.lines[-1]
+
+
+def test_http_reports_an_answer_that_is_not_text(deploy, server):
+    with pytest.raises(deploy.DeployError, match="not JSON"):
+        deploy.http("POST", f"{server}/binary", TOKEN, {})
+
+
+def test_http_reports_an_answer_that_is_cut_off(deploy, server):
+    with pytest.raises(deploy.DeployError, match="could not reach"):
+        deploy.http("POST", f"{server}/cut-off", TOKEN, {})
+
