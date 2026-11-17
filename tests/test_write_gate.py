@@ -224,6 +224,22 @@ def test_a_name_that_only_contains_a_listed_name_is_off_the_list(tmp_path, db):
     assert rows == [], output
 
 
+def test_a_long_command_is_matched_in_linear_time():
+    # Review: a pattern for ${...} that could split one run of characters two ways took 6 s on 25 KB; the
+    # hook has a deadline, and past it Hermes blocks every tool call for a minute.
+    import time
+
+    from custom_build.guards import write_gate
+
+    home = pathlib.Path.home() / ".hermes"
+    for command in ("ls ~/.hermes; echo ${" + "a" * 200_000, "ls ~/.hermes; echo ${" + "a" * 200_000 + "}",
+                    "ls ~/.hermes; " + "$a/" * 60_000, "ls ~/.hermes; " + "./" * 100_000):
+        started = time.monotonic()
+        for entry in (".env", "skills", "config.yaml"):
+            write_gate._names(command, home / entry, home, "/tmp")
+        assert time.monotonic() - started < 2, command[:30]
+
+
 def test_a_listed_name_under_another_folder_where_the_command_runs_is_off_the_list(tmp_path, db):
     home = tmp_path / "home"
     commands = ["ls hermes-agent/skills", "cat hermes-agent/.env", "cat x/config.yaml"]
@@ -237,7 +253,8 @@ def test_a_listed_name_as_a_whole_component_is_still_recorded(tmp_path, db):
                 # review: spellings recorded before #128 that must still be
                 "H=~/home; rm $H/.env": "env", 'HH="${HERMES_HOME:-$HOME/home}"; cat "$HH/config.yaml" > /tmp/c': "config",
                 'cat "${HERMES_HOME%/}/.env"': "env", "rm ~/home//.env": "env", "cat ~/home/./.env": "env",
-                "cd ~/home && cat $PWD/.env": "env", "cat $HOME/home/.env": "env", "cat '~/home/skills/my skill/SKILL.md'": "skills"}
+                "cd ~/home && cat $PWD/.env": "env", "cat $HOME/home/.env": "env", "cat '~/home/skills/my skill/SKILL.md'": "skills",
+                'cat "$HOME"/home/.env': "env"}
     _, output, rows = run_gate(tmp_path, db, [["terminal", {"command": c}] for c in commands])
     assert [detail["rule"] for _, _, _, detail, _, _ in rows] == list(commands.values()), output
 
