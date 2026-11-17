@@ -21,6 +21,7 @@ TURNS_KEPT = 1000   # armed turns held while their replies are pending, in this 
 # turn ids embed a uuid, and compression can give the session a new id mid-turn.
 _turns = {}
 _turns_lock = threading.Lock()
+PASSED = "passed"   # `why` for a reply that came with both searches; None is an armed turn
 
 
 def load_config(path=CONFIG):
@@ -66,9 +67,9 @@ def check(ctx, config, *, session_id="", turn_id="", **kwargs):
         turn = _turns.pop(turn_id, None)
     if turn is None:
         return
-    if missing := [search for search in config["searches"] if search not in turn["searched"]]:
-        _record(ctx, session_id=session_id, turn_id=turn_id, kind=turn["kind"], rule=turn["rule"],
-                why="no " + " or ".join(missing))
+    missing = [search for search in config["searches"] if search not in turn["searched"]]
+    _record(ctx, session_id=session_id, turn_id=turn_id, kind=turn["kind"], rule=turn["rule"],
+            why="no " + " or ".join(missing) if missing else PASSED)
 
 
 def _record(ctx, *, session_id, turn_id, kind, rule, why):
@@ -89,6 +90,8 @@ def write_event(*, source, session_id, turn_id, kind, rule, why):
     with failures.store(source, settings.connect) as conn:
         if why is None:
             failures.record(conn, "recall_gate.armed", "ok", source=source, session_id=session_id, detail=detail)
+        elif why == PASSED:   # so an armed row with no later row means no reply came (#188)
+            failures.record(conn, "recall_gate.passed", "ok", source=source, session_id=session_id, detail=detail)
         else:
             failures.record(conn, "recall_gate.would_withhold", "ok", source=source, session_id=session_id,
                             detail={**detail, "why": why})

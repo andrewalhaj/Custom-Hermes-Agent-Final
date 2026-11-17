@@ -21,6 +21,7 @@ TURNS_KEPT = 1000   # armed turns held while their replies are pending, in this 
 # embed a uuid, and compression can give the session a new id mid-turn.
 _turns = {}
 _turns_lock = threading.Lock()
+PASSED = "passed"   # `why` for a reply that came with the lookups asked for; None is an armed turn
 
 
 def load_config(path=CONFIG):
@@ -79,6 +80,8 @@ def check(ctx, config, *, response_text, session_id="", turn_id="", **kwargs):
     needs = next((name for name, pattern in config["needs_documentation"].items() if pattern.search(response_text or "")), None)
     if needs and not turn["documented"]:
         _record(ctx, session_id=session_id, turn_id=turn_id, rule=needs, why="no documentation lookup")
+        return
+    _record(ctx, session_id=session_id, turn_id=turn_id, rule=turn["rule"], why=PASSED)
 
 
 def _record(ctx, *, session_id, turn_id, rule, why):
@@ -99,6 +102,8 @@ def write_event(*, source, session_id, turn_id, rule, why):
     with failures.store(source, settings.connect) as conn:
         if why is None:
             failures.record(conn, "fact_gate.armed", "ok", source=source, session_id=session_id, detail=detail)
+        elif why == PASSED:   # so an armed row with no later row means no reply came (#188)
+            failures.record(conn, "fact_gate.passed", "ok", source=source, session_id=session_id, detail=detail)
         else:
             failures.record(conn, "fact_gate.would_withhold", "ok", source=source, session_id=session_id,
                             detail={**detail, "why": why})

@@ -251,7 +251,7 @@ def test_a_turn_that_searches_memory_counts_as_looked_up(tmp_path, db):
     steps = [["turn", "s1", "u1", "How many facts are in the store?"], ["post", "s1", "u1", "memory_search", "ok"],
              ["reply", "s1", "u1", "There are 42."]]
     _, output, rows = run_gate(tmp_path, db, steps)
-    assert [code for code, _, _ in events(rows)] == ["fact_gate.armed"], output
+    assert [code for code, _, _ in events(rows)] == ["fact_gate.armed", "fact_gate.passed"], output
 
 
 def test_a_long_message_is_matched_in_linear_time():
