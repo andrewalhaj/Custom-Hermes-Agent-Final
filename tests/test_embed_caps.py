@@ -12,7 +12,8 @@ import pytest
 
 from custom_build.memory import search, store, tool, write_path
 
-LIMITS = {"recall_chars": 1200, "store_chars": 4000, "store_timeout": 30}   # decided on #238
+LIMITS = {"recall_chars": 1200, "store_chars": 4000, "store_timeout": 30,   # decided on #238
+          "hosted_recall_timeout": 2}   # decided on #239
 
 
 class Recording:

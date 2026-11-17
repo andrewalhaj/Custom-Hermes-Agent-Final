@@ -67,6 +67,48 @@ def test_no_recorded_reference_is_a_model_mismatch(deepinfra, tmp_path, db):
         embedder.check(conn, timeout=5)
 
 
+@pytest.mark.parametrize("content", [
+    "not json",
+    json.dumps({"text": "The reference sentence.", "vector": VECTOR}),   # no threshold
+    json.dumps({"text": "The reference sentence.", "vector": [0.01] * 1024, "threshold": 0.999}),
+])
+def test_a_reference_file_that_cannot_be_read_is_a_model_mismatch_not_a_crash(deepinfra, tmp_path, db, content):
+    # #239 review: each was a ValueError or KeyError, recorded as unhandled.
+    path = tmp_path / "embed_reference.json"
+    path.write_text(content, encoding="utf-8")
+    embedder = hosted(deepinfra, path)
+    with psycopg.connect(db["agent"]) as conn, pytest.raises(embedding.ModelMismatch, match="reference"):
+        embedder.check(conn, timeout=5)
+
+
+class Timed(embedding.HostedEmbedder):
+    """The hosted embedder, recording the limit each request was given."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.timeouts = []
+
+    def _vectors(self, texts, *, timeout):
+        self.timeouts.append(timeout)
+        return super()._vectors(texts, timeout=timeout)
+
+
+def test_recall_gives_each_hosted_request_two_seconds(deepinfra, reference, db):
+    # #239, decided: within recall's 6-second deadline, so a check and the query's embedding leave the rerank time.
+    embedder = Timed(KEY, url=deepinfra.url, reference=reference)
+    tool.memory_search({"query": "where is the deploy script"}, machine="host-a", session_id="s1", turn=1,
+                       embedder=embedder, judge_at=None, connect=lambda: psycopg.connect(db["agent"], autocommit=True))
+    assert embedder.timeouts == [2, 2]   # the reference check, then the query
+
+
+def test_a_store_on_the_turn_keeps_its_five_seconds_on_the_hosted_route(deepinfra, reference, db):
+    embedder = Timed(KEY, url=deepinfra.url, reference=reference)
+    tool.store_fact({"fact": "The parser tests run with pytest.", "basis": "user_stated"}, machine="host-a",
+                    session_id="s1", turn=1, embedder=embedder, judge_at=None,
+                    connect=lambda: psycopg.connect(db["agent"], autocommit=True))
+    assert embedder.timeouts == [tool.TIMEOUT, tool.TIMEOUT] == [5, 5]
+
+
 def test_the_hosted_check_fails_while_the_store_holds_the_local_build(deepinfra, reference, db):
     # One build per store: the hosted route never adds to a store of local vectors (#239 item 1).
     _store_fact(db["agent"], "qwen3-embedding:4b@sha256:df5bd2e3c74c")
