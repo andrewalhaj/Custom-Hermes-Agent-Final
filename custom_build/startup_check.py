@@ -140,8 +140,9 @@ def run(ctx):
         # The store admits a machine's events only under its login's name (migration 0007, #149).
         if (login := conn.execute("select current_user").fetchone()[0]) != machine:
             named = f"machine_name is {machine!r} but the store's login is {login!r}: they must be the same name"
-            # No row: the store refuses one under machine_name, and the login's name is not this machine's to use.
-            failed.append(f"config.missing ({named}); not recorded in events")
+            # The store refuses this row too (0007), so record() logs it as lost; the line below says so.
+            lost = not failures.record(conn, "config.missing", "failed", source=machine, reason=named)
+            failed.append(f"config.missing ({named})" + ("; not recorded in events: events.write_failed" if lost else ""))
         if behind := store_behind(conn):
             failures.record(conn, "db.behind", "failed", source=machine, reason=behind)
             failed.append(f"db.behind ({behind}): apply the pending migrations first (OPERATIONS.md section 7)")
