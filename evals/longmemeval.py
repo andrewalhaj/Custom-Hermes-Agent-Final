@@ -27,6 +27,7 @@ import subprocess
 import sys
 import tempfile
 import tomllib
+import urllib.request
 import uuid
 
 import psycopg
@@ -55,6 +56,25 @@ def load(path, sha256):
     if found != sha256:
         raise EvalError(f"{path}: SHA-256 {found} is not the recorded {sha256}")
     return json.loads(data)
+
+
+def fetch(url, dest, sha256):
+    """Download the data file to `dest`, kept only when its SHA-256 is the one recorded; a file that fails
+    the check, or a download cut short, leaves nothing behind."""
+    dest = pathlib.Path(dest)
+    partial = dest.with_name(dest.name + ".partial")
+    digest = hashlib.sha256()
+    try:
+        with urllib.request.urlopen(url, timeout=60) as response, partial.open("wb") as out:
+            while chunk := response.read(1 << 20):
+                digest.update(chunk)
+                out.write(chunk)
+        if digest.hexdigest() != sha256:
+            raise EvalError(f"{url}: SHA-256 {digest.hexdigest()} is not the recorded {sha256}")
+        partial.rename(dest)
+    finally:
+        partial.unlink(missing_ok=True)
+    return dest
 
 
 def subset(entries, count, *, seed):
@@ -251,7 +271,8 @@ def run(*, data, sha256, questions, seed, yes, postgres, out, replay_command=Non
 def main(argv=None):
     pinned = tomllib.loads(CONFIG.read_text(encoding="utf-8"))
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--data", required=True, help="the S file")
+    parser.add_argument("--data", required=True, help="the S file; written there first with --download")
+    parser.add_argument("--download", action="store_true", help="download the pinned S file to --data first")
     parser.add_argument("--questions", type=int, default=20)
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--yes", action="store_true", help="run, not only estimate")
@@ -262,6 +283,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if not pinned["sha256"]:
         raise SystemExit(f"{CONFIG.name} records no revision and SHA-256 yet: pin them first (#167)")
+    if args.download:
+        fetch(pinned["url"].format(revision=pinned["revision"]), args.data, pinned["sha256"])
     summary = run(data=args.data, sha256=pinned["sha256"], questions=args.questions, seed=args.seed, yes=args.yes,
                   postgres=args.postgres, out=args.out, template=args.template)
     print(json.dumps(summary if "estimate" in summary else {k: v for k, v in summary.items() if k != "per_question"},
