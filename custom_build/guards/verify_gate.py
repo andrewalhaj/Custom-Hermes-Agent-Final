@@ -60,7 +60,9 @@ def _named(config, args, task_id):
 
 
 def changes(config, tool_name, args, task_id):
-    """(rule, target) for each listed file or setting the call would change."""
+    """(rule, target) for each listed file or setting the call would change. The target is the file's path,
+    or the setting and what is done to it: never a terminal command, whose arguments can carry a credential
+    that no redactor knows (#115)."""
     found = []
     if tool_name in FILE_TOOLS:
         from agent.tool_dispatch_helpers import _extract_file_mutation_targets
@@ -70,8 +72,9 @@ def changes(config, tool_name, args, task_id):
             found += _listed(paths, target, task_id)
     elif tool_name == TERMINAL and isinstance(command := args.get("command"), str):
         names, writes = _named(config, args, task_id)
-        found += [(name, command) for name in names if writes]
-        found += [(match[2], command) for match in HERMES_CONFIG.finditer(command)
+        paths = _paths(config)[1]
+        found += [(name, os.path.realpath(paths[name])) for name in names if writes]
+        found += [(match[2], f"hermes config {match[1]} {match[2]}") for match in HERMES_CONFIG.finditer(command)
                   if match[1] in ("set", "unset") and match[2] in config["settings"]]
     return found
 
@@ -142,7 +145,7 @@ def _record(ctx, *, session_id, rule, reason, tool, withhold):
 
     machine = settings.machine(ctx)
     event = {"source": machine, "session_id": session_id or None, "rule": rule, "tool": tool, "withhold": withhold,
-             "reason": redact_sensitive_text(reason, force=True, redact_url_credentials=True)}
+             "reason": redact_sensitive_text(reason, force=True)}
     write = failures.boundary(lambda: machine, settings.connect, lambda exc: None)(write_event)
     spawn_context_thread(write, name="custom_build.verify_gate", kwargs=event).start()
 

@@ -42,8 +42,10 @@ CATALOG = {
     "verify_gate.would_withhold": "Not a failure: in log mode, a reply stated a listed file's contents the session never read",
     "fact_gate.armed": "Not a failure: in log mode, the user asked a checkable question",
     "fact_gate.would_withhold": "Not a failure: in log mode, a checkable question's reply had no lookup, or no documentation lookup",
+    "fact_gate.passed": "Not a failure: in log mode, a checkable question's reply came with the lookups the gate asks for",
     "recall_gate.armed": "Not a failure: in log mode, the user asked about past work or open work",
     "recall_gate.would_withhold": "Not a failure: in log mode, a past-work question's reply came without both the memory search and the session search",
+    "recall_gate.passed": "Not a failure: in log mode, a past-work question's reply came with both searches",
     "config.unsafe": "The startup check found a Hermes setting with a value the build does not support",
     "config.missing": "A setting the build needs is missing or invalid",
     "redact.failed": "The redactor raised; the text is not stored or sent",
@@ -224,8 +226,21 @@ def exit_note(stop):
     return "unhandled and job.failed; the traceback is in Hermes's errors.log"
 
 
+def _crash_reason(exc):
+    """An exception's type and message for an event's reason, through Hermes's redactor with force on (rule
+    L4, #116): a message can carry a secret, as a KeyError names its key. If the redactor raises or cannot
+    be imported, only the type is kept, so the text is not stored."""
+    try:
+        from agent.redact import redact_sensitive_text
+
+        return redact_sensitive_text("".join(traceback.format_exception_only(exc)).strip(), force=True)
+    except Exception:   # the crash is still recorded, without its message (rule F5)
+        logger.exception("the redactor raised on a crash's reason")
+        return type(exc).__name__
+
+
 def _record_job_crash(conn, name, source, exc):
-    reason = "".join(traceback.format_exception_only(exc)).strip()
+    reason = _crash_reason(exc)
     record(conn, "unhandled", "failed", source=source, reason=reason)
     record(conn, "job.failed", "failed", source=source, reason=reason, detail={"job": name})
 
@@ -264,7 +279,7 @@ def boundary(source, connect, on_crash):
                 return guard(*args, **kwargs)
             except Exception as exc:
                 logger.exception("guard %s crashed", guard.__qualname__)
-                reason = "".join(traceback.format_exception_only(exc)).strip()
+                reason = _crash_reason(exc)
                 machine, conn = "unknown", None
                 try:
                     machine = source()

@@ -3,7 +3,7 @@
 Three hooks, keyed by the turn. `pre_llm_call` arms a turn whose message asks about past work or open
 work, by the patterns memory's recall reads, and records `recall_gate.armed`. `post_tool_call` counts a
 search Hermes reports `ok`. `transform_llm_output` records `recall_gate.would_withhold` for an armed
-turn's reply that came without both searches. In `log` mode no reminder is added and nothing is withheld;
+turn's reply that came without both searches, and `recall_gate.passed` for one that came with both. In `log` mode no reminder is added and nothing is withheld;
 events are written from a worker thread, as the other gates' are. `off` registers no hook.
 """
 
@@ -21,6 +21,7 @@ TURNS_KEPT = 1000   # armed turns held while their replies are pending, in this 
 # turn ids embed a uuid, and compression can give the session a new id mid-turn.
 _turns = {}
 _turns_lock = threading.Lock()
+PASSED = "passed"   # `why` for a reply that came with both searches; None is an armed turn
 
 
 def load_config(path=CONFIG):
@@ -31,8 +32,10 @@ def load_config(path=CONFIG):
     return {"mode": config["mode"], "searches": list(config["searches"])}
 
 
-def arm(ctx, config, *, session_id="", turn_id="", user_message=None, **kwargs):
+def arm(ctx, config, *, session_id="", turn_id="", user_message=None, platform="", **kwargs):
     """`pre_llm_call`: arm a turn that asks about past work. Returns nothing, so the turn is unchanged."""
+    if platform == "subagent":   # Hermes runs a subagent without memory, so it could never search it (#188)
+        return
     from agent.message_content import flatten_message_text
 
     # The text Hermes hands prefetch() for the same message, parts included, read by memory's own matcher,
@@ -45,7 +48,7 @@ def arm(ctx, config, *, session_id="", turn_id="", user_message=None, **kwargs):
         _turns[turn_id] = {"kind": kind, "rule": rule, "searched": set()}
         while len(_turns) > TURNS_KEPT:
             _turns.pop(next(iter(_turns)))
-    _record(ctx, session_id=session_id, kind=kind, rule=rule, why=None)
+    _record(ctx, session_id=session_id, turn_id=turn_id, kind=kind, rule=rule, why=None)
 
 
 def count(ctx, config, *, tool_name, turn_id="", status=None, **kwargs):
@@ -58,36 +61,40 @@ def count(ctx, config, *, tool_name, turn_id="", status=None, **kwargs):
 
 
 def check(ctx, config, *, session_id="", turn_id="", **kwargs):
-    """`transform_llm_output`: record an armed turn's reply that would be withheld. Returns nothing, so
-    the reply is delivered as written."""
+    """`transform_llm_output`: record an armed turn's reply as one that would be withheld, or as passed.
+    Returns nothing, so the reply is delivered as written."""
     with _turns_lock:
         turn = _turns.pop(turn_id, None)
     if turn is None:
         return
-    if missing := [search for search in config["searches"] if search not in turn["searched"]]:
-        _record(ctx, session_id=session_id, kind=turn["kind"], rule=turn["rule"], why="no " + " or ".join(missing))
+    missing = [search for search in config["searches"] if search not in turn["searched"]]
+    _record(ctx, session_id=session_id, turn_id=turn_id, kind=turn["kind"], rule=turn["rule"],
+            why="no " + " or ".join(missing) if missing else PASSED)
 
 
-def _record(ctx, *, session_id, kind, rule, why):
+def _record(ctx, *, session_id, turn_id, kind, rule, why):
     """Write one event from a worker thread, so a store that stops answering never holds the turn (#117)."""
     from agent.memory_provider import spawn_context_thread
 
     machine = settings.machine(ctx)
-    event = {"source": machine, "session_id": session_id or None, "kind": kind, "rule": rule, "why": why}
+    event = {"source": machine, "session_id": session_id or None, "turn_id": turn_id, "kind": kind, "rule": rule, "why": why}
     write = failures.boundary(lambda: machine, settings.connect, lambda exc: None)(write_event)
     spawn_context_thread(write, name="custom_build.recall_gate", kwargs=event).start()
 
 
-def write_event(*, source, session_id, kind, rule, why):
+def write_event(*, source, session_id, turn_id, kind, rule, why):
     """Write one of the gate's events; runs on the worker thread `_record` starts. No message or reply
-    text is stored, only table and pattern names (rule L5)."""
+    text is stored, only table and pattern names (rule L5). Each carries Hermes's id for the turn, so an
+    armed row joins to its turn's later row (#188)."""
+    detail = {"kind": kind, "rule": rule, "turn_id": turn_id}
     with failures.store(source, settings.connect) as conn:
         if why is None:
-            failures.record(conn, "recall_gate.armed", "ok", source=source, session_id=session_id,
-                            detail={"kind": kind, "rule": rule})
+            failures.record(conn, "recall_gate.armed", "ok", source=source, session_id=session_id, detail=detail)
+        elif why == PASSED:   # so an armed row with no later row got no reply, or its event was lost (#188)
+            failures.record(conn, "recall_gate.passed", "ok", source=source, session_id=session_id, detail=detail)
         else:
             failures.record(conn, "recall_gate.would_withhold", "ok", source=source, session_id=session_id,
-                            detail={"kind": kind, "rule": rule, "why": why})
+                            detail={**detail, "why": why})
 
 
 def register(ctx):

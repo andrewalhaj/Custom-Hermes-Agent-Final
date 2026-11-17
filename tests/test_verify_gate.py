@@ -68,7 +68,7 @@ print(json.dumps({"entry": entry, "answers": answers}))
 """
 
 
-def run_gate(tmp_path, db, steps, *, mode="log", scenario="plain"):
+def run_gate(tmp_path, db, steps, *, mode="log", scenario="plain", env=None):
     """Run the steps; return (report, Hermes's output, events rows). A step is ["pre", session, tool,
     args], ["post", session, tool, args, status] or ["reply", session, text]."""
     home = tmp_path / "home"
@@ -82,7 +82,7 @@ def run_gate(tmp_path, db, steps, *, mode="log", scenario="plain"):
                           "entries": {"custom_build": {"settings": {"machine_name": "host-a"}}}}}
     (home / "config.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
     environment = {"HERMES_HOME": str(home), "HOME": str(tmp_path), "PATH": "/usr/bin:/bin",
-                   "CUSTOM_BUILD_DATABASE_URL": db["agent"]}
+                   "CUSTOM_BUILD_DATABASE_URL": db["agent"], **(env or {})}
     result = subprocess.run([sys.executable, "-c", SCENARIO, scenario, json.dumps(steps)], capture_output=True,
                             text=True, env=environment, cwd=tmp_path, timeout=120, check=False)
     assert result.returncode == 0, result.stderr[-2000:]
@@ -121,6 +121,27 @@ def test_a_change_to_each_listed_file_or_setting_never_read_is_recorded_and_goes
     ], output
     assert {(row[1], row[4], row[5]) for row in rows} == {("ok", "host-a", "s1")}
     assert rows[0][3]["gen_ai.tool.name"] == "write_file"
+
+
+def test_a_credential_in_a_command_never_reaches_the_store(tmp_path, db):
+    # #115: the event names the listed file, or the setting and what was done to it, never the command.
+    password = "hunter2" + "-not-a-real-one"
+    steps = [["pre", "s1", "terminal", {"command": f"echo TOKEN={password} >> ~/home/.env"}],
+             ["pre", "s1", "terminal", {"command": f"hermes config set approvals.mode {password}"}],
+             ["pre", "s2", "terminal", {"command": f"hermes -p {password} config unset approvals.mode"}]]   # in an option
+    _, output, rows = run_gate(tmp_path, db, steps)
+    assert [row[2] for row in rows] == [str((tmp_path / "home" / ".env").resolve()), "hermes config set approvals.mode",
+                                        "hermes config unset approvals.mode"], output
+    assert password not in json.dumps(rows)
+
+
+@pytest.mark.parametrize("env", [None, {"HERMES_REDACT_SECRETS": "false"}])
+def test_a_secret_in_a_recorded_path_is_redacted_even_with_hermes_redaction_off(tmp_path, db, env):
+    # Rule L4: a path is the one part of a call the gate still stores as written.
+    secret = "sb_" + "secret_" + "N7UNd0UgjKTV-Uodkm0Hg0_xSvQ7d3m"   # assembled at run time, never a literal key
+    path = tmp_path / "home" / "plugins" / "custom_build" / f"{secret}.py"
+    _, output, rows = run_gate(tmp_path, db, [["pre", "s1", "write_file", {"path": str(path), "content": "x"}]], env=env)
+    assert len(rows) == 1 and secret not in json.dumps(rows), output
 
 
 def test_a_read_reported_ok_clears_the_change(tmp_path, db):

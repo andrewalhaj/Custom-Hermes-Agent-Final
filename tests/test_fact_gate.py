@@ -45,7 +45,8 @@ def settle():
 
 answers = []
 for kind, session, turn, value, *rest in steps:
-    agent = types.SimpleNamespace(session_id=session, model="m", platform="cli", _persist_disabled=False)
+    platform = rest[0] if kind == "turn" and rest else "cli"   # Hermes builds a subagent with platform="subagent"
+    agent = types.SimpleNamespace(session_id=session, model="m", platform=platform, _persist_disabled=False)
     if kind == "turn":
         blocks = []
         context = _collect_pre_llm_call_context(agent, effective_task_id="t1", turn_id=turn, original_user_message=value,
@@ -65,7 +66,8 @@ print(json.dumps({"entry": entry, "answers": answers}))
 
 def run_gate(tmp_path, db, steps, *, mode="log", scenario="plain"):
     """Run the steps; return (report, Hermes's output, events rows). A step is ["turn", session, turn,
-    message], ["post", session, turn, tool, status] or ["reply", session, turn, text]."""
+    message] (a fifth item sets the agent's platform), ["post", session, turn, tool, status] or
+    ["reply", session, turn, text]."""
     home = tmp_path / "home"
     shutil.copytree(PLUGIN, home / "plugins" / "custom_build", ignore=shutil.ignore_patterns("__pycache__"))
     gate_config = home / "plugins" / "custom_build" / "guards" / "fact_gate.toml"
@@ -153,6 +155,29 @@ def test_a_turn_that_asks_nothing_checkable_records_nothing(tmp_path, db):
     assert rows == [], output
 
 
+def test_a_subagents_turn_arms_nothing(tmp_path, db):
+    # #188: a subagent's goal is its parent's words, not a user's question; the parent's turn is the one judged.
+    steps = [["turn", "s2", "u1", "How many facts are in the store?", "subagent"], ["reply", "s2", "u1", "42."]]
+    _, output, rows = run_gate(tmp_path, db, steps)
+    assert rows == [], output
+
+
+def test_each_event_carries_its_turns_id_and_every_judged_turn_ends_in_a_row(tmp_path, db):
+    # #188: an armed row joins to its turn's later row by the id; an armed row with none got no reply, or its event was lost.
+    ask = "How many facts are in the store?"
+    steps = [["turn", "s1", "u1", ask], ["reply", "s1", "u1", "There are 42."],
+             ["turn", "s1", "u2", ask, "telegram"], ["post", "s1", "u2", "terminal", "ok"],   # any platform but a subagent's
+             ["reply", "s1", "u2", "The root cause is the timeout."],
+             ["turn", "s1", "u3", ask], ["post", "s1", "u3", "terminal", "ok"], ["reply", "s1", "u3", "There are 42."],
+             ["turn", "s1", "u4", ask]]   # no reply
+    _, output, rows = run_gate(tmp_path, db, steps)
+    assert [(code, detail["turn_id"], detail.get("why")) for code, _, _, detail, _, _ in rows] == [
+        ("fact_gate.armed", "u1", None), ("fact_gate.would_withhold", "u1", "no lookup"),
+        ("fact_gate.armed", "u2", None), ("fact_gate.would_withhold", "u2", "no documentation lookup"),
+        ("fact_gate.armed", "u3", None), ("fact_gate.passed", "u3", None),
+        ("fact_gate.armed", "u4", None)], output
+
+
 def test_off_registers_no_hook_and_records_nothing(tmp_path, db):
     report, output, rows = run_gate(tmp_path, db, [["turn", "s1", "u1", "How many facts are there?"]], mode="off")
     assert report["entry"]["error"] is None, output
@@ -218,7 +243,7 @@ def test_a_turn_that_delegates_its_lookup_counts_as_looked_up(tmp_path, db):
     steps = [["turn", "s1", "u1", "How many facts are in the store?"], ["post", "s1", "u1", "delegate_task", "ok"],
              ["reply", "s1", "u1", "There are 42."]]
     _, output, rows = run_gate(tmp_path, db, steps)
-    assert [code for code, _, _ in events(rows)] == ["fact_gate.armed"], output
+    assert [code for code, _, _ in events(rows)] == ["fact_gate.armed", "fact_gate.passed"], output
 
 
 def test_a_turn_that_searches_memory_counts_as_looked_up(tmp_path, db):
@@ -226,7 +251,7 @@ def test_a_turn_that_searches_memory_counts_as_looked_up(tmp_path, db):
     steps = [["turn", "s1", "u1", "How many facts are in the store?"], ["post", "s1", "u1", "memory_search", "ok"],
              ["reply", "s1", "u1", "There are 42."]]
     _, output, rows = run_gate(tmp_path, db, steps)
-    assert [code for code, _, _ in events(rows)] == ["fact_gate.armed"], output
+    assert [code for code, _, _ in events(rows)] == ["fact_gate.armed", "fact_gate.passed"], output
 
 
 def test_a_long_message_is_matched_in_linear_time():

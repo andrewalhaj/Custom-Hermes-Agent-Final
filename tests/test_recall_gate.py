@@ -46,7 +46,8 @@ def settle():
 
 answers = []
 for kind, session, turn, value, *rest in steps:
-    agent = types.SimpleNamespace(session_id=session, model="m", platform="cli", _persist_disabled=False)
+    platform = rest[0] if kind == "turn" and rest else "cli"   # Hermes builds a subagent with platform="subagent"
+    agent = types.SimpleNamespace(session_id=session, model="m", platform=platform, _persist_disabled=False)
     if kind == "turn":
         blocks = []
         context = _collect_pre_llm_call_context(agent, effective_task_id="t1", turn_id=turn, original_user_message=value,
@@ -66,7 +67,8 @@ print(json.dumps({"entry": entry, "answers": answers, "holds_stream": get_plugin
 
 def run_gate(tmp_path, db, steps, *, mode="log", scenario="plain"):
     """Run the steps; return (report, Hermes's output, events rows). A step is ["turn", session, turn,
-    message], ["post", session, turn, tool, status] or ["reply", session, turn, text]."""
+    message] (a fifth item sets the agent's platform), ["post", session, turn, tool, status] or
+    ["reply", session, turn, text]."""
     home = tmp_path / "home"
     shutil.copytree(PLUGIN, home / "plugins" / "custom_build", ignore=shutil.ignore_patterns("__pycache__"))
     gate_config = home / "plugins" / "custom_build" / "guards" / "recall_gate.toml"
@@ -145,11 +147,14 @@ def test_an_armed_turn_without_both_searches_is_recorded_and_delivered(tmp_path,
     assert report["holds_stream"] is False   # log mode holds no reply back from the stream
 
 
-def test_an_armed_turn_that_ran_both_searches_records_only_that_it_was_armed(tmp_path, db):
-    steps = [["turn", "s1", "u1", ASK], ["post", "s1", "u1", "session_search", "ok"],
+def test_an_armed_turn_that_ran_both_searches_is_recorded_as_passed(tmp_path, db):
+    # #188: every armed turn that gets a reply ends in a row, so an armed row with none got no reply, or its event was lost.
+    steps = [["turn", "s1", "u1", ASK, "telegram"], ["post", "s1", "u1", "session_search", "ok"],   # any platform but a subagent's
              ["post", "s1", "u1", "memory_search", "ok"], ["reply", "s1", "u1", "We fixed it on Tuesday."]]
     _, output, rows = run_gate(tmp_path, db, steps)
-    assert [code for code, *_ in events(rows)] == ["recall_gate.armed"], output
+    assert [(code, detail) for code, _, _, detail, _, _ in rows] == [
+        ("recall_gate.armed", {"kind": "past_work", "rule": "did_we", "turn_id": "u1"}),
+        ("recall_gate.passed", {"kind": "past_work", "rule": "did_we", "turn_id": "u1"})], output
 
 
 def test_a_turn_that_does_not_ask_about_past_work_records_nothing(tmp_path, db):
@@ -166,6 +171,13 @@ def test_a_message_given_as_parts_is_read_as_its_text_as_recall_reads_it(tmp_pat
     parts = [{"type": "text", "text": ASK}, {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}]
     _, output, rows = run_gate(tmp_path, db, [["turn", "s1", "u1", parts]])
     assert events(rows) == [("recall_gate.armed", "past_work", "did_we", None)], output
+
+
+def test_a_subagents_turn_arms_nothing(tmp_path, db):
+    # #188: Hermes runs a subagent without memory, so its turn could never run memory_search.
+    steps = [["turn", "s2", "u1", ASK, "subagent"], ["reply", "s2", "u1", "Yes."]]
+    _, output, rows = run_gate(tmp_path, db, steps)
+    assert rows == [], output
 
 
 def test_off_registers_no_hook_and_records_nothing(tmp_path, db):
@@ -207,8 +219,9 @@ def test_a_turn_is_judged_once_and_its_reply_text_is_never_stored(tmp_path, db):
              ["reply", "s1", "u1", reply]]   # a second call for the same turn finds it already judged
     _, output, rows = run_gate(tmp_path, db, steps)
     assert [code for code, *_ in events(rows)] == ["recall_gate.armed", "recall_gate.would_withhold"], output
-    assert rows[1][1:] == ("ok", None, {"kind": "past_work", "rule": "did_we", "why": "no memory_search or session_search"},
-                           "host-a", "s1"), output   # the pattern's name is what #163's counts need
+    assert rows[1][1:] == ("ok", None, {"kind": "past_work", "rule": "did_we", "why": "no memory_search or session_search",
+                                        "turn_id": "u1"}, "host-a", "s1"), output   # the pattern's name is what #163's counts need
+    assert rows[0][3]["turn_id"] == "u1"   # an armed row joins to its turn's later row, or shows it has none (#188)
     assert "4242" not in json.dumps(rows)
 
 

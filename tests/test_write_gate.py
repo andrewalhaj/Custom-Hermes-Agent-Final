@@ -27,6 +27,8 @@ PLUGIN = ROOT / "custom_build"
 # A fake key in Supabase's format, assembled at run time as in test_plugin_load.py.
 FAKE_SECRET = "sb_" + "secret_" + "N7UNd0UgjKTV-Uodkm0Hg0_xSvQ7d3m"
 URL_TOKEN = "abcd1234" + "efgh5678ijkl"   # a fake credential in a URL's query string
+PASSWORD = "hunter2" + "-not-a-real-one"   # a fake credential given as a command's argument
+USER_FLAG = "-" + "u"   # curl's user option, kept apart so the secret scan does not read a test command as a real one
 
 SCENARIO = r"""
 import json, os, sys, threading
@@ -142,9 +144,12 @@ def test_each_rule_records_its_failing_case_and_the_call_goes_ahead(tmp_path, db
         ("write_gate.would_ask", "ok", {"gen_ai.tool.name":"terminal", "rule": "config"}),
     ], output
     assert {(source, session) for *_, source, session in rows} == {("host-a", "s1")}
-    # The reason is what the maintainer judges a trigger by: the path Hermes would write, or the command.
-    assert rows[0][2] == str(skill.resolve())
-    assert rows[4][2] == "python3 -m pip install requests"
+    # The reason is what the maintainer judges a trigger by: the path Hermes would write, the listed path a
+    # command names, or the program and verb its rule matched. The rest of a command is not stored (#115).
+    assert [row[2] for row in rows] == [
+        str(skill.resolve()), str((home / "config.yaml").resolve()), str((home / ".env").resolve()),
+        str((home / "plugins" / "custom_build" / "extra.py").resolve()),
+        "pip install", "systemctl", "ssh", str((home / "skills").resolve()), "hermes … set"], output
 
 
 def test_an_install_from_a_lock_file_is_an_install(tmp_path, db):
@@ -171,17 +176,17 @@ def test_a_patch_whose_later_file_is_on_the_list_is_recorded(tmp_path, db):
 
 def test_more_commands_on_the_list_are_recorded(tmp_path, db):
     commands = {
-        "hermes -p default config set approvals.mode off": "config",   # a flag before the subcommand
-        "hermes tools disable terminal": "config",
-        "hermes mcp add filesystem": "config",
-        "hermes setup": "config",
-        "pnpm i left-pad": "install",
-        "ssh-copy-id other-host": "other_hosts",
-        "git -C 'my repo' pull": "other_hosts",   # an option's value quoted, with a space in it
-        "git remote update": "other_hosts",
+        "hermes -p default config set approvals.mode off": ("hermes … set", "config"),   # a flag before the subcommand
+        "hermes tools disable terminal": ("hermes … disable", "config"),
+        "hermes mcp add filesystem": ("hermes … add", "config"),
+        "hermes setup": ("hermes setup", "config"),
+        "pnpm i left-pad": ("pnpm i", "install"),
+        "ssh-copy-id other-host": ("ssh-copy-id", "other_hosts"),
+        "git -C 'my repo' pull": ("git … pull", "other_hosts"),   # an option's value quoted, with a space in it
+        "git remote update": ("git … update", "other_hosts"),
     }
     _, output, rows = run_gate(tmp_path, db, [["terminal", {"command": c}] for c in commands])
-    assert [(reason, detail["rule"]) for _, _, reason, detail, _, _ in rows] == list(commands.items()), output
+    assert [(reason, detail["rule"]) for _, _, reason, detail, _, _ in rows] == list(commands.values()), output
 
 
 def test_a_git_verb_inside_a_commit_message_is_off_the_list(tmp_path, db):
@@ -293,14 +298,37 @@ def test_a_crash_in_a_call_with_no_session_records_no_session(tmp_path, db):
 
 
 @pytest.mark.parametrize("env", [None, {"HERMES_REDACT_SECRETS": "false"}])
-def test_the_recorded_command_is_redacted_even_with_hermes_redaction_off(tmp_path, db, env):
-    calls = [["terminal", {"command": f"ssh other-host 'export KEY={FAKE_SECRET}'"}],
-             ["terminal", {"command": f"wget 'https://example.com/file?token={URL_TOKEN}'"}]]
-    _, output, rows = run_gate(tmp_path, db, calls, env=env)
-    reasons = [reason for _, _, reason, *_ in rows]
-    assert len(reasons) == 2, output
-    assert FAKE_SECRET not in reasons[0] and "ssh other-host" in reasons[0]
-    assert URL_TOKEN not in reasons[1] and "wget" in reasons[1]
+def test_a_credential_in_a_command_never_reaches_the_store(tmp_path, db, env):
+    # #115: Hermes's redactor leaves a credential given as an argument in place, so the rest of a command
+    # is not stored at all: only the program and verb the rule matched, or the listed path it names.
+    commands = {
+        f"curl {USER_FLAG} alice:{PASSWORD} https://example.com/f": "curl",
+        f"sshpass -p {PASSWORD} ssh other-host uptime": "ssh",
+        f"pip --password {PASSWORD} install requests": "pip … install",   # between the program and its verb
+        f"git -c 'http.extraheader=Authorization: Basic {PASSWORD}' push": "git … push",
+        f"ssh other-host 'export KEY={FAKE_SECRET}'": "ssh",
+        f"wget 'https://example.com/file?token={URL_TOKEN}'": "wget",
+        f"echo TOKEN={PASSWORD} >> ~/home/.env": str((tmp_path / "home" / ".env").resolve()),
+        # review: text glued to the program or the verb, where no space separates it from the credential
+        f"curl {USER_FLAG} conda:{PASSWORD} https://repo.example.com/install.sh": "conda … install",
+        "curl -d '{\"tool\":\"pip\",\"pw\":\"" + PASSWORD + "\",\"action\":\"install\"}' https://example.com/api": "pip … install",
+        f"psql 'postgres://apt:{PASSWORD}@db/x' -c 'alter table t add c int'": "apt … add",
+        f"go run . -dsn 'app:{PASSWORD}@tcp(db:3306)/add'": "go … add",
+        f"poetry config http-basic.repo user {PASSWORD}/install": "poetry … install",
+        f"brew={PASSWORD} ./run add": "brew … add",
+    }
+    _, output, rows = run_gate(tmp_path, db, [["terminal", {"command": c}] for c in commands], env=env)
+    assert [reason for _, _, reason, *_ in rows] == list(commands.values()), output
+    assert not any(secret in json.dumps(rows) for secret in (PASSWORD, FAKE_SECRET, URL_TOKEN))
+
+
+@pytest.mark.parametrize("env", [None, {"HERMES_REDACT_SECRETS": "false"}])
+def test_a_secret_in_a_recorded_path_is_redacted_even_with_hermes_redaction_off(tmp_path, db, env):
+    # Rule L4: a path is the one part of a call the gate still stores as written.
+    skill = tmp_path / "home" / "skills" / f"{FAKE_SECRET}.md"
+    _, output, rows = run_gate(tmp_path, db, [["write_file", {"path": str(skill), "content": "x"}]], env=env)
+    assert len(rows) == 1 and rows[0][2].startswith(str((tmp_path / "home" / "skills").resolve())), output
+    assert FAKE_SECRET not in json.dumps(rows)
 
 
 def test_an_unreachable_store_is_logged_and_the_call_goes_ahead(tmp_path, db):
