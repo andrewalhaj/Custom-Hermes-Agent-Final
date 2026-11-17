@@ -4,26 +4,52 @@ Hermes cron runs it every 6 hours on every agent host, through its wrapper in th
 `scripts/` folder. Each run records one host.heartbeat event; the job-health check reports a host with
 none in the last 24 hours as host.missing. Each run also records guard.bypassed, once, for every local
 session that ran without the build: one started in safe mode or with the profile's settings ignored (#23).
+On a host that embeds through DeepInfra, each run also checks the hosted build's reference vector (#239).
 """
 
-from . import failures, jobs
+from . import failures, jobs, settings
+from .memory import embedding
+
+REFERENCE_TIMEOUT = 30   # seconds: nothing waits on the heartbeat
 
 
 def run(ctx):
     """Record one host.heartbeat event, then any session that ran without the build; return the exit code.
 
     Run as every job is (`jobs.run`). A state.db Hermes cannot open or read is a crash, recorded as
-    unhandled and job.failed after the heartbeat itself is recorded.
+    unhandled and job.failed after the heartbeat itself is recorded. On the hosted route, DeepInfra's key is
+    one of the job's settings, so a host without it fails with config.missing.
     """
-    return jobs.run(ctx, "heartbeat", beat)
+    hosted = settings.embedder(ctx) if ctx.get_config(settings.EMBEDDING) == "deepinfra" else None
+    return jobs.run(ctx, "heartbeat", lambda conn, machine: beat(conn, machine, hosted=hosted),
+                    missing=settings.missing_embedding_settings(ctx))
 
 
-def beat(conn, machine):
+def beat(conn, machine, *, hosted=None):
     """Record this host's heartbeat, then each bypass session not yet recorded; return whether the heartbeat was written.
 
-    The heartbeat goes first, so a scan that fails still leaves the host's beat in the store.
+    With `hosted`, the hosted route's embedder, the reference is checked first and its cosine kept in the
+    heartbeat's detail, so a passing check shows it ran. A failed check is recorded after the heartbeat:
+    embed.model_mismatch when the vector moved, embed.refused or embed.unavailable when the service did not
+    answer. The heartbeat goes first, so a scan that fails still leaves the host's beat in the store.
     """
-    written = failures.record(conn, "host.heartbeat", "ok", source=machine)
+    detail, failure = {}, None
+    if hosted is not None:
+        try:
+            cosine, threshold = hosted.reference_cosine(timeout=REFERENCE_TIMEOUT)
+        except (embedding.EmbedUnavailable, embedding.ModelMismatch) as exc:   # EmbedRefused is the first's kind
+            failure = exc
+        else:
+            detail = {"reference_cosine": round(cosine, 6)}
+            if cosine < threshold:
+                failure = embedding.moved(cosine, threshold)
+    written = failures.record(conn, "host.heartbeat", "ok", source=machine, detail=detail)
+    if isinstance(failure, embedding.EmbedRefused):
+        failures.record(conn, "embed.refused", "failed", source=machine, reason=str(failure))
+    elif isinstance(failure, embedding.EmbedUnavailable):
+        failures.record(conn, "embed.unavailable", "failed", source=machine, reason=str(failure))
+    elif isinstance(failure, embedding.ModelMismatch):
+        failures.record(conn, "embed.model_mismatch", "failed", source=machine, reason=str(failure))
     recorded = {sid for (sid,) in conn.execute(
         "select session_id from memory.events where code = 'guard.bypassed' and source = %s", (machine,))}
     for sid, flag in bypassed_sessions():

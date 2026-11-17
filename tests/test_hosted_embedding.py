@@ -163,6 +163,14 @@ def test_a_vector_of_another_length_is_a_model_mismatch(deepinfra, reference, db
             embedder.embed(conn, ["a text"], timeout=5)
 
 
+@pytest.mark.parametrize("vector", [[None] * 2560, ["x"] * 2560, [float("nan")] * 2560, [True] * 2560, None])
+def test_a_vector_that_is_not_numbers_is_a_garbled_answer(deepinfra, reference, vector):
+    # #239 review: a null or text crashed the cosine, and a NaN passed the threshold check (nan < t is False).
+    deepinfra.other = vector
+    with pytest.raises(embedding.EmbedUnavailable, match="numbers"):
+        hosted(deepinfra, reference).reference_cosine(timeout=5)
+
+
 def test_a_refused_key_in_a_search_is_recorded_and_returned_as_embed_refused(deepinfra, reference, db):
     deepinfra.status = 401
     outcome = tool.memory_search({"query": "where is the deploy script"}, machine="host-a", session_id="s1", turn=1,
