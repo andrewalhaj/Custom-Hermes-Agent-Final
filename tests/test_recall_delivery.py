@@ -261,6 +261,7 @@ def test_a_question_about_open_work_adds_the_newest_digests_open_items_to_the_se
     assert ollama.embedded   # the search ran
     assert bodies[:3] == ["Item A from two days ago.", "Item B from two days ago.", "Item from three days ago."]
     assert "Host fact nearest by meaning." in bodies[3:]   # a misfired pattern costs the turn nothing
+    assert "Item from four days ago." not in bodies   # only the newest 3 digests (#158 review)
 
 
 def test_open_items_and_the_search_share_the_eight_results(home, db, owner, ollama):

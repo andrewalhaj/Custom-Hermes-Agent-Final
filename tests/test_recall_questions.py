@@ -88,7 +88,7 @@ def test_a_question_about_open_work_is_recognised(message):
     "Can you check if the job ran last week",
     "Traceback: ValueError: was it set previously?",
     "git log --since yesterday? or before?",
-    # review round 2: near variants that still misfired as open work, where a miss costs the turn its recall
+    # review round 2: near variants that still misfired as open work, which, before option A, cost the turn its recall
     "What is open on port 5432?",
     "What's open on port 8080?",
     "What is open in the editor",
