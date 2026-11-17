@@ -11,7 +11,7 @@ GROUP_ROLES = ("memory_agent", "memory_maintenance")
 
 def _insert(conn, code="job.failed"):
     return conn.execute(
-        "insert into memory.events (source, code, result) values ('test-host', %s, 'failed') returning id",
+        "insert into memory.events (source, code, result) values ('host-a', %s, 'failed') returning id",
         (code,),
     ).fetchone()[0]
 
@@ -63,7 +63,7 @@ def test_group_roles_cannot_log_in(db):
 
 def test_result_must_be_one_of_the_four_outcomes(db):
     with psycopg.connect(db["agent"]) as conn, pytest.raises(psycopg.errors.CheckViolation):
-        conn.execute("insert into memory.events (source, code, result) values ('test-host', 'job.failed', 'error')")
+        conn.execute("insert into memory.events (source, code, result) values ('host-a', 'job.failed', 'error')")
 
 
 def test_agent_can_insert_and_read_an_event(db):
