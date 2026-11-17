@@ -5,6 +5,7 @@ stored fact (CONTRIBUTING.md rule C3); Hermes then reports the call with the sta
 """
 
 import datetime
+import time
 
 import psycopg
 from agent.memory_provider import spawn_context_thread
@@ -27,6 +28,7 @@ from . import (
 
 BASES = ("user_stated", "tool_observed", "assistant_inferred")
 TIMEOUT = 5   # seconds for each answer from Ollama while a fact is stored
+RERANK_MARGIN = 0.3   # seconds kept back from the recall deadline, to deliver the notes after a rerank
 
 SCHEMA = {
     "name": "store_fact",
@@ -57,18 +59,18 @@ SEARCH_SCHEMA = {
 }
 
 
-def memory_search(args, *, machine, session_id, turn, embedder, connect):
+def memory_search(args, *, machine, session_id, turn, embedder, judge_at, connect):
     """Run the search tool (3.5 point 7): {"results": [...]} or {"error": code}, never an empty list for a failure."""
     query = redact_sensitive_text(str(args.get("query", "")), force=True)   # it goes to Ollama and the store
     if not query.strip():
         return {"refused": "query is empty"}
     wanted = write_path.load()["recall"]["results"]
-    outcome = _searched(query, machine=machine, session_id=session_id, turn=turn, embedder=embedder, connect=connect,
-                        wanted=wanted)
+    outcome = _searched(query, machine=machine, session_id=session_id, turn=turn, embedder=embedder,
+                        judge_at=judge_at, connect=connect, wanted=wanted)
     return {"results": outcome["results"][:wanted]} if "results" in outcome else outcome
 
 
-def recall_notes(query, *, machine, session_id, turn, embedder, connect):
+def recall_notes(query, *, machine, session_id, turn, embedder, judge_at, connect):
     """prefetch()'s notes for a message (3.5): searched under the recall deadline, at most one digest, cut to the
     results per message; a failure or a missed deadline is reported in the turn with its code."""
     query = redact_sensitive_text(str(query or ""), force=True)   # Hermes redacts too; the build's is forced
@@ -85,7 +87,7 @@ def recall_notes(query, *, machine, session_id, turn, embedder, connect):
     @failures.boundary(lambda: machine, connect, failures.Returns(lambda exc: None))
     def run(session_id):
         box["outcome"] = _searched(query, machine=machine, session_id=session_id, turn=turn, embedder=embedder,
-                                   connect=connect, wanted=wanted, deadline=limits["deadline"],
+                                   judge_at=judge_at, connect=connect, wanted=wanted, deadline=limits["deadline"],
                                    open_work=kind == "open_work")
 
     # Hermes's own thread helper, so the thread keeps the session's context: its directory, and so its project.
@@ -111,9 +113,12 @@ def recall_notes(query, *, machine, session_id, turn, embedder, connect):
     return recall.notes(results)
 
 
-def _searched(query, *, machine, session_id, turn, embedder, connect, wanted, deadline=None, open_work=False):
-    """The fused candidate pool for `wanted` results as {"results": [...]}, or {"error": code}, recorded. With a
-    `deadline`, the store cancels any statement that runs past it, so a stalled store releases the search."""
+def _searched(query, *, machine, session_id, turn, embedder, judge_at, connect, wanted, deadline=None,
+              open_work=False):
+    """The candidate pool for `wanted` results, reranked or in fused order, as {"results": [...]}, or
+    {"error": code}, recorded. With a `deadline`, the store cancels any statement that runs past it, so a
+    stalled store releases the search, and the rerank gets only the time left of it (#165)."""
+    started = time.monotonic()
     key = project.key(resolve_agent_cwd())
     fields = {"source": machine, "project": key, "session_id": session_id, "turn": turn}
 
@@ -122,6 +127,15 @@ def _searched(query, *, machine, session_id, turn, embedder, connect, wanted, de
             conn.execute(f"set statement_timeout = {int(deadline * 1000)}")
         try:
             results = search.candidates(conn, embedder, query, key, wanted=wanted, timeout=TIMEOUT)
+            # The judge's own deadline, or what is left of the recall's, less a margin to deliver the notes.
+            left = judge.DEADLINE if deadline is None else min(
+                judge.DEADLINE, deadline - (time.monotonic() - started) - RERANK_MARGIN)
+            try:
+                if left <= 0:
+                    raise judge.JudgeTimeout("no time left in the recall deadline for the rerank")
+                results = search.reranked(results, query, judge_at, timeout=left)
+            except (judge.JudgeError, judge.JudgeTimeout) as exc:   # 3.4 step 4: fused order, recorded as degraded
+                failures.record(conn, "rerank.fallback", "degraded", reason=str(exc), **fields)
             if open_work:   # the newest digests too, by recency, not similarity (3.5 point 4)
                 return {"results": results,
                         "open": search.newest_digests(conn, key, write_path.load()["recall"]["open_work_digests"])}

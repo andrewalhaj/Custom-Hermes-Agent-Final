@@ -73,3 +73,14 @@ results_past_work = 8   # on a question about past work or open work (3.5 points
 open_work_digests = 3   # a question about open work reads the newest this many digests (#158; a starting value)
 digests_per_message = 1   # at most this many digests among a message's notes (decided on #158; a starting value)
 deadline = 6       # seconds for recall in prefetch(), inside Hermes's 8-second limit
+
+# The rerank (section 3.4 step 4, #165): the judge's probability that each recalled note helps answer the
+# user's message, one Noul per candidate with the note's own text in its question ({note}), the message as
+# state. A reranked note under the floor is dropped (3.6); notes ranked by fusion alone keep no floor.
+[rerank]
+floor = 0.30
+
+[rerank.question]
+instructions = "Does this note help answer the user's message in `message`? Note: {note}"
+criteria.true = "The note gives something a reply to `message` needs or can use: a fact, a setting, a decision or past work on the same subject."
+criteria.false = "The note is about a different machine, project or tool than `message` asks about, or shares words with `message` but would not change the reply."

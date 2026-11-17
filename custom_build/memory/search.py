@@ -1,7 +1,7 @@
-"""The facts search (ARCHITECTURE.md 3.4 steps 1-3 and 6, #158): embed the query, then one SQL function,
-memory.search_facts, finds and fuses. Until 4b reranks, every result is ranked by fusion alone."""
+"""The facts search (ARCHITECTURE.md 3.4 steps 1-4 and 6, #158, #165): embed the query, then one SQL function,
+memory.search_facts, finds and fuses; the judge then reranks, or the fused order stands."""
 
-from . import write_path
+from . import judge, write_path
 
 
 def search(conn, embedder, query, project, *, wanted, timeout):
@@ -10,6 +10,21 @@ def search(conn, embedder, query, project, *, wanted, timeout):
     Raises embedding's EmbedUnavailable and ModelMismatch, and psycopg's errors.
     """
     return candidates(conn, embedder, query, project, wanted=wanted, timeout=timeout)[:wanted]
+
+
+def reranked(results, message, judge_at, *, timeout):
+    """The results reordered by the judge's probability that each helps answer the message, and cut at the
+    score floor (3.4 step 4, 3.6). A stable sort, so equal scores keep the fused order. `timeout` bounds the
+    judge's answer. Raises the judge's JudgeError and JudgeTimeout, for the caller to fall back to the fused
+    order."""
+    if not results:
+        return results
+    scores = judge.relevance_answers(message, [result["body"] for result in results], url=judge_at.url,
+                                     key=judge_at.key, model=judge_at.model, timeout=timeout)
+    scored = sorted(({**result, "ranked_by": "judge", "score": score} for result, score in zip(results, scores)),
+                    key=lambda result: result["score"], reverse=True)
+    floor = write_path.load()["rerank"]["floor"]
+    return [result for result in scored if result["score"] >= floor]
 
 
 def newest_digests(conn, project, count):

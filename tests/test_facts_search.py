@@ -8,6 +8,7 @@ as a machine's login, as the provider searches.
 
 import json
 import math
+import os
 import pathlib
 import shutil
 import subprocess
@@ -49,6 +50,15 @@ def _search(db, query, vector=BASE, *, project="p1", pool=15):
     with psycopg.connect(db["agent"]) as conn:
         return conn.execute("select body, by_meaning, by_words from memory.search_facts(%s::halfvec, %s, %s, %s, 20)",
                             (str(vector), query, project, pool)).fetchall()
+
+
+@pytest.fixture(autouse=True)
+def judge(typesafe, monkeypatch):
+    """Every case's judge is the fake, answering each rerank question 0.5 unless a test says otherwise, so
+    the fused order stands and nothing falls under the floor; nothing reaches the real TypeSafe (#165)."""
+    typesafe.default = 0.5
+    monkeypatch.setenv("TEST_JUDGE_URL", typesafe.url)
+    return typesafe
 
 
 @pytest.fixture
@@ -130,11 +140,12 @@ def test_search_returns_the_wanted_number_with_provenance(db, owner, ollama):
 
 
 TOOL_SCENARIO = r"""
-import json, sys
+import json, os, sys
 import plugins.memory
 provider = plugins.memory.load_memory_provider("custom_build")
 modules = {name.rsplit(".", 1)[-1]: m for name, m in sys.modules.items() if "custom_build" in name}
 modules["embedding"].OLLAMA_URL = sys.argv[1]
+modules["judge"].URL = os.environ["JUDGE_URL"]
 provider.initialize(session_id="s1", hermes_home=sys.argv[3], platform="cli", agent_context="primary")
 print(json.dumps(json.loads(provider.handle_tool_call("memory_search", {"query": sys.argv[2]}))))
 """
@@ -155,7 +166,8 @@ def home(tmp_path):
 
 def tool(home, db, ollama_url, query):
     env = {"HERMES_HOME": str(home), "HOME": str(home.parent), "PATH": "/usr/bin:/bin",
-           "CUSTOM_BUILD_DATABASE_URL": db["agent"], "TYPESAFE_API_KEY": "test-key-not-a-real-one"}
+           "CUSTOM_BUILD_DATABASE_URL": db["agent"], "TYPESAFE_API_KEY": "test-key-not-a-real-one",
+           "JUDGE_URL": os.environ["TEST_JUDGE_URL"]}
     result = subprocess.run([sys.executable, "-c", TOOL_SCENARIO, ollama_url, query, str(home)], capture_output=True,
                             text=True, env=env, cwd=home.parent / "work", timeout=120, check=False)
     assert result.returncode == 0, result.stderr[-3000:]
@@ -235,3 +247,15 @@ def test_the_meaning_search_can_use_the_vector_index(db, owner):
         owner.execute("select * from memory.search_facts(%s::halfvec, 'x', 'p1', 15, 20)", (str(BASE),))
     assert any("facts_live_embedding_idx" in plan for plan in plans), [
         line.strip() for plan in plans for line in plan.splitlines() if "Scan" in line or "Sort" in line]
+
+
+
+def test_the_tool_reranks_with_the_judge(home, db, owner, ollama, typesafe):
+    # 4b (#165): the memory search tool reranks too, and says so.
+    _add(owner, "First by fusion.", BASE, project="github.com/Owner/Repo", model=ollama.build)
+    _add(owner, "Second by fusion.", _at(0.9), project="github.com/Owner/Repo", model=ollama.build)
+    ollama.vectors = {"gateway": BASE}
+    typesafe.answers = {"c0": 0.35, "c1": 0.8}
+    results = tool(home, db, ollama.url, "gateway")["results"]
+    assert [(r["body"], r["ranked_by"], r["score"]) for r in results] == [
+        ("Second by fusion.", "judge", 0.8), ("First by fusion.", "judge", 0.35)]
