@@ -218,14 +218,26 @@ def test_a_name_that_only_contains_a_listed_name_is_off_the_list(tmp_path, db):
     # #128: a listed name counts only as a whole path component, at the Hermes home.
     commands = ["cat ~/home/.envrc", "cp ~/home/.env.bak /tmp/x", "ls $HERMES_HOME/myskills", "rm -r ~/home/skills-old",
                 "ls ~/home/hermes-agent/skills", "cat ~/home/old-config.yaml", "cat $HERMES_HOME/config.yaml.orig",
-                "cd $HERMES_HOME && cat hermes-agent/.env"]
+                "cd $HERMES_HOME && cat hermes-agent/.env",
+                "cat /mnt/backup/home/.env", "cat ~/proj/home/config.yaml"]   # review: another folder of the same name
     _, output, rows = run_gate(tmp_path, db, [["terminal", {"command": c}] for c in commands])
+    assert rows == [], output
+
+
+def test_a_listed_name_under_another_folder_where_the_command_runs_is_off_the_list(tmp_path, db):
+    home = tmp_path / "home"
+    commands = ["ls hermes-agent/skills", "cat hermes-agent/.env", "cat x/config.yaml"]
+    _, output, rows = run_gate(tmp_path, db, [["terminal", {"command": c, "workdir": str(home)}] for c in commands])
     assert rows == [], output
 
 
 def test_a_listed_name_as_a_whole_component_is_still_recorded(tmp_path, db):
     commands = {"rm ${HERMES_HOME}/.env": "env", 'cat "$HERMES_HOME"/config.yaml > /tmp/c': "config",
-                "cd $HERMES_HOME && rm ./.env": "env", "ls ~/home/skills/": "skills", "tar czf s.tgz ~/home/skills;": "skills"}
+                "cd $HERMES_HOME && rm ./.env": "env", "ls ~/home/skills/": "skills", "tar czf s.tgz ~/home/skills;": "skills",
+                # review: spellings recorded before #128 that must still be
+                "H=~/home; rm $H/.env": "env", 'HH="${HERMES_HOME:-$HOME/home}"; cat "$HH/config.yaml" > /tmp/c': "config",
+                'cat "${HERMES_HOME%/}/.env"': "env", "rm ~/home//.env": "env", "cat ~/home/./.env": "env",
+                "cd ~/home && cat $PWD/.env": "env", "cat $HOME/home/.env": "env", "cat '~/home/skills/my skill/SKILL.md'": "skills"}
     _, output, rows = run_gate(tmp_path, db, [["terminal", {"command": c}] for c in commands])
     assert [detail["rule"] for _, _, _, detail, _, _ in rows] == list(commands.values()), output
 

@@ -145,23 +145,45 @@ def test_a_secret_in_a_recorded_path_is_redacted_even_with_hermes_redaction_off(
 
 
 def test_reading_one_file_in_the_plugins_folder_clears_only_that_file(tmp_path, db):
-    # #128: reads of a listed folder are kept by the file read, not once for the whole folder.
+    # #128: a file tool's read of a listed folder is kept by the file read, not once for the whole folder.
     plugin = tmp_path / "home" / "plugins" / "custom_build"
+    toml = plugin / "guards" / "verify_gate.toml"
     steps = [
         ["post", "s1", "read_file", {"path": str(plugin / "failures.py")}, "ok"],
         ["pre", "s1", "patch", {"path": str(plugin / "failures.py"), "old_string": "a", "new_string": "b"}],   # read
-        ["pre", "s1", "write_file", {"path": str(plugin / "guards" / "verify_gate.toml"), "content": "x"}],   # never read
-        ["post", "s1", "terminal", {"command": f"cat {plugin}/guards/verify_gate.toml"}, "ok"],
-        ["pre", "s1", "write_file", {"path": str(plugin / "guards" / "verify_gate.toml"), "content": "x"}],   # read now
-        ["pre", "s1", "terminal", {"command": f"sed -i s/a/b/ {plugin}/guards/verify_gate.toml"}],   # read
-        ["pre", "s1", "terminal", {"command": f"sed -i s/a/b/ {plugin}/settings.py"}],   # never read
-        ["post", "s1", "terminal", {"command": f"ls {plugin}"}, "ok"],   # a listing reads no file
-        ["pre", "s1", "terminal", {"command": f"rm -r {plugin}"}],   # the whole folder
+        ["pre", "s1", "write_file", {"path": str(toml), "content": "x"}],   # never read
+        ["pre", "s1", "terminal", {"command": f"sed -i s/a/b/ {plugin}/settings.py"}],   # a command: some of the folder was read
+        ["post", "s1", "read_file", {"path": str(toml)}, "ok"],
+        ["pre", "s1", "write_file", {"path": str(toml), "content": "x"}],   # read now
     ]
     _, output, rows = run_gate(tmp_path, db, steps)
-    assert [(row[2], row[3]["rule"]) for row in rows] == [
-        (str((plugin / "guards" / "verify_gate.toml").resolve()), "plugin"),
-        (str((plugin / "settings.py").resolve()), "plugin"), (str(plugin.resolve()), "plugin")], output
+    assert [(row[2], row[3]["rule"]) for row in rows] == [(str(toml.resolve()), "plugin")], output
+
+
+def test_a_command_that_names_the_plugins_folder_reads_all_of_it_as_before(tmp_path, db):
+    # A command's words do not say reliably which file it read (a `;` after the path, a `cd` before it, a
+    # glob), so a command keeps the folder-wide reading it had before #128. The review's cases:
+    plugin = tmp_path / "home" / "plugins" / "custom_build"
+    reads = [f"cat {plugin}/failures.py; echo ok", f"cat {plugin}/failures.py|head", f"(cat {plugin}/failures.py)",
+             f"cat {plugin}/*.py", "cd ~/home && cat plugins/custom_build/failures.py"]
+    steps = []
+    for n, command in enumerate(reads):
+        steps += [["post", f"s{n}", "terminal", {"command": command}, "ok"],
+                  ["pre", f"s{n}", "patch", {"path": str(plugin / "failures.py"), "old_string": "a", "new_string": "b"}]]
+    steps += [["post", "s9", "read_file", {"path": str(plugin / "failures.py")}, "ok"],
+              ["pre", "s9", "terminal", {"command": f"cd {plugin} && sed -i s/a/b/ failures.py"}],
+              ["pre", "s9", "terminal", {"command": f"rm {plugin}/failures.py;echo gone"}]]
+    _, output, rows = run_gate(tmp_path, db, steps)
+    assert rows == [], output
+
+
+def test_a_reply_about_the_plugins_folder_is_cleared_by_any_read_in_it(tmp_path, db):
+    plugin = tmp_path / "home" / "plugins" / "custom_build"
+    steps = [["reply", "s1", "custom_build contains the guards."],
+             ["post", "s2", "read_file", {"path": str(plugin / "failures.py")}, "ok"],
+             ["reply", "s2", "custom_build contains the guards."]]
+    _, output, rows = run_gate(tmp_path, db, steps)
+    assert [(code, session) for code, *_, session in rows] == [("verify_gate.would_withhold", "s1")], output
 
 
 def test_a_name_that_only_contains_a_listed_name_is_not_a_read_of_it(tmp_path, db):
