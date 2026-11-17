@@ -123,6 +123,16 @@ def test_a_change_to_each_listed_file_or_setting_never_read_is_recorded_and_goes
     assert rows[0][3]["gen_ai.tool.name"] == "write_file"
 
 
+def test_a_credential_in_a_command_never_reaches_the_store(tmp_path, db):
+    # #115: the event names the listed file, or the setting and what was done to it, never the command.
+    password = "hunter2" + "-not-a-real-one"
+    steps = [["pre", "s1", "terminal", {"command": f"echo TOKEN={password} >> ~/home/.env"}],
+             ["pre", "s1", "terminal", {"command": f"hermes config set approvals.mode {password}"}]]
+    _, output, rows = run_gate(tmp_path, db, steps)
+    assert [row[2] for row in rows] == [str((tmp_path / "home" / ".env").resolve()), "hermes config set approvals.mode"], output
+    assert password not in json.dumps(rows)
+
+
 def test_a_read_reported_ok_clears_the_change(tmp_path, db):
     home = tmp_path / "home"
     steps = [
