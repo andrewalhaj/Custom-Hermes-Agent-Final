@@ -57,6 +57,10 @@ from agent import auxiliary_client
 from evals import replay
 
 def fake_call_llm(**kwargs):
+    if os.environ.get("EVAL_TEST_ROUTES"):   # where Hermes would send this task's call
+        route = auxiliary_client._resolve_task_provider_model(kwargs["task"], None, None, None, None)[:2]
+        with open(os.environ["EVAL_TEST_ROUTES"], "a") as routes:
+            routes.write(json.dumps([kwargs["task"], *route]) + "\n")
     if kwargs["task"] == "custom_build_extraction":
         user = json.loads(kwargs["messages"][-1]["content"])["user"]
         facts = [{"body": user, "basis": "user_stated"}] if ("vim" in user or "Porto" in user) else []
@@ -88,7 +92,7 @@ def dataset(tmp_path):
 
 def run(tmp_path, dataset, ollama, typesafe, **options):
     os.environ["EVAL_TEST_OLLAMA_URL"], os.environ["EVAL_TEST_JUDGE_URL"] = ollama.url, typesafe.url
-    for name in ("EVAL_TEST_ASK_FAILS", "EVAL_TEST_CRASH_ON"):
+    for name in ("EVAL_TEST_ASK_FAILS", "EVAL_TEST_CRASH_ON", "EVAL_TEST_ROUTES"):
         os.environ.pop(name, None)
     os.environ.update(options.pop("test_env", {}))
     defaults = {"data": dataset, "sha256": hashlib.sha256(dataset.read_bytes()).hexdigest(), "questions": 3,
@@ -107,6 +111,18 @@ def test_the_runner_scores_recall_mrr_and_abstention_through_the_whole_build(tmp
     written = json.loads((tmp_path / "report" / "report.json").read_text(encoding="utf-8"))
     assert written["answerable"] == report["answerable"] and written["embedding_build"] == ollama.build
     assert (tmp_path / "report" / "report.md").exists()
+
+
+def test_the_replay_sends_extraction_where_the_plugin_routes_it_haiku_on_the_subscription(
+        tmp_path, dataset, ollama, typesafe):
+    # Found before the first real run: the plugin's own route is registered only when Hermes discovers the
+    # plugin; without it the task routes "auto", wherever the environment points, not to the subscription.
+    typesafe.default = 0.9
+    routes = tmp_path / "routes.jsonl"
+    run(tmp_path, dataset, ollama, typesafe, test_env={"EVAL_TEST_ROUTES": str(routes)})
+    calls = [json.loads(line) for line in routes.read_text(encoding="utf-8").splitlines()]
+    assert calls and all(call == ["custom_build_extraction", "claude-subscription-directsdk-experimental", "haiku"]
+                         for call in calls)
 
 
 def test_without_yes_the_runner_only_estimates_what_a_run_would_call(tmp_path, dataset, ollama, typesafe):
