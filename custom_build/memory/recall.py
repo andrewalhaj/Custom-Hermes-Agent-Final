@@ -2,7 +2,7 @@
 
 Notes are labelled as notes, not instructions, each with its origin, basis and dates. A failure is
 reported with its code, never as "no notes found". A question about past work widens the search; one about
-open work is answered from the newest digests' open items, by the recall gate's own patterns.
+open work adds the newest digests' open items to the search, by the recall gate's own patterns.
 """
 
 import pathlib

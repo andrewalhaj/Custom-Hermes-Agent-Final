@@ -1,12 +1,12 @@
 # The recall gate's patterns (ARCHITECTURE.md sections 3.5 and 5.3; #158, decided there).
-# Memory's recall reads them now, to widen the search for a question about past work and to answer a
-# question about open work from the newest digests; the recall gate reads the same file when the guards
-# track builds it, and counts a match in either table as a question about past work, so the search and the
-# gate always agree.
+# Memory's recall reads them now, to widen the search for a question about past work and to add the newest
+# digests' open items to the search for a question about open work; the recall gate reads the same file when
+# the guards track builds it, and counts a match in either table as a question about past work, so the
+# search and the gate always agree.
 # Each is a Python regular expression, matched case-insensitively against the user's message. They are
-# precise on purpose, and miss some phrasings: an open-work match replaces the similarity search, and the
-# gate will require searches on every past-work match, so a pattern that fires on an ordinary message costs
-# a turn its recall or adds work, while a miss costs only the widening. Open work is checked first. A change
+# precise on purpose, and miss some phrasings: an open-work match adds a few notes to the turn, and the gate
+# will require searches on every past-work match, so a pattern that fires on an ordinary message adds notes
+# or work, while a miss costs only the widening or the open items. Open work is checked first. A change
 # here is a pull request, with tests/test_recall_questions.py updated, and eval-set numbers once the eval
 # set exists (CONTRIBUTING.md rule C8).
 
