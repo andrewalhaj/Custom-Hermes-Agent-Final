@@ -308,7 +308,7 @@ def test_a_miss_the_score_floor_cut_is_counted_as_cut_by_the_floor(tmp_path, dat
     assert report["answerable"]["recall_at_5"] == 0.0
     assert report["misses"] == {"cut_by_floor": 2}
     first = report["per_question"][0]
-    assert (first["evidence_stored"], first["pool_hit"], first["pool_hit_score"]) == (1, 1, 0.1)
+    assert (first["evidence_stored"], first["pool_hit"], first["pool_best_score"]) == (1, 1, 0.1)
     assert "Misses: 2 cut by the floor" in (tmp_path / "report" / "report.md").read_text(encoding="utf-8")
 
 
@@ -433,7 +433,7 @@ def test_ctrl_c_while_questions_run_keeps_the_ones_already_measured(tmp_path, da
     def measured(entry, **kwargs):
         return {"question_id": entry["question_id"], "question_type": entry["question_type"], "abstention": False,
                 "notes": 0, "recall_failed": False, "first_hit": None, "codes": [], "failures": [],
-                "evidence_stored": 0, "pool_hit": None, "pool_hit_score": None,
+                "evidence_rows": 0, "evidence_stored": 0, "pool": True, "pool_hit": None, "pool_best_score": None,
                 "embedding_build": None, "stopped": None}
 
     def interrupted(futures, **kwargs):

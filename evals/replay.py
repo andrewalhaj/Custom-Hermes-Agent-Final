@@ -95,7 +95,8 @@ def ask(provider, home, entry):
 
 def pool(provider, entry):
     """The candidates recall searched for the question, each with the judge's score and no floor applied (#234),
-    as [{"body", "score"}]; a score is None when the judge could not answer. One more judge call, no model call.
+    as [{"body", "score"}], or None when it could not be fetched; a score is None when the judge could not
+    answer. One more judge call, no model call.
     The query, project and number wanted are recall's own (tool.recall_notes)."""
     modules = _modules()
     settings, judge = modules["settings"], modules["judge"]
@@ -108,7 +109,7 @@ def pool(provider, entry):
             found = modules["search"].candidates(conn, provider.embedder, query,
                                                  modules["project"].key(resolve_agent_cwd()), wanted=wanted, timeout=5)
     except (embedding.EmbedUnavailable, embedding.ModelMismatch, psycopg.Error):
-        return []   # the search's own failures: recall failed too, and the runner counts that, not a miss
+        return None   # the search's own failures: the pool is unknown, which is not the same as empty (#234 review)
     if not found:
         return []
     try:
