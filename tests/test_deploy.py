@@ -342,6 +342,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         Handler.seen.append((self.path, self.headers["Authorization"], json.loads(body)))
         if self.path.endswith("/slow"):
             time.sleep(1)
+        if self.path.endswith("/bad-status"):
+            self.wfile.write(b"this is not an HTTP status line\r\n\r\n")
+            return
         status = 500 if self.path.endswith("/broken") else 200
         self.send_response(status)
         if self.path.endswith("/cut-off"):
@@ -599,7 +602,7 @@ def test_an_install_whose_ssh_connection_failed_is_not_taken_as_left_in_place(de
 
 # Unexpected answers from the store's API are named steps, not tracebacks (#194).
 
-@pytest.mark.parametrize("answer", [{"message": "not allowed"}, [{"name": None}], [["0001_a"]], "0001_a"])
+@pytest.mark.parametrize("answer", [{"message": "not allowed"}, [{"name": None}], [["0001_a"]], "0001_a", 0])
 def test_a_history_answer_that_is_not_named_rows_is_a_refusal(deploy, answer):
     fake = Fake()
     fake.history_answer = answer
@@ -633,4 +636,9 @@ def test_http_reports_an_answer_that_is_not_text(deploy, server):
 def test_http_reports_an_answer_that_is_cut_off(deploy, server):
     with pytest.raises(deploy.DeployError, match="could not reach"):
         deploy.http("POST", f"{server}/cut-off", TOKEN, {})
+
+
+def test_http_reports_an_answer_that_is_not_http(deploy, server):
+    with pytest.raises(deploy.DeployError, match="could not reach"):
+        deploy.http("POST", f"{server}/bad-status", TOKEN, {})
 
