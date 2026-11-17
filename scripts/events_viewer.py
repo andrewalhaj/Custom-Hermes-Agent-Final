@@ -9,7 +9,7 @@ section 4:
 
 The login joins `memory_viewer` (migration 0009), which may select from memory.events and nothing else, so
 the page cannot change the store whatever is asked of it. It serves on a loopback address only, has one
-route, and has no sign-in: anything running on the same machine as the same user can read it. It runs
+route, and has no sign-in: any program on the same machine, under any user, can read it while it runs. It runs
 outside Hermes with the maintainer reading its output, so it records no failure code.
 """
 
@@ -36,7 +36,8 @@ LIMIT = 500   # rows on one page, newest first
 WINDOWS = {1: "1 hour", 24: "24 hours", 168: "7 days", 720: "30 days", 2160: "90 days"}   # 90 days: retention's
 EASTERN = zoneinfo.ZoneInfo("America/New_York")   # the maintainer's clock, whatever machine serves the page
 CONNECT_TIMEOUT = 5   # seconds: nothing waits on this but the maintainer
-GUARD_PREFIXES = ("write_gate.", "verify_gate.", "fact_gate.", "recall_gate.", "guard.")
+# The four gates' rows. A guard that crashed, did not load or was bypassed is a failure, and listed with them.
+GUARD_PREFIXES = ("write_gate.", "verify_gate.", "fact_gate.", "recall_gate.")
 GUARDS = sorted(code for code in CATALOG if code.startswith(GUARD_PREFIXES))
 FAILURES = sorted(code for code in SEVERITY if code not in GUARDS)
 GROUPS = {"guards": "Guards", "failures": "Failures", "other": "Everything else"}
@@ -226,6 +227,8 @@ def filters_of(query):
         raise BadQuery(f"group is one of {', '.join(GROUPS)}")
     if asked.get("result") not in (None, *RESULTS):
         raise BadQuery(f"result is one of {', '.join(RESULTS)}")
+    if any("\x00" in asked.get(key, "") for key in ("code", "source")):
+        raise BadQuery("a code or a machine has no NUL in it")   # the store would refuse the query, not answer it
     return {"hours": hours, "code": asked.get("code"), "group": asked.get("group"),
             "source": asked.get("source"), "result": asked.get("result")}
 
@@ -265,7 +268,8 @@ def _rail(filters, by_code):
 def _context(row):
     """What a row carries besides its reason: where it happened, then its detail, one `key=value` each."""
     pairs = [(key, row[key]) for key in ("project", "session_id", "turn") if row[key] is not None]
-    pairs += sorted((row["detail"] or {}).items())
+    detail = row["detail"] if isinstance(row["detail"], dict) else {"detail": row["detail"]}   # a hand-written row
+    pairs += sorted(detail.items())
     return "".join(f"<span><b>{html.escape(str(key))}</b>{html.escape(value if isinstance(value, str) else json.dumps(value))}"
                    "</span>" for key, value in pairs)
 
@@ -351,6 +355,11 @@ def server(host, port, url):
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
+            # A page in the maintainer's browser whose name resolves here would read the events (DNS rebinding);
+            # the browser sends that name as Host, so only this server's own two names are served.
+            port = self.server.server_address[1]
+            if self.headers.get("Host") not in (f"127.0.0.1:{port}", f"localhost:{port}"):
+                return self._send(400, _problem("Unknown host", f"The page is served as 127.0.0.1:{port} only."))
             address = urllib.parse.urlsplit(self.path)
             if address.path != "/":
                 return self._send(404, _problem("Not found", "The page has one address, /."))
@@ -360,11 +369,11 @@ def server(host, port, url):
                 return self._send(400, _problem("Unknown filter", str(bad)))
             try:
                 with psycopg.connect(url, connect_timeout=CONNECT_TIMEOUT) as conn:
-                    body = page(events(conn, **filters), *counts(conn, filters), filters)
+                    rows, tallies = events(conn, **filters), counts(conn, filters)
             except psycopg.Error as failed:
                 # The class only: a driver's message can carry the host and the login's name.
                 return self._send(502, _problem("The store did not answer", type(failed).__name__))
-            return self._send(200, body)
+            return self._send(200, page(rows, *tallies, filters))
 
         def _send(self, status, body):
             data = body.encode()
@@ -383,19 +392,14 @@ def server(host, port, url):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=PORT)
     args = parser.parse_args(argv)
     url = os.environ.get(URL)
     if not url:
         print(f"{URL} is not set: it holds the viewer login's connection string", file=sys.stderr)
         raise SystemExit(2)
-    try:
-        serving = server(args.host, args.port, url)
-    except ViewerError as refused:
-        print(refused, file=sys.stderr)
-        raise SystemExit(2) from None
-    print(f"Events: http://{args.host}:{serving.server_address[1]}  (Ctrl-C stops it)")
+    serving = server("127.0.0.1", args.port, url)
+    print(f"Events: http://127.0.0.1:{serving.server_address[1]}  (Ctrl-C stops it)")
     with serving, contextlib.suppress(KeyboardInterrupt):
         serving.serve_forever()
 
