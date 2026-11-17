@@ -357,3 +357,14 @@ def test_dependabot_keeps_the_pinned_actions_current():
     assert actions["schedule"]["interval"] == "weekly"
     # Its pull request titles become commits on main, which carry a conventional prefix (CONTRIBUTING.md W4, 4.8).
     assert actions["commit-message"]["prefix"] == "ci"
+
+
+def test_the_pin_check_reads_every_workflow_file(tmp_path):
+    # The allow-list admits any .github/workflows/*.yml, so a second workflow must be held to the same pin (#183).
+    pinned = "name: a\njobs:\n  a:\n    steps:\n      - uses: actions/checkout@" + "3" * 40 + "\n"
+    (tmp_path / "ci.yml").write_text(pinned)
+    (tmp_path / "release.yml").write_text(
+        "name: b\njobs:\n  b:\n    steps:\n      - uses: actions/checkout@v7\n      - run: echo ok\n"
+        "  c:\n    uses: owner/repo/.github/workflows/shared.yml@main\n")
+    assert unpinned_actions(tmp_path) == [
+        "release.yml: actions/checkout@v7", "release.yml: owner/repo/.github/workflows/shared.yml@main"]
