@@ -38,8 +38,14 @@ HIDDEN = [
     "custom_build/guards/.env",
     "custom_build/guards/notes.md",
     "custom_build/guards/__pycache__/write_gate.cpython-314.pyc",
+    "evals/.env",
+    "evals/longmemeval_s_cleaned.json",   # the 280 MB data file is never committed (ARCHITECTURE.md 3.8)
+    "evals/__pycache__/longmemeval.cpython-314.pyc",
+    "eval-report/report.json",
 ]
 VISIBLE = [
+    "evals/new_runner.py",
+    "evals/longmemeval.toml",
     "tests/test_new.py",
     ".github/workflows/new.yml",
     "migrations/0002_next.sql",
