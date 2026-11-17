@@ -5,6 +5,7 @@ Its login joins `memory_viewer` (migration 0009), which may select from memory.e
 """
 
 import datetime
+import http.client
 import re
 import threading
 import urllib.error
@@ -281,3 +282,21 @@ def test_a_rows_code_and_machine_filter_by_themselves(db, page):
 def test_the_page_says_when_it_was_read(page):
     # It does not refresh itself, so it says how old it is.
     assert re.search(r"As of \d{1,2}:\d\d:\d\d [AP]M E[SD]T", page()[1])
+
+
+def test_another_hosts_name_is_refused_on_the_pages_own_port(db, page):
+    # The rebinding request itself: the attacker's name with this server's real port.
+    _add(db, "job.failed", reason="for the maintainer only")
+    status, body = page("/", host=f"evil.example:{page.port}")
+    assert status == 400
+    assert "for the maintainer only" not in body
+
+
+def test_a_request_with_no_host_is_refused(page):
+    conn = http.client.HTTPConnection("127.0.0.1", page.port, timeout=10)
+    try:
+        conn.putrequest("GET", "/", skip_host=True)
+        conn.endheaders()
+        assert conn.getresponse().status == 400
+    finally:
+        conn.close()

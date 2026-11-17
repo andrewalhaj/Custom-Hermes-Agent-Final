@@ -496,6 +496,15 @@ def test_a_first_migration_without_the_role_statements_the_runner_removes_fails_
         run(tmp_path, dataset, ollama, typesafe)
 
 
+def test_a_role_statement_whose_migration_is_gone_fails_the_run_by_its_number(
+        tmp_path, dataset, ollama, typesafe, monkeypatch):
+    # 0009's role is made once per run too (#255); without the file the run stops and names it.
+    monkeypatch.setattr(longmemeval, "MIGRATIONS",
+                        [path for path in longmemeval.MIGRATIONS if not path.name.startswith("0009")])
+    with pytest.raises(longmemeval.EvalError, match="0009"):
+        run(tmp_path, dataset, ollama, typesafe)
+
+
 NO_EXTRACTION = WRAPPER.replace('''def fake_call_llm(**kwargs):''', '''def fake_call_llm(**kwargs):
     raise RuntimeError("an ask-only pass called a model")''')
 
