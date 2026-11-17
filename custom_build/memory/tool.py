@@ -64,9 +64,11 @@ SEARCH_SCHEMA = {
 
 def memory_search(args, *, machine, session_id, turn, embedder, judge_at, connect):
     """Run the search tool (3.5 point 7): {"results": [...]} or {"error": code}, never an empty list for a failure.
-    An empty query is a failure too: with an `error` field Hermes reports the call as an error, so no guard
-    counts it as a search (#187)."""
-    query = redact_sensitive_text(str(args.get("query", "")), force=True)   # it goes to Ollama and the store
+    A query that is empty, or not text, searches nothing and is returned with an `error` field too, so Hermes
+    reports the call as an error and no guard counts it as a search (#187). It is the model's misuse, not a
+    failure of the build: it has no code and is not recorded."""
+    query = args.get("query")
+    query = redact_sensitive_text(query, force=True) if isinstance(query, str) else ""   # it goes to Ollama and the store
     if not query.strip():
         return {"error": "query is empty"}
     wanted = write_path.load()["recall"]["results"]
