@@ -17,6 +17,8 @@ UNATTENDED_MODES = ("cron_mode", "single_query_mode", "unattended_mode")
 # Seconds. Below it Hermes may skip a slow guard and let its turn through; at 0 it runs hooks with no
 # deadline, so a hung guard hangs the turn. #75 settled on 30 or more (#69).
 HOOK_TIMEOUT_FLOOR = 30
+# The newest file in migrations/ this plugin was built against (tests/test_schema_level.py keeps them in step).
+STORE_LEVEL = 6
 
 
 def load_problems():
@@ -71,6 +73,23 @@ def unsafe_settings():
     return found
 
 
+def store_behind(conn):
+    """Why the store is behind the migrations this plugin needs, or "" when it is not (`db.behind`).
+
+    A store ahead of the plugin passes: each migration works with the plugin deployed before it
+    (CONTRIBUTING.md rule C10).
+    """
+    try:
+        row = conn.execute("select level from memory.schema_level").fetchone()
+    except psycopg.errors.UndefinedTable:
+        return (f"the store has no memory.schema_level, so it is before migration 0006; the plugin needs "
+                f"migration {STORE_LEVEL}")
+    level = row[0] if row else None
+    if level is None or level < STORE_LEVEL:
+        return f"the store is at migration {level}; the plugin needs migration {STORE_LEVEL}"
+    return ""
+
+
 def installed_profiles():
     """The names of every Hermes profile on this host, parked and standalone ones included.
 
@@ -118,6 +137,9 @@ def run(ctx):
         if unsafe := "; ".join(unsafe_settings()):
             failures.record(conn, "config.unsafe", "failed", source=machine, reason=unsafe)
             failed.append(f"config.unsafe ({unsafe})")
+        if behind := store_behind(conn):
+            failures.record(conn, "db.behind", "failed", source=machine, reason=behind)
+            failed.append(f"db.behind ({behind}): apply the pending migrations first (OPERATIONS.md section 7)")
 
     try:
         failures.run_job("startup-check", check, connect=lambda: psycopg.connect(url, autocommit=True), source=machine)
