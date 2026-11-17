@@ -14,6 +14,12 @@
 !/migrations/
 !/custom_build/
 !/.githooks/
+!/evals/
+
+# The eval runner's code and pinned data reference; never its data file or reports (ARCHITECTURE.md 3.8).
+/evals/*
+!/evals/*.py
+!/evals/*.toml
 
 /.github/*
 !/.github/workflows/
