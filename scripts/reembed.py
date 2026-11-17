@@ -76,21 +76,27 @@ def store(owner_url, key, *, backup, url=None, path=None, batch=BATCH):
     register_redaction_patterns(REDACTION_PATTERNS)   # the plugin's own, as its load registers them
     cap = write_path.load()["embed"]["store_chars"]
     redacted = []
-    with psycopg.connect(owner_url) as conn, conn.transaction():
-        rows = conn.execute("select id, body, embedding::text, embedding_model from memory.facts order by id").fetchall()
-        backup.write_text(json.dumps([{"id": str(fact_id), "embedding": vector, "embedding_model": model}
-                                      for fact_id, _, vector, model in rows]), encoding="utf-8")
-        for start in range(0, len(rows), batch):
-            part = rows[start:start + batch]
-            texts = [redact_sensitive_text(body, force=True) for _, body, _, _ in part]
-            redacted += [str(fact_id) for (fact_id, body, _, _), text in zip(part, texts, strict=True) if text != body]
-            vectors = hosted.vectors([text[:cap] for text in texts], timeout=TIMEOUT)
-            for (fact_id, _, _, _), vector in zip(part, vectors, strict=True):
-                conn.execute("update memory.facts set embedding = %s, embedding_model = %s where id = %s",
-                             (str(vector), embedding.HOSTED_BUILD, fact_id))
-        if other := conn.execute("select count(*) from memory.facts where embedding_model <> %s",
-                                 (embedding.HOSTED_BUILD,)).fetchone()[0]:
-            raise ReembedError(f"{other} facts still hold another build; nothing was written")
+    try:
+        with psycopg.connect(owner_url) as conn, conn.transaction():
+            rows = conn.execute("select id, body, embedding::text, embedding_model from memory.facts order by id"
+                                ).fetchall()
+            backup.write_text(json.dumps([{"id": str(fact_id), "embedding": vector, "embedding_model": model}
+                                          for fact_id, _, vector, model in rows]), encoding="utf-8")
+            for start in range(0, len(rows), batch):
+                part = rows[start:start + batch]
+                texts = [redact_sensitive_text(body, force=True) for _, body, _, _ in part]
+                redacted += [str(fact_id) for (fact_id, body, _, _), text in zip(part, texts, strict=True)
+                             if text != body]
+                vectors = hosted.vectors([text[:cap] for text in texts], timeout=TIMEOUT)
+                for (fact_id, _, _, _), vector in zip(part, vectors, strict=True):
+                    conn.execute("update memory.facts set embedding = %s, embedding_model = %s where id = %s",
+                                 (str(vector), embedding.HOSTED_BUILD, fact_id))
+            if other := conn.execute("select count(*) from memory.facts where embedding_model <> %s",
+                                     (embedding.HOSTED_BUILD,)).fetchone()[0]:
+                raise ReembedError(f"{other} facts still hold another build; nothing was written")
+    except BaseException:   # rolled back: the store is as the backup says, so the backup goes, and a retry may run
+        backup.unlink(missing_ok=True)
+        raise
     return {"facts": len(rows), "redacted": redacted}
 
 

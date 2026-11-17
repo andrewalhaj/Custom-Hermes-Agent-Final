@@ -37,9 +37,6 @@ import psycopg
 import yaml
 from psycopg import sql
 
-from custom_build.memory.embedding import HOSTED_BUILD
-from scripts import reembed
-
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 PLUGIN = ROOT / "custom_build"
 MIGRATIONS = sorted((ROOT / "migrations").glob("*.sql"))
@@ -299,18 +296,45 @@ def again(entry, *, name, postgres, password, command, template, judge_model, ju
     """Ask one question of its kept store again, from a fresh Hermes home and with no ingest, so no extraction
     and no digest (#242); its scores count only the events of this ask. On the hosted route, a store that
     holds another build is first re-embedded through scripts/reembed, its old vectors backed up in `backups`
-    (#239)."""
+    (#239); what it re-embedded is kept in the result's `reembedded`, None when nothing needed it."""
     owner, agent = _urls(postgres, name, password)
     with psycopg.connect(owner) as conn:
         since = conn.execute("select coalesce(max(id), 0) from memory.events").fetchone()[0]
-        moved = conn.execute("select count(*) from memory.facts where embedding_model <> %s",
-                             (HOSTED_BUILD,)).fetchone()[0] == 0
-    if embedding == "deepinfra" and not moved:
-        pathlib.Path(backups).mkdir(parents=True, exist_ok=True)
-        reembed.store(owner, os.environ["DEEPINFRA_API_KEY"],
-                      backup=pathlib.Path(backups) / f"backup-{entry['question_id']}.json")
+    reembedded = _reembed(entry, owner, backups) if embedding == "deepinfra" else None
     with _question(entry, agent, template, judge_model, judge_key, embedding) as (question, home, work, env):
-        return _asked(entry, owner, command, question, home, work, env, since=since, stopped=None)
+        return {**_asked(entry, owner, command, question, home, work, env, since=since, stopped=None),
+                "reembedded": reembedded}
+
+
+def _check_reference():
+    """An EvalError unless the hosted route's recorded reference checks, before any question starts: without
+    it every replay would extract on Haiku and then fail every store (#239 review)."""
+    from custom_build.memory import embedding
+
+    try:
+        embedding.HostedEmbedder(os.environ.get("DEEPINFRA_API_KEY")).check_reference(timeout=30)
+    except (embedding.EmbedUnavailable, embedding.ModelMismatch) as exc:
+        raise EvalError(f"the hosted route's reference does not check: {exc}") from exc
+
+
+def _reembed(entry, owner, backups):
+    """Move a kept store to the hosted build, unless no fact holds another; an EvalError when it cannot."""
+    # Imported here: the plugin loads Hermes, which writes into its home, and a local run needs neither (#239 review).
+    from custom_build.memory import embedding
+    from scripts import reembed
+
+    with psycopg.connect(owner) as conn:
+        if not conn.execute("select count(*) from memory.facts where embedding_model <> %s",
+                            (embedding.HOSTED_BUILD,)).fetchone()[0]:
+            return None
+    pathlib.Path(backups).mkdir(parents=True, exist_ok=True)
+    try:
+        return reembed.store(owner, os.environ["DEEPINFRA_API_KEY"],
+                             backup=pathlib.Path(backups) / f"backup-{entry['question_id']}.json")
+    except psycopg.Error as exc:   # its message can hold the connection string
+        raise EvalError(f"re-embedding {entry['question_id']}: {type(exc).__name__} from the store") from exc
+    except (reembed.ReembedError, embedding.EmbedUnavailable, embedding.ModelMismatch) as exc:
+        raise EvalError(f"re-embedding {entry['question_id']}: {exc}") from exc
 
 
 def _asked(entry, owner, command, question, home, work, env, *, since, stopped):
@@ -509,6 +533,8 @@ def run(*, data, sha256, questions, seed, yes, postgres, out, replay_command=Non
             return {"estimate": {"questions": len(entries), "haiku_calls_at_least": 0,
                                  "judge_calls_at_least": 2 * len(entries)}}
         return {"estimate": estimate(entries)}
+    if embedding == "deepinfra":
+        _check_reference()
     command = replay_command or [sys.executable, "-m", "evals.replay"]
     results, stopped, made = [], None, False
     kept = {} if keep else None
