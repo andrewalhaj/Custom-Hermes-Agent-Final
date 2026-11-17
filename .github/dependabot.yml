@@ -6,3 +6,5 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    commit-message:
+      prefix: ci   # its pull request title becomes the commit on main (CONTRIBUTING.md 4.8)
