@@ -277,7 +277,7 @@ def test_open_items_and_the_search_share_the_eight_results(home, db, owner, olla
 
 def test_a_question_about_open_work_with_nothing_open_gets_the_search_alone(home, db, owner, ollama):
     _add(owner, "Host fact 0.", BASE, ollama.build)
-    _digest(owner, "A session with nothing left open.", ollama.build, days_ago=1)
+    _digest(owner, "A session with no work outstanding.", ollama.build, days_ago=1)   # no word shared with OPEN
     ollama.vectors = {OPEN: BASE}
     bodies = [note.split("] ", 1)[1] for note in _notes(recall(home, db, ollama.url, OPEN)["notes"])]
-    assert bodies[0] == "Host fact 0." and all("Open item" not in body for body in bodies)
+    assert bodies == ["Host fact 0.", "A session with no work outstanding."]   # the search's notes, no open items
