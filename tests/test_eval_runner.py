@@ -366,7 +366,29 @@ def test_a_stop_in_a_parallel_run_starts_no_new_question(tmp_path, dataset, olla
 def fake_call_llm(**kwargs):
     raise Refusal("this account is restricted")''')
     report = run(tmp_path, dataset, ollama, typesafe, parallel=2, replay_command=[sys.executable, "-c", refusing])
-    assert report["stopped"] == "extract.refused" and report["questions"] <= 2
+    # Both start before either is refused, so both are reported (#219 review: "<= 2" also passed with none).
+    assert report["stopped"] == "extract.refused" and report["questions"] == 2
+
+
+@pytest.mark.parametrize("parallel", [1, 2])
+def test_ctrl_c_while_questions_run_keeps_the_ones_already_measured(tmp_path, dataset, ollama, typesafe, monkeypatch,
+                                                                    parallel):
+    # #219 review: results were collected only after the wait, so Ctrl-C reported none, even at parallel 1.
+    def measured(entry, **kwargs):
+        return {"question_id": entry["question_id"], "question_type": entry["question_type"], "abstention": False,
+                "notes": 0, "recall_failed": False, "first_hit": None, "codes": [], "failures": [],
+                "embedding_build": None, "stopped": None}
+
+    def interrupted(futures, **kwargs):
+        futures[0].result()   # the first question is measured, then Ctrl-C
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(longmemeval, "one", measured)
+    monkeypatch.setattr(longmemeval.concurrent.futures, "wait", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        run(tmp_path, dataset, ollama, typesafe, parallel=parallel)
+    written = json.loads((tmp_path / "report" / "report.json").read_text(encoding="utf-8"))
+    assert written["questions"] >= 1 and written["stopped"].startswith("crashed: KeyboardInterrupt")
 
 
 def test_a_first_migration_without_the_role_statements_the_runner_removes_fails_the_run(
