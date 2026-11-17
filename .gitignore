@@ -15,6 +15,7 @@
 !/custom_build/
 !/.githooks/
 !/evals/
+!/scripts/
 
 # The eval runner's code and pinned data reference; never its data file or reports (ARCHITECTURE.md 3.8).
 /evals/*
@@ -51,3 +52,7 @@
 /custom_build/guards/*
 !/custom_build/guards/*.py
 !/custom_build/guards/*.toml
+
+# The operator's deploy script (OPERATIONS.md section 8); never its settings.
+/scripts/*
+!/scripts/*.py
