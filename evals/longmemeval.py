@@ -38,6 +38,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 PLUGIN = ROOT / "custom_build"
 MIGRATIONS = sorted((ROOT / "migrations").glob("*.sql"))
 GROUP_ROLES = ("memory_agent", "memory_maintenance")
+MACHINE = "eval"   # the eval host's machine name, and so its login's name
 CONFIG = pathlib.Path(__file__).with_suffix(".toml")   # the pinned revision and hash of the data file
 PROJECT_ORIGIN = "https://eval.invalid/longmemeval.git"   # every replay's project
 DATE_FORMAT = "%Y/%m/%d (%a) %H:%M"   # LongMemEval's haystack_dates
@@ -110,12 +111,12 @@ def database(postgres):
     The database, the login and the migrations' group roles are dropped afterwards. The group roles are the
     whole server's, so a server that already has them is refused, never touched: it is not a throwaway one."""
     name = f"eval_{uuid.uuid4().hex[:12]}"
-    login, password = f"{name}_agent", uuid.uuid4().hex
+    login, password = MACHINE, uuid.uuid4().hex   # the store admits events only under the login's name (#149)
     info = psycopg.conninfo.conninfo_to_dict(postgres)
     owner = psycopg.conninfo.make_conninfo(**{**info, "dbname": name})
     with psycopg.connect(postgres, autocommit=True) as admin:
         found = [row[0] for row in admin.execute("select rolname from pg_roles where rolname = any(%s)",
-                                                 (list(GROUP_ROLES),))]
+                                                 ([MACHINE, *GROUP_ROLES],))]
         if found:
             raise EvalError(f"this Postgres already has {', '.join(found)}: point the runner at a throwaway "
                             "server; it never drops a role it did not create")
@@ -149,7 +150,7 @@ def hermes_home(tmp, template, judge_model):
     # Enabled as an agent host enables it: only then does it register its own route for extraction (#148)
     plugins["enabled"] = sorted({*(plugins.get("enabled") or ()), "custom_build"})
     entries = plugins.setdefault("entries", {})
-    entries.setdefault("custom_build", {})["settings"] = {"machine_name": "eval", "judge_model": judge_model}
+    entries.setdefault("custom_build", {})["settings"] = {"machine_name": MACHINE, "judge_model": judge_model}
     config_file.write_text(yaml.safe_dump(config), encoding="utf-8")
     work = tmp / "work"
     subprocess.run(["git", "init", "-q", str(work)], check=True)
