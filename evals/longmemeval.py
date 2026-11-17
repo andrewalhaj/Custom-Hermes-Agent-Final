@@ -171,7 +171,7 @@ def _migrations():
     """Every migration's text, without the role statements `roles()` has already run (#219)."""
     texts = {migration.name[:4]: migration.read_text(encoding="utf-8") for migration in MIGRATIONS}
     for number, statements in ROLE_STATEMENTS.items():
-        if not all(statement in texts[number] for statement in statements):
+        if not all(statement in texts.get(number, "") for statement in statements):
             raise EvalError(f"migration {number} no longer has {statements}: update the eval runner's roles()")
         for statement in statements:
             texts[number] = texts[number].replace(statement, "", 1)
