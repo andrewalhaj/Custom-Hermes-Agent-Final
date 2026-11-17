@@ -261,8 +261,9 @@ def test_an_extraction_that_errors_on_every_call_stops_the_run_after_five_calls(
     assert report["stopped"] == "extract.error" and _events(report, "extract.error") == 5
 
 
-def test_a_few_extraction_errors_among_answered_calls_do_not_stop_the_run(tmp_path, ollama, typesafe):
-    # Guards the rule's edge: only when all of a question's first five calls fail is the failure systematic.
+def test_four_failures_in_the_first_five_calls_do_not_stop_the_run(tmp_path, ollama, typesafe):
+    # Guards the rule's edge (#171 review): only when all of a question's first five calls fail is the failure
+    # systematic; four failures and an answer is not.
     typesafe.default = 0.9
     data = tmp_path / "long.json"
     data.write_text(json.dumps(_chatty(10)), encoding="utf-8")
@@ -270,20 +271,22 @@ def test_a_few_extraction_errors_among_answered_calls_do_not_stop_the_run(tmp_pa
 
 def fake_call_llm(**kwargs):
     calls.append(1)
-    if len(calls) == 2:
-        raise ValueError("a one-off failure")
+    if len(calls) <= 4:
+        raise ValueError("a failure that passes")
     return answered(**kwargs)
 
 def answered(**kwargs):''')
     report = run(tmp_path, data, ollama, typesafe, questions=1, replay_command=[sys.executable, "-c", flaky],
                  sha256=hashlib.sha256(data.read_bytes()).hexdigest())
-    assert not report.get("stopped") and _events(report, "extract.error") == 1
+    assert not report.get("stopped") and _events(report, "extract.error") == 4
 
 
 def test_the_report_lists_each_failure_reason_with_its_count(tmp_path, dataset, ollama, typesafe):
     # A reason was found only by replaying a turn by hand: the databases are dropped after each question.
     report = run(tmp_path, dataset, ollama, typesafe, replay_command=[sys.executable, "-c", ERRORING])
-    reason = "ValueError: OAuth provider refuses conflicting native auth/backend overrides: ANTHROPIC_BASE_URL"
+    # The questions have 2, 1 and 2 turns, under five each: none stops, so the count adds across all three.
+    assert not report.get("stopped")
+    reason ="ValueError: OAuth provider refuses conflicting native auth/backend overrides: ANTHROPIC_BASE_URL"
     assert report["failure_reasons"] == [{"code": "extract.error", "reason": reason, "count": 5}]
     assert reason in (tmp_path / "report" / "report.md").read_text(encoding="utf-8")
 
