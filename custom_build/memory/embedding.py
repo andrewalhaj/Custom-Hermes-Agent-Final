@@ -58,6 +58,12 @@ def _other_build(conn, build):
     return row[0] if row else None
 
 
+def moved(cosine, threshold):
+    """The ModelMismatch for a reference vector that moved under its threshold."""
+    return ModelMismatch(f"the reference sentence's vector has moved: cosine {cosine:.4f} with the recorded one, "
+                         f"under {threshold}")
+
+
 def _cosine(a, b):
     norms = math.sqrt(sum(x * x for x in a)) * math.sqrt(sum(y * y for y in b))
     return sum(x * y for x, y in zip(a, b, strict=True)) / norms if norms else 0.0
@@ -148,6 +154,10 @@ class HostedEmbedder:
             raise EmbedUnavailable(f"DeepInfra: {exc!r}") from exc
         if len(vectors) != len(texts):
             raise EmbedUnavailable(f"DeepInfra returned {len(vectors)} vectors for {len(texts)} texts")
+        # A garbled answer: json reads null, text, true and NaN as values a vector cannot hold (#239 review).
+        if not all(isinstance(vector, list) and all(type(x) in (int, float) and math.isfinite(x) for x in vector)
+                   for vector in vectors):
+            raise EmbedUnavailable("DeepInfra returned a vector that is not a list of finite numbers")
         if any(len(vector) != DIMENSIONS for vector in vectors):
             raise ModelMismatch(f"DeepInfra returned vectors of {sorted({len(v) for v in vectors})} numbers, "
                                 f"not {DIMENSIONS}")
@@ -172,8 +182,7 @@ class HostedEmbedder:
         """ModelMismatch unless the service still gives the reference sentence the recorded vector."""
         cosine, threshold = self.reference_cosine(timeout=timeout)
         if cosine < threshold:
-            raise ModelMismatch(f"the reference sentence's vector has moved: cosine {cosine:.4f} with the recorded "
-                                f"one, under {threshold}")
+            raise moved(cosine, threshold)
 
     def check(self, conn, *, timeout):
         self.check_reference(timeout=timeout)

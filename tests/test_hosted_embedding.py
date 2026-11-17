@@ -163,7 +163,7 @@ def test_a_vector_of_another_length_is_a_model_mismatch(deepinfra, reference, db
             embedder.embed(conn, ["a text"], timeout=5)
 
 
-@pytest.mark.parametrize("vector", [[None] * 2560, ["x"] * 2560, [float("nan")] * 2560, [True] * 2560])
+@pytest.mark.parametrize("vector", [[None] * 2560, ["x"] * 2560, [float("nan")] * 2560, [True] * 2560, None])
 def test_a_vector_that_is_not_numbers_is_a_garbled_answer(deepinfra, reference, vector):
     # #239 review: a null or text crashed the cosine, and a NaN passed the threshold check (nan < t is False).
     deepinfra.other = vector

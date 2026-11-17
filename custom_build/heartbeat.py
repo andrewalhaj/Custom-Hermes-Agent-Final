@@ -42,9 +42,8 @@ def beat(conn, machine, *, hosted=None):
         else:
             detail = {"reference_cosine": round(cosine, 6)}
             if cosine < threshold:
-                failure = embedding.ModelMismatch(f"the reference sentence's vector has moved: cosine {cosine:.4f} "
-                                                  f"with the recorded one, under {threshold}")
-    written = failures.record(conn, "host.heartbeat", "ok", source=machine, detail=detail or None)
+                failure = embedding.moved(cosine, threshold)
+    written = failures.record(conn, "host.heartbeat", "ok", source=machine, detail=detail)
     if isinstance(failure, embedding.EmbedRefused):
         failures.record(conn, "embed.refused", "failed", source=machine, reason=str(failure))
     elif isinstance(failure, embedding.EmbedUnavailable):
