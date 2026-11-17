@@ -539,6 +539,61 @@ def test_dropping_a_kept_run_leaves_no_database_or_role_behind(tmp_path, dataset
     assert _nothing_left()
 
 
+def test_asking_a_kept_run_again_counts_only_the_new_asks_events(tmp_path, dataset, ollama, typesafe):
+    # #242 review: a first run that records no failure cannot tell "this ask's events" from "every event".
+    typesafe.default = 0.9
+    kept = tmp_path / "kept"
+    try:
+        run(tmp_path, dataset, ollama, typesafe, keep=True, ids=["q1"], out=kept)
+        name = json.loads((kept / "kept.json").read_text(encoding="utf-8"))["databases"]["q1"]
+        owner = psycopg.conninfo.make_conninfo(os.environ["TEST_DATABASE_URL"], dbname=name)
+        with psycopg.connect(owner, autocommit=True) as conn:   # as if the kept run's ingest had failed once
+            conn.execute("insert into memory.events (code, result, source, reason) values"
+                         " ('extract.error', 'failed', 'eval', 'from the kept run')")
+        again = run(tmp_path, dataset, ollama, typesafe, ask_kept=kept, out=tmp_path / "again")
+    finally:
+        longmemeval.drop_kept(os.environ["TEST_DATABASE_URL"], kept)
+    assert "extract.error" not in again["per_question"][0]["codes"]
+
+
+def test_a_refused_kept_run_leaves_the_earlier_kept_list_as_it_was(tmp_path, dataset, ollama, typesafe):
+    # #242 review: the second run is refused (the first one's roles are still there), and must not overwrite
+    # the list drop_kept() needs.
+    typesafe.default = 0.9
+    kept = tmp_path / "kept"
+    try:
+        run(tmp_path, dataset, ollama, typesafe, keep=True, ids=["q1"], out=kept)
+        listed = (kept / "kept.json").read_text(encoding="utf-8")
+        with pytest.raises(longmemeval.EvalError, match="already has"):
+            run(tmp_path, dataset, ollama, typesafe, keep=True, ids=["q1"], out=kept)
+        assert (kept / "kept.json").read_text(encoding="utf-8") == listed
+    finally:
+        longmemeval.drop_kept(os.environ["TEST_DATABASE_URL"], kept)
+    assert _nothing_left()
+
+
+def test_asking_a_kept_run_again_into_its_own_folder_is_refused(tmp_path, dataset, ollama, typesafe):
+    # #242 review: it would overwrite the kept run's report, the other side of the comparison.
+    kept = tmp_path / "kept"
+    kept.mkdir()
+    (kept / "kept.json").write_text(json.dumps({"databases": {"q1": "eval_000000000000"}}), encoding="utf-8")
+    with pytest.raises(longmemeval.EvalError, match="its own --out"):
+        run(tmp_path, dataset, ollama, typesafe, ask_kept=kept, out=kept)
+
+
+def test_asking_or_dropping_a_folder_with_no_kept_list_says_so(tmp_path, dataset, capsys):
+    for option in ("--ask-kept", "--drop-kept"):
+        with pytest.raises(SystemExit):
+            longmemeval.main(["--data", str(dataset), option, str(tmp_path)])
+        assert "has no kept.json" in capsys.readouterr().err
+
+
+def test_dropping_a_kept_run_needs_no_data_file(tmp_path, capsys):
+    with pytest.raises(SystemExit):
+        longmemeval.main(["--drop-kept", str(tmp_path)])
+    assert "has no kept.json" in capsys.readouterr().err   # past the arguments: --data was not asked for
+
+
 def test_the_report_scores_the_evidence_rank_before_the_rerank(tmp_path, dataset, ollama, typesafe):
     # #242: the pool's rank is decided by the vectors and the word search, not the judge, so it is the measure
     # that isolates an embedding change; recall@5 also moves with the rerank.
