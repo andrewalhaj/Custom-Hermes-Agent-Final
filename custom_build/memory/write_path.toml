@@ -81,7 +81,8 @@ deadline = 6       # seconds for recall in prefetch(), inside Hermes's 8-second 
 [embed]
 recall_chars = 1200   # about 3.6 s on the agent host
 store_chars = 4000
-store_timeout = 30   # seconds; storing is off the turn's path, but a digest at a compression is waited for
+store_timeout = 30   # seconds, for extraction and digests only; a store inside the turn (memory_store, the mirror)
+                     # or the queue's retry at a start keeps recall's 5 s. A digest at a compression is waited for.
 
 # The rerank (section 3.4 step 4, #165): the judge's probability that each recalled note helps answer the
 # user's message, one Noul per candidate with the note's own text in its question ({note}), the message as

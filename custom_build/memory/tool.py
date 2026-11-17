@@ -29,7 +29,7 @@ from . import (
 )
 
 BASES = ("user_stated", "tool_observed", "assistant_inferred")
-TIMEOUT = 5   # seconds for each answer from Ollama in recall; storing has its own, write_path's store_timeout (#238)
+TIMEOUT = 5   # seconds for each answer from Ollama on the turn or at a start; extraction and digests use store_timeout (#238)
 RERANK_MARGIN = 0.3   # seconds kept back from the recall deadline, to deliver the notes after a rerank
 ACTION_QUERY = pathlib.Path(__file__).resolve().parent / "action_query.toml"
 
@@ -311,7 +311,7 @@ def extract(user_content, messages, *, machine, session_id, turn, embedder, judg
             fact = store.Fact(body=redact_sensitive_text(body, force=True), basis=basis, project=fields["project"],
                               source=machine, session_id=session_id, source_turn=turn, origin="extracted",
                               gate=turn_source)
-            _save(conn, fact, embedder=embedder, judge_at=judge_at)
+            _save(conn, fact, embedder=embedder, judge_at=judge_at, timeout=write_path.load()["embed"]["store_timeout"])
 
     _with_store(machine, session_id, connect, work)
 
@@ -357,7 +357,7 @@ def _digest_from(pending, *, embedder, judge_at, connect):
         fact = store.Fact(body=body, basis="assistant_inferred", project=fields["project"], source=machine,
                           session_id=session_id, source_turn=pending["turn"], origin="digest", kind="digest",
                           written_at=pending["written_at"])
-        _save(conn, fact, embedder=embedder, judge_at=judge_at)
+        _save(conn, fact, embedder=embedder, judge_at=judge_at, timeout=write_path.load()["embed"]["store_timeout"])
 
     _with_store(machine, session_id, connect, work)
 
@@ -416,9 +416,9 @@ def _with_store(machine, session_id, connect, work):
         return work(conn)
 
 
-def _save(conn, fact, *, embedder, judge_at):
+def _save(conn, fact, *, embedder, judge_at, timeout=TIMEOUT):
     """attempt(), with a fact the judge could not decide on queued for retry (store.gate_error)."""
-    outcome = attempt(conn, fact, embedder=embedder, judge_at=judge_at)
+    outcome = attempt(conn, fact, embedder=embedder, judge_at=judge_at, timeout=timeout)
     if outcome.get("error") in ("judge.error", "judge.timeout"):
         queue.add(fact)
         failures.record(conn, "store.gate_error", "failed", source=fact.source, session_id=fact.session_id,
@@ -427,8 +427,11 @@ def _save(conn, fact, *, embedder, judge_at):
     return outcome
 
 
-def attempt(conn, fact, *, embedder, judge_at):
-    """store.store(), with each failure it expects recorded under its code and returned as {"error": code}."""
+def attempt(conn, fact, *, embedder, judge_at, timeout=TIMEOUT):
+    """store.store(), with each failure it expects recorded under its code and returned as {"error": code}.
+    `timeout` bounds the embedding: recall's 5 seconds by default, for a store inside the turn (store_fact, the
+    mirror) or a session's start (the queue's retry); extraction and digests, off the turn, pass the store's
+    longer limit (#238)."""
     fields = {"source": fact.source, "project": fact.project, "session_id": fact.session_id, "turn": fact.source_turn}
     try:
         if fact.gate is not None or fact.kind == "digest":   # gated: unless the same text is already live
@@ -436,8 +439,7 @@ def attempt(conn, fact, *, embedder, judge_at):
                 return {"already_stored": existing}
             if not _kept(fact, judge_at):
                 return _dropped(conn, fact, "the judge did not keep it", fields)
-        outcome = store.store(conn, fact, embedder=embedder, judge=judge_at,
-                              timeout=write_path.load()["embed"]["store_timeout"])   # off the turn's path (#238)
+        outcome = store.store(conn, fact, embedder=embedder, judge=judge_at, timeout=timeout)
         if "dropped" in outcome:   # a later digest of the session is live, or another committed first (#156)
             return _dropped(conn, fact, outcome["dropped"], fields)
         return outcome
