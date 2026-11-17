@@ -469,7 +469,7 @@ def test_ctrl_c_while_questions_run_keeps_the_ones_already_measured(tmp_path, da
         return {"question_id": entry["question_id"], "question_type": entry["question_type"], "abstention": False,
                 "notes": 0, "recall_failed": False, "first_hit": None, "codes": [], "failures": [],
                 "evidence_rows": 0, "evidence_stored": 0, "pool": True, "pool_hit": None, "pool_best_score": None,
-                "embedding_build": None, "stopped": None}
+                "fact_pairs": {"without_judge": 0, "ask_judge_from": 0}, "embedding_build": None, "stopped": None}
 
     def interrupted(futures, **kwargs):
         futures[0].result()   # the first question is measured, then Ctrl-C
@@ -494,6 +494,140 @@ def test_a_first_migration_without_the_role_statements_the_runner_removes_fails_
     monkeypatch.setattr(longmemeval, "MIGRATIONS", [changed, *longmemeval.MIGRATIONS[1:]])
     with pytest.raises(longmemeval.EvalError, match="0001"):
         run(tmp_path, dataset, ollama, typesafe)
+
+
+NO_EXTRACTION = WRAPPER.replace('''def fake_call_llm(**kwargs):''', '''def fake_call_llm(**kwargs):
+    raise RuntimeError("an ask-only pass called a model")''')
+
+
+def _nothing_left():
+    with psycopg.connect(os.environ["TEST_DATABASE_URL"]) as admin:
+        return (admin.execute("select count(*) from pg_database where datname like 'eval_%'").fetchone()[0],
+                admin.execute("select count(*) from pg_roles where rolname in ('memory_agent', 'memory_maintenance')"
+                              " or rolname = 'eval'").fetchone()[0]) == (0, 0)
+
+
+def test_a_kept_run_asked_again_scores_each_question_as_the_run_did_without_extracting(
+        tmp_path, dataset, ollama, typesafe):
+    # #242 (for #239's comparison): the same stored facts asked twice, so only what changed between the two
+    # passes can move the scores, not extraction's or the judge gate's variance between runs.
+    typesafe.default = 0.9
+    kept = tmp_path / "kept"
+    try:
+        first = run(tmp_path, dataset, ollama, typesafe, keep=True, out=kept)
+        assert sorted(json.loads((kept / "kept.json").read_text(encoding="utf-8"))["databases"]) == ["q1", "q2_abs",
+                                                                                                    "q3"]
+        again = run(tmp_path, dataset, ollama, typesafe, ask_kept=kept, out=tmp_path / "again",
+                    replay_command=[sys.executable, "-c", NO_EXTRACTION])
+    finally:
+        longmemeval.drop_kept(os.environ["TEST_DATABASE_URL"], kept)
+    same = ("question_id", "first_hit", "notes", "pool_hit", "evidence_rows", "evidence_stored")
+    assert [{k: r[k] for k in same} for r in again["per_question"]] == [{k: r[k] for k in same}
+                                                                         for r in first["per_question"]]
+    assert again["answerable"] == first["answerable"]
+    assert not any(code.startswith(("extract.", "digest.")) for r in again["per_question"] for code in r["codes"])
+
+
+def test_dropping_a_kept_run_leaves_no_database_or_role_behind(tmp_path, dataset, ollama, typesafe):
+    typesafe.default = 0.9
+    kept = tmp_path / "kept"
+    try:
+        run(tmp_path, dataset, ollama, typesafe, keep=True, out=kept)
+        assert not _nothing_left()   # kept until dropped
+    finally:
+        longmemeval.drop_kept(os.environ["TEST_DATABASE_URL"], kept)
+    assert _nothing_left()
+
+
+def test_asking_a_kept_run_again_counts_only_the_new_asks_events(tmp_path, dataset, ollama, typesafe):
+    # #242 review: a first run that records no failure cannot tell "this ask's events" from "every event".
+    typesafe.default = 0.9
+    kept = tmp_path / "kept"
+    try:
+        run(tmp_path, dataset, ollama, typesafe, keep=True, ids=["q1"], out=kept)
+        name = json.loads((kept / "kept.json").read_text(encoding="utf-8"))["databases"]["q1"]
+        owner = psycopg.conninfo.make_conninfo(os.environ["TEST_DATABASE_URL"], dbname=name)
+        with psycopg.connect(owner, autocommit=True) as conn:   # as if the kept run's ingest had failed once
+            conn.execute("insert into memory.events (code, result, source, reason) values"
+                         " ('extract.error', 'failed', 'eval', 'from the kept run')")
+        again = run(tmp_path, dataset, ollama, typesafe, ask_kept=kept, out=tmp_path / "again")
+    finally:
+        longmemeval.drop_kept(os.environ["TEST_DATABASE_URL"], kept)
+    assert "extract.error" not in again["per_question"][0]["codes"]
+
+
+def test_a_refused_kept_run_leaves_the_earlier_kept_list_as_it_was(tmp_path, dataset, ollama, typesafe):
+    # #242 review: the second run is refused (the first one's roles are still there), and must not overwrite
+    # the list drop_kept() needs.
+    typesafe.default = 0.9
+    kept = tmp_path / "kept"
+    try:
+        run(tmp_path, dataset, ollama, typesafe, keep=True, ids=["q1"], out=kept)
+        listed = (kept / "kept.json").read_text(encoding="utf-8")
+        with pytest.raises(longmemeval.EvalError, match="already has"):
+            run(tmp_path, dataset, ollama, typesafe, keep=True, ids=["q1"], out=kept)
+        assert (kept / "kept.json").read_text(encoding="utf-8") == listed
+    finally:
+        longmemeval.drop_kept(os.environ["TEST_DATABASE_URL"], kept)
+    assert _nothing_left()
+
+
+def test_asking_a_kept_run_again_into_its_own_folder_is_refused(tmp_path, dataset, ollama, typesafe):
+    # #242 review: it would overwrite the kept run's report, the other side of the comparison.
+    kept = tmp_path / "kept"
+    kept.mkdir()
+    (kept / "kept.json").write_text(json.dumps({"databases": {"q1": "eval_000000000000"}}), encoding="utf-8")
+    with pytest.raises(longmemeval.EvalError, match="its own --out"):
+        run(tmp_path, dataset, ollama, typesafe, ask_kept=kept, out=kept)
+
+
+def test_asking_or_dropping_a_folder_with_no_kept_list_says_so(tmp_path, dataset, capsys):
+    for option in ("--ask-kept", "--drop-kept"):
+        with pytest.raises(SystemExit):
+            longmemeval.main(["--data", str(dataset), option, str(tmp_path)])
+        assert "has no kept.json" in capsys.readouterr().err
+
+
+def test_dropping_a_kept_run_needs_no_data_file(tmp_path, capsys):
+    with pytest.raises(SystemExit):
+        longmemeval.main(["--drop-kept", str(tmp_path)])
+    assert "has no kept.json" in capsys.readouterr().err   # past the arguments: --data was not asked for
+
+
+def test_the_report_scores_the_evidence_rank_before_the_rerank(tmp_path, dataset, ollama, typesafe):
+    # #242: the pool's rank is decided by the vectors and the word search, not the judge, so it is the measure
+    # that isolates an embedding change; recall@5 also moves with the rerank.
+    typesafe.default = 0.9
+    report = run(tmp_path, dataset, ollama, typesafe)
+    assert report["pool"] == {"count": 2, "recall_at_5": 1.0, "mrr": 1.0}
+
+
+def test_supersede_pairs_count_the_facts_whose_cosine_reaches_each_threshold(db):
+    # #242: the supersede check also reads the vectors (3.6: 0.92 without the judge, 0.80 with it), so a
+    # different build could supersede differently; the counts show it.
+    def insert(owner, body, vector, kind="fact"):
+        owner.execute("insert into memory.facts (body, body_hash, kind, origin, basis, project, source, embedding,"
+                      " embedding_model) values (%s, %s, %s, %s, 'user_stated', 'p1', 'host-a', %s, 'm')",
+                      (body, body, kind, "digest" if kind == "digest" else "explicit",
+                       "[" + ",".join(map(str, vector)) + "]"))
+
+    def vector(*head):
+        return [*head, *[0.0] * (2560 - len(head))]
+
+    with psycopg.connect(db["owner"], autocommit=True) as owner:
+        insert(owner, "a", vector(1.0, 0.0))
+        insert(owner, "b", vector(1.0, 0.0))     # cosine 1 with a
+        insert(owner, "c", vector(0.85, 0.527))  # cosine 0.85 with a and b
+        insert(owner, "d", vector(0.0, 1.0))     # cosine under 0.80 with every other
+        insert(owner, "e", vector(1.0, 0.0), kind="digest")   # never compared: the check reads facts only
+    assert longmemeval.fact_pairs(db["owner"]) == {"without_judge": 1, "ask_judge_from": 3}
+
+
+@pytest.mark.parametrize("given", [["--ids", "q1"], ["--questions", "3"], ["--seed", "2"], ["--keep"]])
+def test_asking_a_kept_run_again_takes_no_other_choice_of_questions(dataset, capsys, given):
+    with pytest.raises(SystemExit):
+        longmemeval.main(["--data", str(dataset), "--ask-kept", "kept", *given])
+    assert "--ask-kept asks the kept run's questions" in capsys.readouterr().err
 
 
 def test_a_turn_with_no_reply_is_not_synced_as_hermes_never_does():
