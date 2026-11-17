@@ -9,6 +9,7 @@ superuser connection to a throwaway Postgres, as the store tests do.
 
 import hashlib
 import http.server
+import itertools
 import json
 import os
 import pathlib
@@ -335,7 +336,7 @@ def test_with_parallel_two_questions_replay_at_the_same_time(tmp_path, dataset, 
     times = tmp_path / "times.jsonl"
     run(tmp_path, dataset, ollama, typesafe, parallel=2, test_env={"EVAL_TEST_TIMES": str(times)})
     spans = sorted(json.loads(line) for line in times.read_text(encoding="utf-8").splitlines())
-    assert len(spans) == 3 and any(later[0] < earlier[1] for earlier, later in zip(spans, spans[1:]))
+    assert len(spans) == 3 and any(later[0] < earlier[1] for earlier, later in itertools.pairwise(spans))
 
 
 def test_a_parallel_run_scores_as_the_same_questions_one_at_a_time(tmp_path, dataset, ollama, typesafe):
