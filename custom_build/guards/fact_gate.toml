@@ -4,7 +4,8 @@
 
 # log: record each turn whose message asks a checkable question, as fact_gate.armed, and each armed turn
 #      whose reply has no lookup, or gives a procedure or diagnosis with no documentation lookup, as
-#      fact_gate.would_withhold. No reminder is added and nothing is withheld.
+#      fact_gate.would_withhold, and any other armed turn's reply as fact_gate.passed. No reminder is added
+#      and nothing is withheld.
 # off: register no hook.
 # on: refused until the gate can enforce (5.4 item 6).
 mode = "log"
