@@ -187,7 +187,7 @@ def test_pending_migrations_are_listed_and_applied_in_order_after_yes(deploy):
 
 def test_migrations_are_applied_before_the_host_changes(deploy):
     fake = Fake()
-    fake.fail = {"plugins install": 2}
+    fake.fail = {"plugins install": 1}
     fake.go(deploy)
     assert fake.posted == ["0002_b", "0003_c"]
     assert fake.host_steps_at_post == [0, 0]     # nothing had touched the host when either was sent
@@ -340,6 +340,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         status = 500 if self.path.endswith("/broken") else 200
         self.send_response(status)
         self.end_headers()
+        if self.path.endswith("/garbage"):
+            self.wfile.write(b"<html>not json</html>")
+            return
         self.wfile.write(b'{"message": "it broke"}' if status == 500 else b'[{"name": "0001_a"}]')
 
     def log_message(self, *args):
@@ -464,9 +467,16 @@ def test_a_restart_command_that_cannot_start_rolls_back(deploy):
     assert fake.steps() == ["install new", "check", "restart", *BACK]
 
 
-def test_run_gives_a_command_no_terminal_to_wait_on(deploy):
-    done = deploy.run([sys.executable, "-c", "import sys; print(repr(sys.stdin.read()))"], timeout=5)
-    assert done.stdout.strip() == "''"
+def test_run_gives_a_command_no_terminal_to_wait_on(deploy, monkeypatch):
+    given = {}
+
+    def record(argv, **kwargs):     # pytest already closes stdin, so read what run asks for, not what the child sees
+        given.update(kwargs)
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(deploy.subprocess, "run", record)
+    deploy.run(["true"])
+    assert given["stdin"] is subprocess.DEVNULL
 
 
 def test_http_reports_a_host_it_cannot_reach(deploy):
@@ -477,3 +487,77 @@ def test_http_reports_a_host_it_cannot_reach(deploy):
 def test_http_reports_an_answer_that_never_comes(deploy, server):
     with pytest.raises(deploy.DeployError, match="could not reach"):
         deploy.http("POST", f"{server}/slow", TOKEN, {}, timeout=0.3)
+
+
+
+# Findings from the second review round.
+
+def test_a_restart_command_that_cannot_be_split_is_a_refusal(deploy):
+    fake = Fake()
+    assert fake.go(deploy, env={**ENV, "DEPLOY_RESTART": "ssh root@agent-host 'systemctl restart"}) != 0
+    assert "DEPLOY_RESTART" in fake.printed()
+    assert fake.calls == [] and fake.posted == []
+
+
+def test_run_turns_a_program_it_may_not_execute_into_a_failed_step(deploy, tmp_path):
+    program = tmp_path / "restart"
+    program.write_text("#!/bin/sh\n")
+    program.chmod(0o644)
+    with pytest.raises(deploy.DeployError, match="restart"):
+        deploy.run([str(program)])
+
+
+def test_an_install_that_timed_out_is_not_taken_as_left_in_place(deploy):
+    fake = Fake()
+    original = fake.run
+
+    def run(argv, timeout=120):
+        if "plugins install" in " ".join(argv) and NEW in " ".join(argv):
+            fake.calls.append(list(argv))
+            raise deploy.TimedOut("ssh: timed out after 600 seconds")   # the install may still finish on the host
+        return original(argv, timeout=timeout)
+
+    assert deploy.deploy(NEW, ENV, run, fake.http, fake.ask, fake.out) == 2
+    assert fake.steps() == ["install new", *BACK]
+
+
+def test_run_raises_timed_out_for_a_timeout(deploy):
+    with pytest.raises(deploy.TimedOut):
+        deploy.run([sys.executable, "-c", "import time; time.sleep(5)"], timeout=0.2)
+
+
+@pytest.mark.parametrize("text", ["not json", "[]", '"a string"'])
+def test_an_install_record_that_is_not_a_json_object_is_refused(deploy, text):
+    fake = Fake()
+    original = fake.run
+
+    def run(argv, timeout=120):
+        done = original(argv, timeout=timeout)
+        return subprocess.CompletedProcess(argv, 0, text, "") if ".install-metadata.json" in " ".join(argv) else done
+
+    assert deploy.deploy(NEW, ENV, run, fake.http, fake.ask, fake.out) == 1
+    assert "installed commit" in fake.printed()
+    assert fake.posted == [] and fake.steps() == []
+
+
+def test_a_failed_install_with_a_record_that_is_not_json_rolls_back(deploy):
+    fake = Fake()
+    fake.fail = {"plugins install": 1}
+    original = fake.run
+    reads = []
+
+    def run(argv, timeout=120):
+        done = original(argv, timeout=timeout)
+        if ".install-metadata.json" in " ".join(argv):
+            reads.append(1)
+            if len(reads) == 2:     # the read after the failed install
+                return subprocess.CompletedProcess(argv, 0, "{truncated", "")
+        return done
+
+    assert deploy.deploy(NEW, ENV, run, fake.http, fake.ask, fake.out) == 2
+    assert fake.steps() == ["install new", *BACK]
+
+
+def test_http_reports_an_answer_that_is_not_json(deploy, server):
+    with pytest.raises(deploy.DeployError, match="not JSON"):
+        deploy.http("POST", f"{server}/garbage", TOKEN, {})
