@@ -71,6 +71,15 @@ def test_a_store_on_the_turn_or_at_a_session_start_keeps_the_recall_limit(db):
     assert timeout == tool.TIMEOUT == 5
 
 
+def test_the_store_fact_tool_keeps_the_recall_limit(db):
+    # A guard on a real caller in the turn (#238 re-review): attempt()'s default alone would not catch it.
+    embedder = Recording()
+    tool.store_fact({"fact": FACT, "basis": "user_stated"}, machine="host-a", session_id="s1", turn=1,
+                    embedder=embedder, judge_at=None, connect=lambda: psycopg.connect(db["agent"], autocommit=True))
+    [(_, timeout)] = embedder.calls
+    assert timeout == tool.TIMEOUT
+
+
 @pytest.fixture
 def judge_at(typesafe):
     typesafe.answers = {"worth_keeping": 0.9, "supported": 0.9}
