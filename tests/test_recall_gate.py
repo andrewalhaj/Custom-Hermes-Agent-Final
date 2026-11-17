@@ -151,9 +151,18 @@ def test_an_armed_turn_that_ran_both_searches_records_only_that_it_was_armed(tmp
 
 def test_a_turn_that_does_not_ask_about_past_work_records_nothing(tmp_path, db):
     steps = [["turn", "s1", "u1", "Did you set the env var?"], ["reply", "s1", "u1", "Yes, in .env."],
-             ["turn", "s1", "u2", [{"type": "text", "text": ASK}]], ["reply", "s1", "u2", "Yes."]]   # parts are not read
+             ["turn", "s1", "u2", [{"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}]],
+             ["reply", "s1", "u2", "It is a screenshot."]]   # a message with no text
     _, output, rows = run_gate(tmp_path, db, steps)
     assert rows == [], output
+
+
+def test_a_message_given_as_parts_is_read_as_its_text_as_recall_reads_it(tmp_path, db):
+    # Hermes hands prefetch() the flattened text of a message with an image, so recall widens on it;
+    # the gate must arm on the same text, or the search and the gate disagree (#173 review).
+    parts = [{"type": "text", "text": ASK}, {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}]
+    _, output, rows = run_gate(tmp_path, db, [["turn", "s1", "u1", parts]])
+    assert events(rows) == [("recall_gate.armed", "past_work", "did_we", None)], output
 
 
 def test_off_registers_no_hook_and_records_nothing(tmp_path, db):
