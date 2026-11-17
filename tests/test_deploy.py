@@ -410,7 +410,7 @@ def test_each_migration_is_named_before_it_is_sent(deploy):
 def test_a_failed_install_that_left_the_previous_commit_in_place_restarts_nothing(deploy):
     fake = Fake()
     fake.fail = {"plugins install": 1}
-    assert fake.go(deploy) != 0
+    assert fake.go(deploy) == 1
     assert fake.steps() == ["install new"]
     assert "ROLLBACK" not in fake.printed() and "rolled back" not in fake.printed()
     assert OLD in fake.printed() and "0002_b" in fake.printed()
@@ -514,15 +514,15 @@ def test_an_install_that_timed_out_is_not_taken_as_left_in_place(deploy):
     def run(argv, timeout=120):
         if "plugins install" in " ".join(argv) and NEW in " ".join(argv):
             fake.calls.append(list(argv))
-            raise deploy.TimedOut("ssh: timed out after 600 seconds")   # the install may still finish on the host
+            raise deploy.Unknown("ssh: timed out after 600 seconds")   # the install may still finish on the host
         return original(argv, timeout=timeout)
 
     assert deploy.deploy(NEW, ENV, run, fake.http, fake.ask, fake.out) == 2
     assert fake.steps() == ["install new", *BACK]
 
 
-def test_run_raises_timed_out_for_a_timeout(deploy):
-    with pytest.raises(deploy.TimedOut):
+def test_run_raises_unknown_for_a_timeout(deploy):
+    with pytest.raises(deploy.Unknown):
         deploy.run([sys.executable, "-c", "import time; time.sleep(5)"], timeout=0.2)
 
 
@@ -561,3 +561,24 @@ def test_a_failed_install_with_a_record_that_is_not_json_rolls_back(deploy):
 def test_http_reports_an_answer_that_is_not_json(deploy, server):
     with pytest.raises(deploy.DeployError, match="not JSON"):
         deploy.http("POST", f"{server}/garbage", TOKEN, {})
+
+
+# Findings from the third review round.
+
+def test_run_survives_output_that_is_not_utf8(deploy):
+    done = deploy.run([sys.executable, "-c", "import sys; sys.stdout.buffer.write(bytes([255, 10]))"])
+    assert done.returncode == 0     # a decode error here would escape after the host had changed
+
+
+def test_an_install_whose_ssh_connection_failed_is_not_taken_as_left_in_place(deploy):
+    fake = Fake()
+    original = fake.run
+
+    def run(argv, timeout=120):
+        if "plugins install" in " ".join(argv) and NEW in " ".join(argv):
+            fake.calls.append(list(argv))
+            return subprocess.CompletedProcess(argv, 255, "", "Connection to agent-host closed by remote host.")
+        return original(argv, timeout=timeout)
+
+    assert deploy.deploy(NEW, ENV, run, fake.http, fake.ask, fake.out) == 2    # ssh's own exit code: unknown
+    assert fake.steps() == ["install new", *BACK]
