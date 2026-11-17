@@ -9,6 +9,7 @@ fixture answers the query's vector.
 import datetime
 import json
 import math
+import os
 import pathlib
 import shutil
 import subprocess
@@ -32,11 +33,12 @@ def _at(cosine):
 
 
 SCENARIO = r"""
-import json, sys, time
+import json, os, sys, time
 import plugins.memory
 provider = plugins.memory.load_memory_provider("custom_build")
 modules = {name.rsplit(".", 1)[-1]: m for name, m in sys.modules.items() if "custom_build" in name}
 modules["embedding"].OLLAMA_URL = sys.argv[1]
+modules["judge"].URL = os.environ["JUDGE_URL"]
 mode = sys.argv[4] if len(sys.argv) > 4 else ""
 def crash(*args, **kwargs):
     raise KeyError("boom")
@@ -80,6 +82,15 @@ def home(tmp_path):
     return home
 
 
+@pytest.fixture(autouse=True)
+def judge(typesafe, monkeypatch):
+    """Every case's judge is the fake, answering each rerank question 0.5 unless a test says otherwise, so
+    the fused order stands and nothing falls under the floor; nothing reaches the real TypeSafe (#165)."""
+    typesafe.default = 0.5
+    monkeypatch.setenv("TEST_JUDGE_URL", typesafe.url)
+    return typesafe
+
+
 @pytest.fixture
 def owner(db):
     with psycopg.connect(db["owner"], autocommit=True) as conn:
@@ -95,7 +106,8 @@ def _add(owner, body, vector, build, *, kind="fact", basis="user_stated"):
 
 def recall(home, db, ollama_url, query=QUERY, *, store=True, mode=None, cwd=None):
     env = {"HERMES_HOME": str(home), "HOME": str(home.parent), "PATH": "/usr/bin:/bin",
-           "TYPESAFE_API_KEY": "test-key-not-a-real-one", "OWNER_URL": db["owner"]}
+           "TYPESAFE_API_KEY": "test-key-not-a-real-one", "OWNER_URL": db["owner"],
+           "JUDGE_URL": os.environ["TEST_JUDGE_URL"]}
     if store:
         env["CUSTOM_BUILD_DATABASE_URL"] = db["agent"]
     result = subprocess.run([sys.executable, "-c", SCENARIO, ollama_url, query, str(home), *([mode] if mode else [])],
@@ -282,3 +294,33 @@ def test_a_question_about_open_work_with_nothing_open_gets_the_search_alone(home
     ollama.vectors = {OPEN: BASE}
     bodies = [note.split("] ", 1)[1] for note in _notes(recall(home, db, ollama.url, OPEN)["notes"])]
     assert bodies == ["Host fact 0.", "A session with no work outstanding."]   # the search's notes, no open items
+
+
+
+# The rerank (4b, #165; ARCHITECTURE.md 3.4 step 4, 3.5 point 5, 3.6).
+def test_recall_is_reranked_by_the_judge_and_cut_at_the_score_floor(home, db, owner, ollama, typesafe):
+    for n in range(4):
+        _add(owner, f"Host fact {n}.", _at(0.99 - n / 100), ollama.build)
+    ollama.vectors = {QUERY: BASE}
+    typesafe.answers = {"c0": 0.4, "c1": 0.9, "c2": 0.1, "c3": 0.6}   # c0..c3: the pool in fused order
+    bodies = [note.split("] ", 1)[1] for note in _notes(recall(home, db, ollama.url)["notes"])]
+    assert bodies == ["Host fact 1.", "Host fact 3.", "Host fact 0."]   # 0.1 is under the 0.30 floor
+    [rerank] = typesafe.requests
+    assert rerank["body"]["state"] == {"message": QUERY}
+
+
+def test_a_judge_failure_keeps_the_fused_order_and_records_rerank_fallback(home, db, owner, ollama, typesafe):
+    for n in range(3):
+        _add(owner, f"Host fact {n}.", _at(0.99 - n / 100), ollama.build)
+    ollama.vectors = {QUERY: BASE}
+    typesafe.status = 500
+    bodies = [note.split("] ", 1)[1] for note in _notes(recall(home, db, ollama.url)["notes"])]
+    assert bodies == ["Host fact 0.", "Host fact 1.", "Host fact 2."]   # delivered, never a silent success
+    assert _codes(db) == ["rerank.fallback"]
+
+
+def test_a_secret_in_the_message_never_reaches_the_judge(home, db, owner, ollama, typesafe):
+    _add(owner, "Host fact 0.", BASE, ollama.build)
+    ollama.other = BASE
+    recall(home, db, ollama.url, f"why does {FAKE_KEY} fail")
+    assert typesafe.requests and all(FAKE_KEY not in json.dumps(r["body"]) for r in typesafe.requests)

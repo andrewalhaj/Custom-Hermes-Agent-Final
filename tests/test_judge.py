@@ -123,3 +123,22 @@ def test_one_request_asks_whether_the_digest_is_worth_keeping(typesafe):
 @pytest.mark.parametrize("probability, kept", [(0.31, True), (0.30, False)])
 def test_a_digest_is_dropped_at_the_gates_drop_score(probability, kept):
     assert judge.keeps_digest({"worth_keeping": probability}) is kept
+
+
+
+# The rerank (4b, #165): one Noul per candidate, each with the candidate's text in its own question.
+def test_one_request_asks_how_much_each_note_helps_the_message(typesafe):
+    typesafe.answers = {"c0": 0.2, "c1": 0.9}
+    answers = judge.relevance_answers("how does the gateway run", ["Fact A.", "Fact B."], url=typesafe.url, key=KEY,
+                                      model="jev-1.14.0", timeout=2)
+    assert answers == [0.2, 0.9]
+    [request] = typesafe.requests
+    assert request["body"]["state"] == {"message": "how does the gateway run"}
+    assert sorted(request["body"]["questions"]) == ["c0", "c1"]
+    assert "Fact A." in request["body"]["questions"]["c0"]["instructions"]
+
+
+def test_a_rerank_failure_is_a_judge_error(typesafe):
+    typesafe.status = 500
+    with pytest.raises(judge.JudgeError):
+        judge.relevance_answers("m", ["Fact A."], url=typesafe.url, key=KEY, model="jev-1.14.0", timeout=2)
