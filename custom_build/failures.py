@@ -26,6 +26,7 @@ CATALOG = {
     "judge.timeout": "The judge model times out",
     "judge.error": "The judge model errors",
     "rerank.fallback": "The judge could not rerank, and the pool kept its fused order (degraded)",
+    "action.skipped": "Not a failure: the action query was skipped, because the message asks for no work",
     "store.gate_error": "The judge failed during a write; the fact is queued",
     "guard.crash": "A guard raised during a turn",
     "guard.not_loaded": "The startup check found a guard's hooks or the provider not loaded",

@@ -50,8 +50,33 @@ def relevance_answers(message, notes, *, url, key, model, timeout):
     return [answers[f"c{n}"] for n in range(len(notes))]
 
 
+def route_answers(state, actions, wording, *, url, key, model, timeout):
+    """The action query's routing (3.5 point 2): the picked action's name, and the probability that the message
+    asks for work at all. The judge always picks one of `actions`, whatever its probability (#26)."""
+    questions = {"action": {"type": "choice", "instructions": wording["action"]["instructions"], "criteria": actions},
+                 "asks_for_work": {"type": "noul", **wording["asks_for_work"]}}
+    answers = _request(state, questions, url=url, key=key, model=model, timeout=timeout)
+    try:
+        pick, asks = answers["action"]["choice"], answers["asks_for_work"]["noul"]
+    except (KeyError, TypeError) as exc:
+        raise JudgeError(f"malformed answer: {type(exc).__name__}: {exc}"[:200]) from exc
+    if not isinstance(pick, str) or pick not in actions:
+        raise JudgeError(f"malformed answer: picked {pick!r}, which is not on the action list"[:200])
+    if isinstance(asks, bool) or not isinstance(asks, int | float):
+        raise JudgeError(f"malformed answer: 'asks for work' is {asks!r}, not a probability"[:200])
+    return pick, asks
+
+
 def _answers(state, wording, *, url, key, model, timeout):
     questions = {name: {"type": "noul", **question} for name, question in wording.items()}
+    answers = _request(state, questions, url=url, key=key, model=model, timeout=timeout)
+    try:
+        return {name: answers[name]["noul"] for name in questions}
+    except (KeyError, TypeError) as exc:   # without the questions' answers
+        raise JudgeError(f"malformed answer: {type(exc).__name__}: {exc}"[:200]) from exc
+
+
+def _request(state, questions, *, url, key, model, timeout):
     body = json.dumps({"model": model, "state": state, "questions": questions}).encode()
     request = urllib.request.Request(url + "/v1/systemone", data=body,
                                      headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"})
@@ -65,9 +90,8 @@ def _answers(state, wording, *, url, key, model, timeout):
     except (OSError, http.client.HTTPException) as exc:
         raise JudgeError(f"{type(exc).__name__}: {exc}"[:200]) from exc
     try:
-        answers = json.loads(raw)["answers"]
-        return {name: answers[name]["noul"] for name in questions}
-    except (ValueError, KeyError, TypeError) as exc:   # not JSON, or without the questions' answers
+        return json.loads(raw)["answers"]
+    except (ValueError, KeyError, TypeError) as exc:   # not JSON, or without answers
         raise JudgeError(f"malformed answer: {type(exc).__name__}: {exc}"[:200]) from exc
 
 

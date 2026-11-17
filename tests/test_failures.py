@@ -178,6 +178,7 @@ def test_the_catalog_holds_the_architecture_codes():
         "recall_gate.would_withhold",
         "fact_gate.armed",
         "fact_gate.would_withhold",
+        "action.skipped",
         "config.unsafe", "config.missing", "redact.failed", "memory.write_rejected", "events.write_failed",
         "job.failed", "job.missed", "job.no_output", "host.missing", "host.heartbeat", "unhandled",
         "job.succeeded",
