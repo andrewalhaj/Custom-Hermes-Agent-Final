@@ -231,8 +231,8 @@ def report(results, *, sha256, seed, judge_model):
 
 def markdown(summary):
     lines = [f"# LongMemEval-S, {summary['questions']} questions", "",
-             f"Commit `{summary['commit']}`, embedding `{summary['embedding_build']}`, judge "
-             f"`{summary['judge_model']}`, seed {summary['seed']}.", "",
+             (f"Commit `{summary['commit']}`, embedding `{summary['embedding_build']}`, judge "
+              f"`{summary['judge_model']}`, seed {summary['seed']}."), "",
              "| Questions | Count | Recall@5 | MRR |", "|---|---|---|---|"]
     rows = [("All answerable", summary["answerable"]), *summary["by_type"].items()]
     lines += [f"| {name} | {s['count']} | {s['recall_at_5']} | {s['mrr']} |" for name, s in rows]
