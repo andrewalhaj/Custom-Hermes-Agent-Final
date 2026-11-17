@@ -119,11 +119,12 @@ There are no references at first, as there are no skills: the store is added whe
 
 - **One model for every store.** Facts, chunks and queries are all embedded by `Qwen3-Embedding-4B` at its native 2,560 dimensions, so their vectors are comparable.
 - **One build on every machine.** The model build is pinned by its digest and recorded with every vector (`embedding_model`), written `qwen3-embedding:4b@sha256:<digest>` from Ollama's list of local models. A machine whose build differs refuses to run recall (`embed.model_mismatch`). A vector from a different build is never stored. The store's build is the one its facts record, so an empty store records none until its first fact. The provider checks when it starts, and its embedder checks again before embedding until a check has passed, so a failed check refuses every embedding and a later pass recovers.
+- **Two routes, one per store** (#239, decided 2026-11-17). The setting `plugins.entries.custom_build.settings.embedding` picks where the model runs: `local` (or unset), this machine's Ollama, as above; or `deepinfra`, DeepInfra's hosted copy of the same model, called directly through its real-time API with the key `DEEPINFRA_API_KEY` from the profile's `.env`. Any other value, or `deepinfra` without the key, is `config.missing`. The hosted build is recorded as `deepinfra:Qwen/Qwen3-Embedding-4B`. Its vectors are close to the local ones, not the same (cosine 0.985 to 0.988 for the same text), so a store holds one route's vectors only; moving a store from one to the other re-embeds every fact. The hosted build has no digest: a reference file in the plugin (`custom_build/memory/embed_reference.json`) records a fixed sentence, its hosted vector and the cosine the vector must keep, and the check embeds the sentence again. A vector that moved, or no recorded reference, is `embed.model_mismatch`. The service refusing the key (401, 402 or 403) is `embed.refused`; any other failure is `embed.unavailable`.
 - **Storage.** Vectors are stored as `halfvec(2560)` with an HNSW cosine index. At this size the half-precision type is required: an HNSW index supports `vector` only up to 2,000 dimensions and `halfvec` up to 4,000. Indexing `halfvec` needs pgvector 0.7.0 or later.[7]
 - **Query instruction.** Queries are prefixed with the task instruction the model card recommends; documents are embedded without one.[8] It becomes the default only after the eval set shows the gain.
 - **What is embedded.** A fact is embedded once, when it is stored. Reference and session text is cut into chunks of about 800 characters. Each chunk is prefixed with its origin: the file and heading for a reference, the user's message for a session reply.
 - **Caching.** A query is embedded once per turn and reused by every store.
-- **No substitute model.** If the embedding service is unavailable, search fails with `embed.unavailable` and new facts are refused.
+- **No substitute model.** If the embedding service is unavailable, search fails with `embed.unavailable` (or `embed.refused`) and new facts are refused. The hosted route does not fall back to Ollama (#239, decided): a local query would not fit recall's deadline after a hosted call timed out, and a local vector cannot join a store of hosted ones.
 
 ### 3.3 The write path
 
@@ -237,6 +238,7 @@ Still open, each tracked in its own issue:
 Every deployment states this in its own documentation:
 
 - Stored facts, digests, session chunks and events go to the memory database, which keeps session chunks and events for 90 days (section 4.3).
+- Every text the build embeds goes to the embedding service when it is hosted (`embedding: deepinfra`, section 3.2): each recall and memory search query, redacted, on every message whose recall runs, and each fact and digest, redacted, when it is stored. With the local route, nothing leaves the host to be embedded. DeepInfra's terms for its real-time API, read on 2026-11-17, say the input is held in memory for the request only and not stored or used for training; the build never uses its batch API.
 - Search candidates, candidate facts and support checks go to the judge model when it is hosted (search candidates go with the user's message, redacted, for the rerank, on every message whose search finds anything and on each memory search, #165; an extracted fact goes with its source turn: the user's message and the turn's tool results, redacted), and so does each new fact with the stored fact closest to it, when the judge decides whether one supersedes the other (section 3.3).
 - Each user message, with the end of the assistant's previous reply, goes to the judge model for routing (section 3.5) when it is hosted and the action query is switched on.
 - User messages and tool output go to the extraction model when it is hosted: after each turn of a primary session, the user's message and that turn's tool results, redacted, never the agent's replies. The first deployment's extraction model is hosted by Anthropic and reached through the Claude subscription (OPERATIONS.md section 2, #148). When that call fails, Hermes's auxiliary fallback can send the same request to the main agent model's provider, which already receives the turn; the build discards that answer and records the failure (`extract.refused` or `extract.error`).
@@ -524,6 +526,7 @@ Initial codes:
 | Code | Raised when |
 |---|---|
 | `embed.unavailable` | The embedding service cannot be reached |
+| `embed.refused` | The hosted embedding service refuses the key (401, 402 or 403): revoked, out of credit or not allowed (#239) |
 | `embed.model_mismatch` | This machine's embedding build differs from the one recorded in the store |
 | `db.unreachable`, `db.auth`, `db.query` | The memory store cannot be reached, refuses the role, or rejects a query |
 | `db.behind` | The startup check found the store behind the migrations the plugin needs (section 5.5) |
