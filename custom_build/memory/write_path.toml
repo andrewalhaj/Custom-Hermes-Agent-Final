@@ -83,4 +83,4 @@ floor = 0.30
 [rerank.question]
 instructions = "Does this note help answer the user's message in `message`? Note: {note}"
 criteria.true = "The note gives something a reply to `message` needs or can use: a fact, a setting, a decision or past work on the same subject."
-criteria.false = "The note is about something else, or shares words with `message` but would not change the reply."
+criteria.false = "The note is about a different machine, project or tool than `message` asks about, or shares words with `message` but would not change the reply."

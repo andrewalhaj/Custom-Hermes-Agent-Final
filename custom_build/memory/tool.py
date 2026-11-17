@@ -5,6 +5,7 @@ stored fact (CONTRIBUTING.md rule C3); Hermes then reports the call with the sta
 """
 
 import datetime
+import time
 
 import psycopg
 from agent.memory_provider import spawn_context_thread
@@ -27,6 +28,7 @@ from . import (
 
 BASES = ("user_stated", "tool_observed", "assistant_inferred")
 TIMEOUT = 5   # seconds for each answer from Ollama while a fact is stored
+RERANK_MARGIN = 0.3   # seconds kept back from the recall deadline, to deliver the notes after a rerank
 
 SCHEMA = {
     "name": "store_fact",
@@ -113,8 +115,10 @@ def recall_notes(query, *, machine, session_id, turn, embedder, judge_at, connec
 
 def _searched(query, *, machine, session_id, turn, embedder, judge_at, connect, wanted, deadline=None,
               open_work=False):
-    """The fused candidate pool for `wanted` results as {"results": [...]}, or {"error": code}, recorded. With a
-    `deadline`, the store cancels any statement that runs past it, so a stalled store releases the search."""
+    """The candidate pool for `wanted` results, reranked or in fused order, as {"results": [...]}, or
+    {"error": code}, recorded. With a `deadline`, the store cancels any statement that runs past it, so a
+    stalled store releases the search, and the rerank gets only the time left of it (#165)."""
+    started = time.monotonic()
     key = project.key(resolve_agent_cwd())
     fields = {"source": machine, "project": key, "session_id": session_id, "turn": turn}
 
@@ -123,8 +127,13 @@ def _searched(query, *, machine, session_id, turn, embedder, judge_at, connect, 
             conn.execute(f"set statement_timeout = {int(deadline * 1000)}")
         try:
             results = search.candidates(conn, embedder, query, key, wanted=wanted, timeout=TIMEOUT)
+            # The judge's own deadline, or what is left of the recall's, less a margin to deliver the notes.
+            left = judge.DEADLINE if deadline is None else min(
+                judge.DEADLINE, deadline - (time.monotonic() - started) - RERANK_MARGIN)
             try:
-                results = search.reranked(results, query, judge_at)
+                if left <= 0:
+                    raise judge.JudgeTimeout("no time left in the recall deadline for the rerank")
+                results = search.reranked(results, query, judge_at, timeout=left)
             except (judge.JudgeError, judge.JudgeTimeout) as exc:   # 3.4 step 4: fused order, recorded as degraded
                 failures.record(conn, "rerank.fallback", "degraded", reason=str(exc), **fields)
             if open_work:   # the newest digests too, by recency, not similarity (3.5 point 4)
