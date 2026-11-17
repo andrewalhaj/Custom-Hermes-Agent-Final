@@ -255,8 +255,8 @@ def test_a_question_about_open_work_returns_the_newest_digests_open_items(home, 
     _digest(owner, "Replaced.\n\nOpen items:\n- A replaced digest's item.", ollama.build, days_ago=0, superseded=True)
     _digest(owner, "Other project.\n\nOpen items:\n- Another project's item.", ollama.build, days_ago=0,
             project="github.com/Other/Repo")
-    ollama.vectors = {OPEN: BASE}
     notes = _notes(recall(home, db, ollama.url, OPEN)["notes"])
+    assert ollama.embedded == []   # not a similarity search: nothing is embedded (#158 review)
     assert [note.split("] ", 1)[1] for note in notes] == [
         "Item A from two days ago.", "Item B from two days ago.", "Item from three days ago."]
     assert notes[0].startswith("- [digest, assistant_inferred, stored ")
