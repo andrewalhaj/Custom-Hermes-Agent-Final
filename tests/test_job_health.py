@@ -133,3 +133,18 @@ def test_a_day_retention_did_not_run_is_recorded_as_missed(tmp_path, db):
     result = hermes(tmp_path, with_hosts(make_home(tmp_path, db), ["host-a"]), "custom-build", "job-health")
     assert result.returncode == 0, result.stdout + result.stderr
     assert ("job.missed", "failed", "host-a", {"job": "retention"}) in recorded(db)
+
+
+def test_a_job_success_written_from_the_wrong_place_does_not_count(tmp_path, db):
+    # #149: retention runs in the database and the other jobs on this host, so only those sources count.
+    home = with_hosts(make_home(tmp_path, db), ["host-a"])
+    seed(db, ("host.heartbeat", "host-a", 1, {}),
+         ("job.succeeded", "host-b", 2, {"job": "daily-report"}),
+         ("job.succeeded", "host-b", 2, {"job": "retention"}))
+    result = hermes(tmp_path, home, "custom-build", "job-health")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert recorded(db) == [
+        ("job.missed", "failed", "host-a", {"job": "daily-report"}),
+        ("job.missed", "failed", "host-a", {"job": "retention"}),
+        ("job.succeeded", "ok", "host-a", {"job": "job-health"}),
+    ]

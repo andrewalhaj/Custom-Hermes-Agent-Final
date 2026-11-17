@@ -122,3 +122,17 @@ def test_the_policies_are_exactly_these(db):
 def test_maintenance_is_refused(db, statement):
     with psycopg.connect(db["maint"]) as conn, pytest.raises(psycopg.errors.InsufficientPrivilege):
         conn.execute(statement)
+
+
+# A machine writes events only under its own name (#149): its login is named as the machine.
+
+def test_a_machine_can_write_an_event_under_its_own_name(db):
+    with psycopg.connect(db["agent"]) as conn:
+        assert conn.execute("select current_user").fetchone() == ("host-a",)
+        conn.execute("insert into memory.events (source, code, result) values ('host-a', 'host.heartbeat', 'ok')")
+
+
+@pytest.mark.parametrize("source", ["host-b", "database", "HOST-A", ""])
+def test_a_machine_cannot_write_an_event_under_another_name(db, source):
+    with psycopg.connect(db["agent"]) as conn, pytest.raises(psycopg.errors.InsufficientPrivilege):
+        conn.execute("insert into memory.events (source, code, result) values (%s, 'host.heartbeat', 'ok')", (source,))
