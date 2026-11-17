@@ -139,7 +139,7 @@ def install(commit, cfg, run):
     done = hermes(cfg, run, "plugins", "install", f"{cfg['DEPLOY_REPO']}#custom_build", "--force", "--ref", commit,
                   "--yes-deps", timeout=INSTALL_TIMEOUT)
     if done.returncode == 255:   # ssh's own exit code: the connection failed, and the install may still finish
-        raise Unknown(f"install: the ssh connection failed: {done.stderr.strip()[-500:]}")
+        raise Unknown(f"install: exit 255, so its result is unknown: {done.stderr.strip()[-500:]}")
     must(done, "install")
 
 
