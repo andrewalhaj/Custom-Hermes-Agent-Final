@@ -34,7 +34,9 @@ def load_config(path=CONFIG):
 def find_rule(rules, tool_name, args, task_id):
     """(rule name, target) for the first rule the call matches, or None.
 
-    The target is the path Hermes resolves for a write_file or patch call, or the terminal's command.
+    The target is the path Hermes resolves for a write_file or patch call. For a terminal command it is the
+    listed path the command names, or the program and verb its rule matched: never the command itself,
+    whose arguments can carry a credential that no redactor knows (#115).
     """
     from hermes_constants import get_hermes_home
     from tools.file_tools_paths import _resolve_path_for_task
@@ -54,9 +56,21 @@ def find_rule(rules, tool_name, args, task_id):
     elif tool_name == TERMINAL and isinstance(command := args.get("command"), str):
         where = _resolve_path_for_task(args.get("workdir") or ".", task_id or "default")   # where it runs
         for name, (_, pattern) in rules.items():
-            if (name in paths and _names(command, paths[name], home, where)) or (pattern and pattern.search(command)):
-                return name, command
+            if name in paths and _names(command, paths[name], home, where):
+                return name, os.path.realpath(paths[name])
+            if pattern and (match := pattern.search(command)):
+                return name, _shown(match.group(0))
     return None
+
+
+def _shown(matched):
+    """The program and the verb of the text a rule matched, as in "pip … install": the run of name
+    characters the match starts with, and the run it ends with. Each pattern starts at a program's name and
+    ends at a verb or a flag, so neither run can hold a command's own text, which can be a credential."""
+    program, verb = re.match(r"[\w-]+", matched)[0], re.search(r"[\w-]+\Z", matched)[0]
+    if program == matched:
+        return program
+    return f"{program} {verb}" if matched == f"{program} {verb}" else f"{program} … {verb}"
 
 
 def _names(command, path, home, where):
@@ -110,9 +124,9 @@ def check(ctx, rules, *, tool_name, args, session_id="", task_id="", **kwargs):
 
     rule, target = found
     machine = settings.machine(ctx)
-    # The reason is what a maintainer judges a trigger by. Forced redaction, as before every write (rule L4),
-    # and of credentials in a URL too, which Hermes leaves in by default and these commands often carry.
-    reason = redact_sensitive_text(target, force=True, redact_url_credentials=True)
+    # The reason is what a maintainer judges a trigger by: a path, or a program and its verb (find_rule).
+    # Forced redaction all the same, as before every write (rule L4): a path is stored as written.
+    reason = redact_sensitive_text(target, force=True)
     event = {"source": machine, "session_id": session_id or None, "reason": reason, "tool": tool_name,
              "rule": rule, "why": blocked_because()}
     # Wrapped like the hook, so a crash on the worker is recorded as guard.crash too.
