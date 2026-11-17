@@ -180,8 +180,9 @@ For the facts store:
    - **The action query, first.** In `pre_llm_call`, one request, the routing request, goes to the judge model with the user's message and the end of the assistant's previous reply, which Hermes passes to the hook in the conversation history.[14] The judge answers two typed questions, each with a probability: which kind of work from a fixed action list the message asks for, and whether it asks for work at all. The facts store is searched with the picked action's description, and the results are added to the turn through the hook's own context.
      - The action query ships switched off, and is switched on only once the eval set has measured it (#26).
      - The judge always returns a pick, whatever the message. The action query therefore runs unless "asks for work at all" is a clear no (section 3.6). The top pick is used whatever its probability; whether a low one should count as no pick is a question for the eval set (#26).
-     - A skipped action query is recorded in `events` under its own event name, so it cannot be mistaken for one that ran and found nothing, which is recorded as `empty`.
-     - The action list and the wording of the two questions are one configuration file in this repository. Changing either is a pull request with eval-set numbers (CONTRIBUTING.md rule C8).
+     - A skipped action query is recorded in `events` under its own event name, `action.skipped`, so it cannot be mistaken for one that ran and found nothing, which is recorded as `empty`.
+     - The action list and the wording of the two questions are one configuration file in this repository, `custom_build/memory/action_query.toml`, which also holds the switch and the action query's values from section 3.6. The list and the wording are the ones measured in the test for #15. Changing any of them is a pull request with eval-set numbers (CONTRIBUTING.md rule C8).
+     - The notes carry a header of their own, so they can be told apart from the message query's. The user's message and the end of the previous reply are redacted before the routing request is sent (CONTRIBUTING.md rule L4).
      - The routing request runs under the judge deadline, and the action query as a whole under its own deadline, well inside Hermes's callback timeout (section 3.6). If the routing request errors or misses its deadline, the action query is skipped for that turn, the failure is recorded (`judge.error` or `judge.timeout`), and the turn carries a note with the code. If the search that follows misses the action query's deadline, that is `recall.timeout`.
      - A model that writes the action as free text is not used. In a benchmark on an agent host with no GPU, a local one took 4.5 to 8 seconds for each message. The judge answered in about 0.2 seconds, and its pick was among the answers the test's labels accepted on 42 of 44 messages (#15). Whether a search by the picked action finds the same facts as a search by a freely written one has not been measured; the eval set settles it before the action query is relied on (#26).
    - **The message query, second.** `prefetch()` searches the user's words across the stores, under its own deadline below Hermes's 8-second limit.
@@ -510,6 +511,7 @@ Initial codes:
 | `recall.timeout` | Recall misses its deadline |
 | `judge.timeout`, `judge.error` | The judge model times out or errors |
 | `rerank.fallback` | The judge could not rerank, and the pool kept its fused order (degraded) |
+| `action.skipped` | Not a failure: the action query was skipped, because the judge read the message as asking for no work (section 3.5) |
 | `store.gate_error` | The judge failed during a write; the fact is queued |
 | `extract.error` | The extraction model failed or answered something other than a list of facts |
 | `extract.refused` | The extraction model's provider refused the account: logged out, billing, or forbidden |
