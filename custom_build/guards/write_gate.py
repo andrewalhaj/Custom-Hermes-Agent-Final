@@ -81,7 +81,7 @@ def _names(command, path, home, where):
     bases |= {os.path.realpath(base) for base in bases}
     command = re.sub(r"/(?:\./)+|//+", "/", command)   # a//b and a/./b name a/b
     # A relative spelling counts where a path starts, or after the user's home: not under another folder.
-    start = r"(?:(?<![/~])(?:\./)?|(?:~|\$HOME|\$\{HOME\})/)"
+    start = r"(?:(?<![/~])(?:\./)?|(?:~|\$HOME|\$\{HOME\})[\"']*/)"
     for spelling in _spellings({str(path), os.path.realpath(path)}, bases):
         if _whole(("" if os.path.isabs(spelling) else start) + re.escape(spelling), command):
             return True
@@ -92,7 +92,7 @@ def _names(command, path, home, where):
     # Right after a spelling of the home or a shell variable, as in "$HERMES_HOME"/skills or $H/.env, or
     # where a relative path starts, as in cd ~/.hermes && rm -r skills.
     spelled = [("" if os.path.isabs(name) else start) + re.escape(name) for name in homes - {"HERMES_HOME"}]
-    after_home = "(?:" + "|".join(spelled) + r"|\$(?:\{\w+[^}\s]*\}|\w+))[\"']*/"
+    after_home = "(?:" + "|".join(spelled) + r"|\$(?:\{[^}\s]+\}|\w+))[\"']*/"   # one class inside the braces: read once
     return _whole(f"(?:{after_home}|(?<![/~])(?:\\./)?){re.escape(entry)}", command)
 
 
