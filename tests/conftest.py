@@ -198,12 +198,14 @@ def typesafe():
 
 class FakeDeepInfra(http.server.ThreadingHTTPServer):
     """A stand-in for DeepInfra's OpenAI-compatible embeddings endpoint (#239). `requests` collects each
-    (Authorization header, body); `status` answers with an HTTP error instead; `vectors` gives a text its own
-    vector, any other gets `other`; `reverse` lists the vectors in reverse, each still carrying its index."""
+    (Authorization header, body); `status` answers with an HTTP error instead, and `fail_on`, a text, answers
+    500 to a request that holds it; `vectors` gives a text its own vector, any other gets `other`; `reverse`
+    lists the vectors in reverse, each still carrying its index."""
 
     def __init__(self):
         super().__init__(("127.0.0.1", 0), _DeepInfraHandler)
         self.requests, self.status, self.vectors, self.other, self.reverse = [], 200, {}, [0.01] * 2560, False
+        self.fail_on = None
         self.url = f"http://127.0.0.1:{self.server_address[1]}/v1/openai/embeddings"
 
 
@@ -215,10 +217,10 @@ class _DeepInfraHandler(http.server.BaseHTTPRequestHandler):
                 for i, text in enumerate(body["input"])]
         if self.server.reverse:
             data.reverse()
-        answer = ({"object": "list", "data": data, "model": body["model"]} if self.server.status == 200
-                  else {"detail": "refused"})
+        status = 500 if self.server.fail_on in body["input"] else self.server.status
+        answer = {"object": "list", "data": data, "model": body["model"]} if status == 200 else {"detail": "refused"}
         payload = json.dumps(answer).encode()
-        self.send_response(self.server.status)
+        self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
