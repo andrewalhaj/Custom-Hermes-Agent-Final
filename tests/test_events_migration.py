@@ -11,7 +11,7 @@ GROUP_ROLES = ("memory_agent", "memory_maintenance")
 
 def _insert(conn, code="job.failed"):
     return conn.execute(
-        "insert into memory.events (source, code, result) values ('test-host', %s, 'failed') returning id",
+        "insert into memory.events (source, code, result) values ('host-a', %s, 'failed') returning id",
         (code,),
     ).fetchone()[0]
 
@@ -63,7 +63,7 @@ def test_group_roles_cannot_log_in(db):
 
 def test_result_must_be_one_of_the_four_outcomes(db):
     with psycopg.connect(db["agent"]) as conn, pytest.raises(psycopg.errors.CheckViolation):
-        conn.execute("insert into memory.events (source, code, result) values ('test-host', 'job.failed', 'error')")
+        conn.execute("insert into memory.events (source, code, result) values ('host-a', 'job.failed', 'error')")
 
 
 def test_agent_can_insert_and_read_an_event(db):
@@ -122,3 +122,17 @@ def test_the_policies_are_exactly_these(db):
 def test_maintenance_is_refused(db, statement):
     with psycopg.connect(db["maint"]) as conn, pytest.raises(psycopg.errors.InsufficientPrivilege):
         conn.execute(statement)
+
+
+# A machine writes events only under its own name (#149): its login is named as the machine.
+
+def test_a_machine_can_write_an_event_under_its_own_name(db):
+    with psycopg.connect(db["agent"]) as conn:
+        assert conn.execute("select current_user").fetchone() == ("host-a",)
+        conn.execute("insert into memory.events (source, code, result) values ('host-a', 'host.heartbeat', 'ok')")
+
+
+@pytest.mark.parametrize("source", ["host-b", "database", "HOST-A", ""])
+def test_a_machine_cannot_write_an_event_under_another_name(db, source):
+    with psycopg.connect(db["agent"]) as conn, pytest.raises(psycopg.errors.InsufficientPrivilege):
+        conn.execute("insert into memory.events (source, code, result) values (%s, 'host.heartbeat', 'ok')", (source,))
