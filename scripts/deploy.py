@@ -26,7 +26,9 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
-from http.client import IncompleteRead   # by name: this module's own `http` function shadows the package
+from http.client import (
+    IncompleteRead,  # by name: this module's own `http` function shadows the package
+)
 
 API = "https://api.supabase.com"
 REQUIRED = ("DEPLOY_REPO", "DEPLOY_SSH", "DEPLOY_HERMES", "DEPLOY_HERMES_HOME", "DEPLOY_UNIT", "DEPLOY_RESTART",
