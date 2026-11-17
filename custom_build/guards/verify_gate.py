@@ -145,7 +145,7 @@ def _record(ctx, *, session_id, rule, reason, tool, withhold):
 
     machine = settings.machine(ctx)
     event = {"source": machine, "session_id": session_id or None, "rule": rule, "tool": tool, "withhold": withhold,
-             "reason": redact_sensitive_text(reason, force=True, redact_url_credentials=True)}
+             "reason": redact_sensitive_text(reason, force=True)}
     write = failures.boundary(lambda: machine, settings.connect, lambda exc: None)(write_event)
     spawn_context_thread(write, name="custom_build.verify_gate", kwargs=event).start()
 

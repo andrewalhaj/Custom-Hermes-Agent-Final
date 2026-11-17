@@ -64,10 +64,13 @@ def find_rule(rules, tool_name, args, task_id):
 
 
 def _shown(matched):
-    """The program and the verb of the text a rule matched, as in "pip … install". What lies between them
-    is left out: an option's value there can be a credential."""
-    words = matched.split()
-    return " ".join(words) if len(words) < 3 else f"{words[0]} … {words[-1]}"
+    """The program and the verb of the text a rule matched, as in "pip … install": the run of name
+    characters the match starts with, and the run it ends with. Each pattern starts at a program's name and
+    ends at a verb or a flag, so neither run can hold a command's own text, which can be a credential."""
+    program, verb = re.match(r"[\w-]+", matched)[0], re.search(r"[\w-]+\Z", matched)[0]
+    if program == matched:
+        return program
+    return f"{program} {verb}" if matched == f"{program} {verb}" else f"{program} … {verb}"
 
 
 def _names(command, path, home, where):
@@ -122,8 +125,8 @@ def check(ctx, rules, *, tool_name, args, session_id="", task_id="", **kwargs):
     rule, target = found
     machine = settings.machine(ctx)
     # The reason is what a maintainer judges a trigger by: a path, or a program and its verb (find_rule).
-    # Forced redaction all the same, as before every write (rule L4), and of credentials in a URL too.
-    reason = redact_sensitive_text(target, force=True, redact_url_credentials=True)
+    # Forced redaction all the same, as before every write (rule L4): a path is stored as written.
+    reason = redact_sensitive_text(target, force=True)
     event = {"source": machine, "session_id": session_id or None, "reason": reason, "tool": tool_name,
              "rule": rule, "why": blocked_because()}
     # Wrapped like the hook, so a crash on the worker is recorded as guard.crash too.
