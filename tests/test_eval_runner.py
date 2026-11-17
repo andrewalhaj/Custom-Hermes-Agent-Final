@@ -182,7 +182,7 @@ def test_the_run_leaves_no_database_or_role_behind(tmp_path, dataset, ollama, ty
     run(tmp_path, dataset, ollama, typesafe)
     with psycopg.connect(os.environ["TEST_DATABASE_URL"]) as admin:
         assert admin.execute("select count(*) from pg_database where datname like 'eval_%'").fetchone() == (0,)
-        assert admin.execute("select count(*) from pg_roles where rolname in ('memory_agent', 'memory_maintenance')"
+        assert admin.execute("select count(*) from pg_roles where rolname in ('memory_agent', 'memory_maintenance', 'memory_viewer')"
                              " or rolname = 'eval' or rolname like 'eval_%'").fetchone() == (0,)
 
 
@@ -445,7 +445,7 @@ def test_a_parallel_run_leaves_no_database_or_role_behind(tmp_path, dataset, oll
     run(tmp_path, dataset, ollama, typesafe, parallel=3)
     with psycopg.connect(os.environ["TEST_DATABASE_URL"]) as admin:
         assert admin.execute("select count(*) from pg_database where datname like 'eval_%'").fetchone() == (0,)
-        assert admin.execute("select count(*) from pg_roles where rolname in ('memory_agent', 'memory_maintenance')"
+        assert admin.execute("select count(*) from pg_roles where rolname in ('memory_agent', 'memory_maintenance', 'memory_viewer')"
                              " or rolname = 'eval' or rolname like 'eval_%'").fetchone() == (0,)
 
 
@@ -503,7 +503,7 @@ NO_EXTRACTION = WRAPPER.replace('''def fake_call_llm(**kwargs):''', '''def fake_
 def _nothing_left():
     with psycopg.connect(os.environ["TEST_DATABASE_URL"]) as admin:
         return (admin.execute("select count(*) from pg_database where datname like 'eval_%'").fetchone()[0],
-                admin.execute("select count(*) from pg_roles where rolname in ('memory_agent', 'memory_maintenance')"
+                admin.execute("select count(*) from pg_roles where rolname in ('memory_agent', 'memory_maintenance', 'memory_viewer')"
                               " or rolname = 'eval'").fetchone()[0]) == (0, 0)
 
 

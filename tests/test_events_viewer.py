@@ -29,14 +29,16 @@ def page(db):
     server = events_viewer.server("127.0.0.1", 0, db["viewer"])
     threading.Thread(target=server.serve_forever, daemon=True).start()
 
-    def get(path="/", method="GET"):
-        request = urllib.request.Request(f"http://127.0.0.1:{server.server_address[1]}{path}", method=method)
+    def get(path="/", method="GET", host=None):
+        request = urllib.request.Request(f"http://127.0.0.1:{server.server_address[1]}{path}", method=method,
+                                         headers={"Host": host} if host else {})
         try:
             with urllib.request.urlopen(request, timeout=10) as answer:
                 return answer.status, answer.read().decode()
         except urllib.error.HTTPError as refused:
             return refused.code, refused.read().decode()
 
+    get.port = server.server_address[1]
     yield get
     server.shutdown()
     server.server_close()
@@ -54,10 +56,19 @@ def test_the_viewer_login_reads_events(db):
     "delete from memory.events",
     "truncate memory.events",
     "select count(*) from memory.facts",
+    "select level from memory.schema_level",
+    "create table memory.mine (id integer)",
 ])
 def test_the_viewer_login_does_nothing_else(db, statement):
     with psycopg.connect(db["viewer"]) as conn, pytest.raises(psycopg.errors.InsufficientPrivilege):
         conn.execute(statement)
+
+
+def test_the_viewer_roles_grants_are_exactly_these(db):
+    with psycopg.connect(db["owner"]) as conn:
+        assert conn.execute(
+            "select table_schema, table_name, privilege_type from information_schema.role_table_grants"
+            " where grantee = 'memory_viewer'").fetchall() == [("memory", "events", "SELECT")]
 
 
 def test_events_come_newest_first(db):
@@ -81,15 +92,25 @@ def test_events_are_filtered_by_code_machine_result_and_window(db):
 
 
 def test_the_guards_are_a_group_of_their_own(db):
-    for code in ("write_gate.would_ask", "verify_gate.would_block", "fact_gate.would_withhold",
-                 "recall_gate.armed", "guard.bypassed"):
+    # The group is the four gates' rows. A guard that crashed or was bypassed is a failure, and listed with them.
+    for code in ("write_gate.would_ask", "verify_gate.would_block", "fact_gate.would_withhold", "recall_gate.armed"):
         _add(db, code, result="ok")
     _add(db, "job.failed")
+    _add(db, "guard.crash")
+    _add(db, "guard.bypassed")
     with psycopg.connect(db["viewer"]) as conn:
         assert sorted(row["code"] for row in events_viewer.events(conn, group="guards")) == [
-            "fact_gate.would_withhold", "guard.bypassed", "recall_gate.armed", "verify_gate.would_block",
-            "write_gate.would_ask"]
-        assert [row["code"] for row in events_viewer.events(conn, group="failures")] == ["job.failed"]
+            "fact_gate.would_withhold", "recall_gate.armed", "verify_gate.would_block", "write_gate.would_ask"]
+        assert sorted(row["code"] for row in events_viewer.events(conn, group="failures")) == [
+            "guard.bypassed", "guard.crash", "job.failed"]
+
+
+def test_one_page_lists_the_newest_rows_up_to_its_limit(db, monkeypatch):
+    monkeypatch.setattr(events_viewer, "LIMIT", 2)
+    for minutes in (1, 2, 3):
+        _add(db, "job.failed", reason=f"{minutes} ago", ago=f"{minutes} minutes")
+    with psycopg.connect(db["viewer"]) as conn:
+        assert [row["reason"] for row in events_viewer.events(conn)] == ["1 ago", "2 ago"]
 
 
 def test_the_page_lists_a_row_with_what_its_code_means(db, page):
@@ -117,7 +138,25 @@ def test_stored_text_is_escaped(db, page):
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in body
 
 
-@pytest.mark.parametrize("query", ["?hours=abc", "?hours=-5", "?hours=99999999", "?group=nonsense", "?result=nonsense"])
+def test_every_stored_field_and_the_query_are_escaped_wherever_they_land(db, page):
+    # A code and a machine also land in an address and a title; a detail's keys and values in the row.
+    mark = '"><script>x</script>'
+    _add(db, mark, source=mark, reason=mark, detail='{"\\"><script>k</script>": "\\"><script>v</script>"}')
+    for path in ("/", "/?code=%22%3E%3Cscript%3Ey%3C%2Fscript%3E&source=%22%3E%3Cscript%3Ez%3C%2Fscript%3E"):
+        status, body = page(path)
+        assert status == 200
+        assert "<script" not in body
+
+
+def test_a_detail_that_is_not_an_object_is_still_listed(db, page):
+    _add(db, "job.failed", detail='["a", 1]')
+    status, body = page()
+    assert status == 200
+    assert "[&quot;a&quot;, 1]" in body
+
+
+@pytest.mark.parametrize("query", ["?hours=abc", "?hours=-5", "?hours=99999999", "?group=nonsense", "?result=nonsense",
+                                   "?code=%00", "?source=%00"])
 def test_a_query_it_does_not_know_is_refused(page, query):
     status, _ = page("/" + query)
     assert status == 400
@@ -125,10 +164,25 @@ def test_a_query_it_does_not_know_is_refused(page, query):
 
 @pytest.mark.parametrize("method", ["POST", "PUT", "DELETE", "PATCH"])
 def test_it_has_no_route_that_writes(db, page, method):
+    _add(db, "job.failed", reason="as written")
     status, _ = page("/", method=method)
     assert status in (405, 501)
     with psycopg.connect(db["owner"]) as owner:
-        assert owner.execute("select count(*) from memory.events").fetchone() == (0,)
+        assert owner.execute("select reason from memory.events").fetchall() == [("as written",)]
+
+
+@pytest.mark.parametrize("host", ["evil.example", "evil.example:9120", "127.0.0.1.evil.example:9120", "10.0.0.5:9120"])
+def test_a_request_under_another_hosts_name_is_refused(db, page, host):
+    # A page in the maintainer's browser whose name resolves to 127.0.0.1 would otherwise read the events (DNS
+    # rebinding): the browser sends that name as Host.
+    _add(db, "job.failed", reason="for the maintainer only")
+    status, body = page("/", host=host)
+    assert status == 400
+    assert "for the maintainer only" not in body
+
+
+def test_a_request_to_localhost_by_name_is_served(page):
+    assert page("/", host=f"localhost:{page.port}")[0] == 200
 
 
 def test_any_other_path_is_not_found(page):
