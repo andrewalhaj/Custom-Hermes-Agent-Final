@@ -27,6 +27,9 @@ provider = plugins.memory.load_memory_provider("custom_build")
 loaded = [m for name, m in sys.modules.items() if "custom_build" in name and name.endswith(".memory.embedding")]
 assert len(loaded) == 1, sorted(n for n in sys.modules if "custom_build" in n)
 loaded[0].OLLAMA_URL = sys.argv[1]
+if len(sys.argv) > 4:   # the hosted route's fake and its recorded reference (#239)
+    import pathlib
+    loaded[0].HOSTED_URL, loaded[0].REFERENCE = sys.argv[4], pathlib.Path(sys.argv[5])
 if sys.argv[2] == "crash":
     def crash(self, conn, *, timeout):
         raise KeyError("boom")
@@ -40,22 +43,26 @@ print(json.dumps({"raised": raised, "build": provider.embedder.build}))
 """
 
 
-def start(tmp_path, db, ollama_url, *, database_url=True, mode="plain", proxy=None):
+def start(tmp_path, db, ollama_url, *, database_url=True, mode="plain", proxy=None, hosted=None):
     """Load the provider and run initialize(); return (what it raised, its log output, events rows).
 
-    What it raised is a dict with `raised` and the embedder's checked `build`."""
+    What it raised is a dict with `raised` and the embedder's checked `build`. `hosted`, (the fake's URL, the
+    reference file), sets `embedding: deepinfra` and its key (#239)."""
     home = tmp_path / "home"
     shutil.copytree(PLUGIN, home / "plugins" / "custom_build", ignore=shutil.ignore_patterns("__pycache__"))
-    config = {"memory": {"provider": "custom_build"},
-              "plugins": {"entries": {"custom_build": {"settings": {"machine_name": "host-a", "judge_model": "jev-1.14.0"}}}}}
+    settings = {"machine_name": "host-a", "judge_model": "jev-1.14.0", **({"embedding": "deepinfra"} if hosted else {})}
+    config = {"memory": {"provider": "custom_build"}, "plugins": {"entries": {"custom_build": {"settings": settings}}}}
     (home / "config.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
     env = {"HERMES_HOME": str(home), "HOME": str(tmp_path), "PATH": "/usr/bin:/bin",
            "TYPESAFE_API_KEY": "test-key-not-a-real-one"}
+    if hosted:
+        env["DEEPINFRA_API_KEY"] = "test-key-not-a-real-one"
     if database_url:
         env["CUSTOM_BUILD_DATABASE_URL"] = db["agent"] if database_url is True else database_url
     if proxy:
         env["http_proxy"] = env["HTTP_PROXY"] = proxy
-    result = subprocess.run([sys.executable, "-c", SCENARIO, ollama_url, mode, str(home)], capture_output=True,
+    result = subprocess.run([sys.executable, "-c", SCENARIO, ollama_url, mode, str(home),
+                             *([hosted[0], str(hosted[1])] if hosted else [])], capture_output=True,
                             text=True, env=env, cwd=tmp_path, timeout=120, check=False)
     assert result.returncode == 0, result.stderr[-2000:]
     report = json.loads(result.stdout.strip().splitlines()[-1])
@@ -82,6 +89,27 @@ def test_a_matching_build_records_nothing(tmp_path, db, ollama):
     report, output, rows = start(tmp_path, db, ollama.url)
     assert report == {"raised": None, "build": ollama.build}, output
     assert rows == [], output
+
+
+def test_the_hosted_setting_checks_the_hosted_build_when_the_provider_starts(tmp_path, db, ollama_down, deepinfra):
+    # #239: with `embedding: deepinfra` the provider needs no Ollama (none listens here) and checks the
+    # hosted build by its reference vector.
+    reference = tmp_path / "embed_reference.json"
+    reference.write_text(json.dumps({"text": "The reference sentence.", "vector": deepinfra.other,
+                                     "threshold": 0.999}), encoding="utf-8")
+    report, output, rows = start(tmp_path, db, ollama_down, hosted=(deepinfra.url, reference))
+    assert report == {"raised": None, "build": "deepinfra:Qwen/Qwen3-Embedding-4B"}, output
+    assert rows == [], output
+    assert [body["input"] for _, body in deepinfra.requests] == [["The reference sentence."]]
+
+
+def test_a_refused_hosted_key_at_start_is_recorded_as_embed_refused(tmp_path, db, ollama_down, deepinfra):
+    deepinfra.status = 401
+    reference = tmp_path / "embed_reference.json"
+    reference.write_text(json.dumps({"text": "x", "vector": deepinfra.other, "threshold": 0.999}), encoding="utf-8")
+    report, output, rows = start(tmp_path, db, ollama_down, hosted=(deepinfra.url, reference))
+    assert report["build"] is None
+    assert rows == [("embed.refused", "failed", "host-a", "s1")], output
 
 
 def test_a_store_of_another_build_records_a_model_mismatch(tmp_path, db, ollama):
