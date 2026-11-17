@@ -268,6 +268,32 @@ def test_boundary_records_a_crash_and_returns_the_entry_points_answer(db, caplog
     assert any(r.exc_info and r.exc_info[0] is KeyError for r in caplog.records)   # the traceback is logged
 
 
+@pytest.mark.parametrize(("on_crash", "code"), [(_block, "guard.crash"), (failures.PROVIDER, "unhandled")])
+def test_boundary_answers_within_its_bound_when_the_store_never_answers(caplog, monkeypatch, on_crash, code):
+    # #117: a store that accepts the connection and then goes silent held the hook until the operating system
+    # gave up, past Hermes's deadline, after which Hermes blocks every tool call for a minute.
+    caplog.set_level(logging.INFO, logger=failures.__name__)
+    monkeypatch.setattr(failures, "CRASH_RECORD_WAIT", 0.5, raising=False)
+    released = threading.Event()
+
+    def silent():
+        released.wait(30)   # a connection that never comes back, as far as the wrapper can tell
+
+    call = failures.boundary(_host_a, silent, on_crash)(_guard_that_crashes)
+    started = time.monotonic()
+    try:
+        if on_crash is failures.PROVIDER:
+            with pytest.raises(KeyError):
+                call(session_id="s1")
+        else:
+            assert call(session_id="s1") == {"action": "block", "message": "blocked after KeyError"}
+        assert time.monotonic() - started < 5
+    finally:
+        released.set()
+    lost = [line for level, line in _json_lines(caplog) if line["code"] == "events.write_failed"]
+    assert [line["detail"] for line in lost] == [{"lost_code": code}]   # the loss is logged (rule F5)
+
+
 def test_boundary_passes_a_normal_answer_through_without_opening_a_connection():
     def connect():
         raise AssertionError("a connection was opened with nothing to record")
