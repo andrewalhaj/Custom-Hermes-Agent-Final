@@ -215,6 +215,7 @@ These are configuration values. Change one through an issue, with eval-set numbe
 | Digests read for "what is left to do?" | The project's newest 3. Their open items come first and fill the 8 results beside the search's 5. A starting value (#158); the eval set confirms or changes it. |
 | Score floor | 0.30, on facts the judge reranked, where the score is the judge's probability that the fact helps answer the message: under 0.3 reads as no, as in the "Asks for work at all" row. No floor on results ranked by fusion alone. A starting value; the eval set confirms or changes it. |
 | Recall deadline (`prefetch()`) | 6 seconds |
+| What is embedded (#238) | A recall query's first 1,200 characters, inside its 5-second embedding limit (the word search reads the whole message); a stored fact's or digest's first 4,000 characters, with a 30-second limit, the whole text stored. On a CPU-only agent host the model needs about 3 seconds for 800 characters. |
 | Action query (section 3.5) | Off, until the eval set has measured it (#26) |
 | Action-query deadline (`pre_llm_call`) | 6 seconds |
 | Judge deadline (one rerank or routing request) | 2 seconds. A starting value: the slowest routing request in the test for #15 took 0.3 seconds, and a rerank request has not been timed. |
