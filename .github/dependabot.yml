@@ -1,0 +1,8 @@
+# Each action in the workflow is pinned to a commit SHA, which never moves by itself (CONTRIBUTING.md 8.2).
+# Dependabot proposes each new release as a pull request that changes the SHA and its version comment.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
