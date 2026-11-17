@@ -173,7 +173,7 @@ def register(ctx) -> None:
         return
 
     from . import failures, settings
-    from .guards import fact_gate, verify_gate, write_gate
+    from .guards import fact_gate, recall_gate, verify_gate, write_gate
     from .memory import digest, extraction
 
     ctx.register_auxiliary_task(extraction.TASK, display_name="Custom build: fact extraction",
@@ -192,6 +192,7 @@ def register(ctx) -> None:
     write_gate.register(ctx)
     verify_gate.register(ctx)
     fact_gate.register(ctx)
+    recall_gate.register(ctx)
 
     def run_command(args) -> int:
         from . import heartbeat, job_health, report, startup_check

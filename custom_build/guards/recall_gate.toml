@@ -10,6 +10,17 @@
 # here is a pull request, with tests/test_recall_questions.py updated, and eval-set numbers once the eval
 # set exists (CONTRIBUTING.md rule C8).
 
+# The gate's mode (ARCHITECTURE.md 5.4 item 6, #173).
+# log: record each turn whose message matches a pattern below, as recall_gate.armed, and each armed turn whose
+#      reply came without both searches, as recall_gate.would_withhold. No reminder is added and nothing is
+#      withheld.
+# off: register no hook. Memory's recall still reads the patterns.
+# on: refused until the gate can enforce.
+mode = "log"
+
+# The two searches 5.3 asks for; one alone does not count. Counted only when post_tool_call reports them ok.
+searches = ["memory_search", "session_search"]
+
 # Past work: "we" or "I" asking about deciding, discussing, trying or fixing before. Not "you": that is
 # this session, which needs no memory. Not a generic verb such as "do", "set", "use" or "see": "what did I
 # do wrong?" asks about the code in front of the agent.
