@@ -31,10 +31,13 @@ def test_the_plugin_needs_the_newest_migration():
     assert startup_check.STORE_LEVEL == number(MIGRATIONS[-1])
 
 
-@pytest.mark.parametrize("path", [m for m in MIGRATIONS if number(m) > FIRST_WITH_A_LEVEL], ids=lambda m: m.name)
-def test_every_later_migration_raises_the_level_to_its_own_number(path):
-    assert re.search(rf"^update memory\.schema_level set level = {number(path)};$", path.read_text(encoding="utf-8"),
-                     re.MULTILINE), f"{path.name} must end by setting memory.schema_level to {number(path)}"
+def test_every_later_migration_raises_the_level_to_its_own_number():
+    # One test over every file, so it runs (and never skips) while 0006 is still the newest.
+    for path in MIGRATIONS:
+        if number(path) > FIRST_WITH_A_LEVEL:
+            assert re.search(rf"^update memory\.schema_level set level = {number(path)};$",
+                             path.read_text(encoding="utf-8"), re.MULTILINE), (
+                f"{path.name} must set memory.schema_level to {number(path)}, on a line of its own")
 
 
 def test_a_machine_can_read_the_level(db):
@@ -52,6 +55,27 @@ def test_a_machine_cannot_change_the_level(db, statement):
         conn.execute(statement)
 
 
-def test_the_level_table_holds_one_row_only(db):
+@pytest.mark.parametrize("row", ["(only_row, level) values (false, 99)", "(level) values (99)"])
+def test_the_level_table_holds_one_row_only(db, row):
+    # The check refuses a row that is not the one row; the primary key refuses a second copy of it.
     with psycopg.connect(db["owner"]) as conn, pytest.raises(psycopg.errors.IntegrityError):
-        conn.execute("insert into memory.schema_level (only_row, level) values (false, 99)")
+        conn.execute("insert into memory.schema_level " + row)
+
+
+def test_row_level_security_is_on_for_the_level(db):
+    with psycopg.connect(db["owner"]) as conn:
+        assert conn.execute(
+            "select relrowsecurity from pg_class where oid = 'memory.schema_level'::regclass").fetchone() == (True,)
+
+
+def test_the_level_policies_and_grants_are_exactly_these(db):
+    with psycopg.connect(db["owner"]) as conn:
+        policies = conn.execute(
+            "select policyname, cmd, roles::text[] from pg_policies"
+            " where schemaname = 'memory' and tablename = 'schema_level' order by policyname").fetchall()
+        grants = conn.execute(
+            "select grantee, privilege_type from information_schema.role_table_grants"
+            " where table_schema = 'memory' and table_name = 'schema_level' and grantee like 'memory%'"
+            " order by grantee, privilege_type").fetchall()
+    assert policies == [("schema_level_agent_select", "SELECT", ["memory_agent"])]
+    assert grants == [("memory_agent", "SELECT")]
