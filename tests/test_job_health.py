@@ -148,3 +148,16 @@ def test_a_job_success_written_from_the_wrong_place_does_not_count(tmp_path, db)
         ("job.missed", "failed", "host-a", {"job": "retention"}),
         ("job.succeeded", "ok", "host-a", {"job": "job-health"}),
     ]
+
+
+def test_runs_recorded_from_the_wrong_place_are_not_read_as_a_job_with_no_output(tmp_path, db):
+    # The two newest retention rows are another host's; the database's own last runs put rows out.
+    home = with_hosts(make_home(tmp_path, db), ["host-a"])
+    seed(db, ("host.heartbeat", "host-a", 1, {}), ("job.succeeded", "host-a", 2, {"job": "daily-report"}),
+         ("job.succeeded", "database", 4, {"job": "retention", "input": 5, "output": 5}),
+         ("job.succeeded", "database", 3, {"job": "retention", "input": 5, "output": 5}),
+         ("job.succeeded", "host-b", 2, {"job": "retention", "input": 5, "output": 0}),
+         ("job.succeeded", "host-b", 1, {"job": "retention", "input": 5, "output": 0}))
+    result = hermes(tmp_path, home, "custom-build", "job-health")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert recorded(db) == [("job.succeeded", "ok", "host-a", {"job": "job-health"})]
