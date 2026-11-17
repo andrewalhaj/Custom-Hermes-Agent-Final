@@ -26,9 +26,7 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
-from http.client import (
-    IncompleteRead,  # by name: this module's own `http` function shadows the package
-)
+from http.client import HTTPException  # by name: this module's own `http` function shadows the package
 
 API = "https://api.supabase.com"
 REQUIRED = ("DEPLOY_REPO", "DEPLOY_SSH", "DEPLOY_HERMES", "DEPLOY_HERMES_HOME", "DEPLOY_UNIT", "DEPLOY_RESTART",
@@ -122,7 +120,7 @@ def migrations_note(sent, confirmed):
         return "no migration was sent"
     note = f"migrations applied, which stay applied: {', '.join(confirmed) or 'none'}"
     unconfirmed = [name for name in sent if name not in confirmed]
-    if unconfirmed:   # sent, then its read-back failed: read the store's history by hand
+    if unconfirmed:   # the send or its read-back failed, or the history does not list it: read the history by hand
         note += f"; sent but not confirmed, so the store may hold it: {', '.join(unconfirmed)}"
     return note
 
@@ -237,7 +235,7 @@ def http(method, url, token, body=None, timeout=120):
             text = response.read()
     except urllib.error.HTTPError as exc:
         raise DeployError(f"{method} {path}: HTTP {exc.code} {exc.read().decode(errors='replace')[:500]}") from exc
-    except (OSError, IncompleteRead) as exc:   # refused, reset, cut off or timed out: whether the request took effect is unknown
+    except (OSError, HTTPException) as exc:   # refused, reset, cut off or timed out: whether the request took effect is unknown
         raise DeployError(f"{method} {path}: could not reach the store's API: {exc}") from exc
     try:
         return json.loads(text or b"null")
