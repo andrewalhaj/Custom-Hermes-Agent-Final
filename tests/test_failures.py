@@ -174,6 +174,8 @@ def test_the_catalog_holds_the_architecture_codes():
         "write_gate.would_block",
         "verify_gate.would_block",
         "verify_gate.would_withhold",
+        "recall_gate.armed",
+        "recall_gate.would_withhold",
         "fact_gate.armed",
         "fact_gate.would_withhold",
         "config.unsafe", "config.missing", "redact.failed", "memory.write_rejected", "events.write_failed",

@@ -40,6 +40,8 @@ CATALOG = {
     "verify_gate.would_withhold": "Not a failure: in log mode, a reply stated a listed file's contents the session never read",
     "fact_gate.armed": "Not a failure: in log mode, the user asked a checkable question",
     "fact_gate.would_withhold": "Not a failure: in log mode, a checkable question's reply had no lookup, or no documentation lookup",
+    "recall_gate.armed": "Not a failure: in log mode, the user asked about past work or open work",
+    "recall_gate.would_withhold": "Not a failure: in log mode, a past-work question's reply came without both the memory search and the session search",
     "config.unsafe": "The startup check found a Hermes setting with a value the build does not support",
     "config.missing": "A setting the build needs is missing or invalid",
     "redact.failed": "The redactor raised; the text is not stored or sent",

@@ -156,7 +156,7 @@ def test_a_turn_that_asks_nothing_checkable_records_nothing(tmp_path, db):
 def test_off_registers_no_hook_and_records_nothing(tmp_path, db):
     report, output, rows = run_gate(tmp_path, db, [["turn", "s1", "u1", "How many facts are there?"]], mode="off")
     assert report["entry"]["error"] is None, output
-    assert report["entry"]["hooks"] == 5   # the settings check, the write gate and the verify gate's three
+    assert report["entry"]["hooks"] == 8   # the settings check, the write gate, and the verify and recall gates' three each
     assert rows == []
 
 

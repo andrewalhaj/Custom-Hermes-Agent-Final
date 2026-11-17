@@ -423,6 +423,8 @@ The verify gate's first list (#124): Hermes's `config.yaml` and `.env`, the plug
 
 The fact gate's first lists (#133): a checkable question is one of eight named patterns on the user's message (a version, a place, a state, a value, a count, support, a date, or a failure in a question); a lookup is `web_search`, `web_extract`, `read_file`, `search_files`, `terminal`, `session_search`, `skill_view`, `x_search` or `delegate_task` (a subagent's own lookups carry its session and turn), and a documentation lookup is `web_search` or `web_extract`; a reply needs a documentation lookup too when it gives a numbered procedure or a diagnosis. The memory search tool, `memory_search`, is one of the lookups (#158).
 
+The recall gate's searches (#173): `memory_search` and `session_search`, listed in its file beside the patterns. Each is counted as a tool call; the notes memory's recall delivers with a message (section 3.5) are not a tool call, and neither is a search a subagent ran after `delegate_task`, so neither counts. The gate reads the message as Hermes hands it to recall: a message given as parts is read as its text. In `log` mode the gate records each armed turn with its table and pattern name, and an armed turn's reply with the search it lacked.
+
 The write gate's first list of sensitive actions (#80): writes into the skills folder by any tool; writes to Hermes's own `config.yaml` and `.env` and to the plugin's folder; and terminal commands that install packages, run `systemctl`, or reach other hosts. The gate reads a `write_file` or `patch` call by the paths the tool will write, and a terminal command by pattern (section 5.6), so "any tool" means those three. Hermes's skill tool, `skill_manage`, is held by `skills.write_approval` instead (the last item of the list below).
 
 The guards rest on Hermes mechanisms that the table does not name:
@@ -520,6 +522,7 @@ Initial codes:
 | `write_gate.would_ask`, `write_gate.would_block` | Not failures: in `log` mode, the write gate saw a call on its list that `on` would send to a person for approval, or would block outright (section 5.3) |
 | `verify_gate.would_block`, `verify_gate.would_withhold` | Not failures: in `log` mode, a call would change a listed file or setting the session never read, or a reply stated a listed file's contents the session never read (section 5.3) |
 | `fact_gate.armed`, `fact_gate.would_withhold` | Not failures: in `log` mode, the user asked a checkable question, or its reply had no lookup, or gave a procedure or diagnosis with no documentation lookup (section 5.3) |
+| `recall_gate.armed`, `recall_gate.would_withhold` | Not failures: in `log` mode, the user asked about past work or open work, or the reply came without both the memory search and the session search (section 5.3) |
 | `config.unsafe` | The startup check found a Hermes setting with a value the build does not support (section 5.5) |
 | `config.missing` | A setting the build needs is missing or invalid: the startup check fails, a scheduled job stops, and inside Hermes every turn is blocked (section 5.5) |
 | `redact.failed` | The redactor raised; the text is not stored or sent |
