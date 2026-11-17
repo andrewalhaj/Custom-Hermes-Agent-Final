@@ -186,6 +186,28 @@ def test_the_run_leaves_no_database_or_role_behind(tmp_path, dataset, ollama, ty
                              " or rolname = 'eval' or rolname like 'eval_%'").fetchone() == (0,)
 
 
+def test_chosen_ids_run_exactly_those_questions_in_that_order(tmp_path, dataset, ollama, typesafe):
+    # #236: the seeded subset held no abstention question; --ids runs exactly the questions asked for.
+    typesafe.default = 0.9
+    report = run(tmp_path, dataset, ollama, typesafe, ids=["q3", "q2_abs"])
+    assert [r["question_id"] for r in report["per_question"]] == ["q3", "q2_abs"]
+    assert report["ids"] == ["q3", "q2_abs"] and report["abstention"] == {"count": 1, "correct": 1}
+
+
+def test_an_unknown_id_stops_the_run_before_anything_is_called(tmp_path, dataset, ollama, typesafe):
+    with pytest.raises(longmemeval.EvalError, match="q9"):
+        run(tmp_path, dataset, ollama, typesafe, ids=["q1", "q9"])
+    assert typesafe.requests == [] and ollama.embedded == []
+
+
+def test_ids_with_a_count_or_a_seed_are_refused(dataset, capsys):
+    for extra in (["--questions", "3"], ["--seed", "2"]):
+        with pytest.raises(SystemExit):
+            longmemeval.main(["--data", str(dataset), "--ids", "q1", *extra])
+        # its own refusal, not argparse's "unrecognized arguments" (which an unknown --ids would also raise)
+        assert "--ids replaces the seeded subset" in capsys.readouterr().err
+
+
 def test_a_subset_is_the_same_for_the_same_seed_and_spread_across_question_types():
     entries = [{"question_id": f"q{n}", "question_type": ["a", "b", "c"][n % 3]} for n in range(30)]
     first = longmemeval.subset(entries, 6, seed=7)
