@@ -40,9 +40,8 @@ MIGRATIONS = sorted((ROOT / "migrations").glob("*.sql"))
 GROUP_ROLES = ("memory_agent", "memory_maintenance")
 CONFIG = pathlib.Path(__file__).with_suffix(".toml")   # the pinned revision and hash of the data file
 PROJECT_ORIGIN = "https://eval.invalid/longmemeval.git"   # every replay's project
-REFUSALS = ("extract.refused", "digest.refused")
 DATE_FORMAT = "%Y/%m/%d (%a) %H:%M"   # LongMemEval's haystack_dates
-LONG_SESSION = 20   # messages; a shorter session gets no digest (ARCHITECTURE.md 3.6)
+FAILED = "Recall failed ("   # how recall.failed() begins a note that reports a failure
 
 
 class EvalError(Exception):
@@ -94,23 +93,32 @@ def subset(entries, count, *, seed):
 
 
 def estimate(entries):
-    """What a run would call: one Haiku extraction per user turn, one digest per long session, at least."""
+    """What a run would call, at least: one Haiku extraction per user turn and one digest per long session
+    (the build's own setting, 3.6), and one judge rerank per question (plus a gate call per proposed fact)."""
+    long_session = tomllib.loads((PLUGIN / "memory" / "write_path.toml").read_text(encoding="utf-8"))[
+        "digest"]["long_session"]
     sessions = [session for entry in entries for session in entry["haystack_sessions"]]
     user_turns = sum(1 for session in sessions for message in session if message["role"] == "user")
-    long_sessions = sum(1 for session in sessions if len(session) >= LONG_SESSION)
+    long_sessions = sum(1 for session in sessions if len(session) >= long_session)
     return {"questions": len(entries), "user_turns": user_turns, "sessions": len(sessions),
-            "haiku_calls_at_least": user_turns + long_sessions}
+            "haiku_calls_at_least": user_turns + long_sessions, "judge_calls_at_least": len(entries)}
 
 
 @contextlib.contextmanager
 def database(postgres):
     """A throwaway database with every migration applied, and a login in memory_agent: (owner, agent) URLs.
-    The database, the login and the migrations' group roles are dropped afterwards."""
+    The database, the login and the migrations' group roles are dropped afterwards. The group roles are the
+    whole server's, so a server that already has them is refused, never touched: it is not a throwaway one."""
     name = f"eval_{uuid.uuid4().hex[:12]}"
     login, password = f"{name}_agent", uuid.uuid4().hex
     info = psycopg.conninfo.conninfo_to_dict(postgres)
     owner = psycopg.conninfo.make_conninfo(**{**info, "dbname": name})
     with psycopg.connect(postgres, autocommit=True) as admin:
+        found = [row[0] for row in admin.execute("select rolname from pg_roles where rolname = any(%s)",
+                                                 (list(GROUP_ROLES),))]
+        if found:
+            raise EvalError(f"this Postgres already has {', '.join(found)}: point the runner at a throwaway "
+                            "server; it never drops a role it did not create")
         admin.execute(sql.SQL("create database {}").format(sql.Identifier(name)))
         try:
             with psycopg.connect(owner, autocommit=True) as conn:
@@ -185,20 +193,22 @@ def one(entry, *, postgres, command, template, judge_model, judge_key):
         question.write_text(json.dumps(entry), encoding="utf-8")
         env = {**os.environ, "HERMES_HOME": str(home), "PYTHONPATH": str(ROOT), "CUSTOM_BUILD_DATABASE_URL": agent,
                "TYPESAFE_API_KEY": judge_key or os.environ.get("TYPESAFE_API_KEY", "")}
-        replay(command, "ingest", question, home, work, env)
+        stopped = replay(command, "ingest", question, home, work, env)["stopped"]
         with psycopg.connect(owner, autocommit=True) as conn:   # each row dated by its session (for recency)
             for session_id, date in zip(entry["haystack_session_ids"], entry["haystack_dates"], strict=True):
                 when = datetime.datetime.strptime(date, DATE_FORMAT).replace(tzinfo=datetime.UTC)
                 conn.execute("update memory.facts set created_at = %s where session_id = %s", (when, session_id))
-            codes = [row[0] for row in conn.execute("select code from memory.events order by id")]
             build = conn.execute("select embedding_model from memory.facts limit 1").fetchone()
         notes = replay(command, "ask", question, home, work, env)["notes"]
+        with psycopg.connect(owner) as conn:   # after the question too, so recall's own failures are counted
+            codes = [row[0] for row in conn.execute("select code from memory.events order by id")]
         bodies = note_bodies(notes)
         return {"question_id": entry["question_id"], "question_type": entry["question_type"],
                 "abstention": entry["question_id"].endswith("_abs"), "notes": len(bodies),
+                # recall reported a failure: never "no notes", so never a correct abstention (3.5)
+                "recall_failed": notes.startswith(FAILED),
                 "first_hit": first_hit(owner, bodies, set(entry["answer_session_ids"])), "codes": codes,
-                "embedding_build": build[0] if build else None,
-                "stopped": next((code for code in REFUSALS if code in codes), None)}
+                "embedding_build": build[0] if build else None, "stopped": stopped}
 
 
 def _scores(results):
@@ -220,7 +230,9 @@ def report(results, *, sha256, seed, judge_model):
             codes[code] = codes.get(code, 0) + 1
     return {"questions": len(results), "answerable": _scores(answerable),
             # First cut: an abstention question is answered right when recall brings no notes (3.8).
-            "abstention": {"count": len(abstaining), "correct": sum(1 for r in abstaining if r["notes"] == 0)},
+            "abstention": {"count": len(abstaining),
+                           "correct": sum(1 for r in abstaining if r["notes"] == 0 and not r["recall_failed"])},
+            "recall_failed": sum(1 for r in results if r["recall_failed"]),
             "by_type": {kind: _scores([r for r in answerable if r["question_type"] == kind])
                         for kind in sorted({r["question_type"] for r in answerable})},
             "failure_codes": codes, "commit": commit, "data_sha256": sha256, "seed": seed,
@@ -237,7 +249,8 @@ def markdown(summary):
     rows = [("All answerable", summary["answerable"]), *summary["by_type"].items()]
     lines += [f"| {name} | {s['count']} | {s['recall_at_5']} | {s['mrr']} |" for name, s in rows]
     abstention = summary["abstention"]
-    lines += ["", f"Abstention: {abstention['correct']} of {abstention['count']} with no notes."]
+    lines += ["", f"Abstention: {abstention['correct']} of {abstention['count']} with no notes.",
+              f"Recall failed on {summary['recall_failed']} questions (counted as misses)."]
     if summary.get("stopped"):
         lines += ["", f"**Stopped early: `{summary['stopped']}`.**"]
     return "\n".join(lines) + "\n"
@@ -251,20 +264,25 @@ def run(*, data, sha256, questions, seed, yes, postgres, out, replay_command=Non
         return {"estimate": estimate(entries)}
     command = replay_command or [sys.executable, "-m", "evals.replay"]
     results, stopped = [], None
-    for entry in entries:
-        result = one(entry, postgres=postgres, command=command, template=template, judge_model=judge_model,
-                     judge_key=judge_key)
-        results.append(result)
-        if result["stopped"]:   # the account was refused: stop, keeping what was measured
-            stopped = result["stopped"]
-            break
-    summary = report(results, sha256=sha256, seed=seed, judge_model=judge_model)
-    if stopped:
-        summary["stopped"] = stopped
-    out = pathlib.Path(out)
-    out.mkdir(parents=True, exist_ok=True)
-    (out / "report.json").write_text(json.dumps(summary, indent=2, default=str), encoding="utf-8")
-    (out / "report.md").write_text(markdown(summary), encoding="utf-8")
+    try:
+        for entry in entries:
+            result = one(entry, postgres=postgres, command=command, template=template, judge_model=judge_model,
+                         judge_key=judge_key)
+            results.append(result)
+            if result["stopped"]:   # the account was refused, or a plan limit hit: stop, keeping what was measured
+                stopped = result["stopped"]
+                break
+    except (EvalError, KeyboardInterrupt) as exc:   # the questions already measured are paid for: report them
+        stopped = f"crashed: {type(exc).__name__}: {exc}"[:500]
+        raise
+    finally:
+        summary = report(results, sha256=sha256, seed=seed, judge_model=judge_model)
+        if stopped:
+            summary["stopped"] = stopped
+        out = pathlib.Path(out)
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "report.json").write_text(json.dumps(summary, indent=2, default=str), encoding="utf-8")
+        (out / "report.md").write_text(markdown(summary), encoding="utf-8")
     return summary
 
 

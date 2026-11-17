@@ -9,11 +9,16 @@ the Hermes home in HERMES_HOME, so the replay runs the plugin exactly as an agen
 Usage: python -m evals.replay ingest|ask <question.json> <hermes home>
 """
 
+import datetime
 import json
+import os
 import pathlib
 import sys
 
 import plugins.memory
+import psycopg
+
+DATE_FORMAT = "%Y/%m/%d (%a) %H:%M"   # LongMemEval's haystack_dates
 
 
 def _modules():
@@ -22,29 +27,46 @@ def _modules():
 
 
 def turns(session):
-    """(user text, assistant reply, the messages so far) for each user turn, as Hermes syncs a finished turn.
-    A user message with no reply before the next one is synced with an empty reply."""
+    """(user text, assistant reply, the messages so far) for each user turn that got a reply, as Hermes syncs a
+    finished turn; Hermes never syncs a turn with no reply (run_agent.py, _sync_external_memory_for_turn)."""
     messages, user = [], None
     for message in session:
-        if message["role"] == "user" and user is not None:
-            yield user, "", list(messages)
         messages.append({"role": message["role"], "content": message["content"]})
         if message["role"] == "user":
             user = message["content"]
-        elif user is not None:
+        elif user is not None and message["content"]:
             yield user, message["content"], list(messages)
             user = None
-    if user is not None:
-        yield user, "", list(messages)
+
+
+# A failure the run must stop at: the account refused (#148's alert), or a plan limit, which an extraction or
+# digest call reports as its error (a 429 from the provider). Calling on would only repeat it.
+STOP = ("select code from memory.events where code in ('extract.refused', 'digest.refused')"
+        " or (code in ('extract.error', 'digest.error') and (reason ilike '%%limit%%' or reason like '%%429%%'))"
+        " order by id limit 1")
+
+
+def _stopped():
+    with psycopg.connect(os.environ["CUSTOM_BUILD_DATABASE_URL"]) as conn:
+        row = conn.execute(STOP).fetchone()
+    return row[0] if row else None
 
 
 def ingest(provider, home, entry):
-    for session_id, session in zip(entry["haystack_session_ids"], entry["haystack_sessions"], strict=True):
+    """Replay the history, sessions in date order; the code to stop at, as soon as one is recorded, or None."""
+    sessions = sorted(zip(entry["haystack_dates"], entry["haystack_session_ids"], entry["haystack_sessions"],
+                          strict=True), key=lambda item: datetime.datetime.strptime(item[0], DATE_FORMAT))
+    for _, session_id, session in sessions:
         provider.initialize(session_id=session_id, hermes_home=home, platform="cli", agent_context="primary")
         for number, (user, reply, messages) in enumerate(turns(session), start=1):
             provider.on_turn_start(number, user)
             provider.sync_turn(user, reply, session_id=session_id, messages=messages)
+            if stopped := _stopped():
+                return stopped
         provider.on_session_end([{"role": message["role"], "content": message["content"]} for message in session])
+        if stopped := _stopped():
+            return stopped
+    return None
 
 
 def ask(provider, home, entry):
@@ -62,8 +84,7 @@ def main(argv, patch=None):
     if patch:
         patch(_modules())
     if mode == "ingest":
-        ingest(provider, home, entry)
-        print(json.dumps({"ingested": entry["question_id"]}))
+        print(json.dumps({"ingested": entry["question_id"], "stopped": ingest(provider, home, entry)}))
     else:
         print(json.dumps({"notes": ask(provider, home, entry)}))
 
