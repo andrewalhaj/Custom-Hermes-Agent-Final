@@ -18,7 +18,7 @@ UNATTENDED_MODES = ("cron_mode", "single_query_mode", "unattended_mode")
 # deadline, so a hung guard hangs the turn. #75 settled on 30 or more (#69).
 HOOK_TIMEOUT_FLOOR = 30
 # The newest file in migrations/ this plugin was built against (tests/test_schema_level.py keeps them in step).
-STORE_LEVEL = 7
+STORE_LEVEL = 8
 
 
 def load_problems():

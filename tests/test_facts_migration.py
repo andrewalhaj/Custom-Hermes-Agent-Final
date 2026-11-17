@@ -67,7 +67,7 @@ def test_creates_the_facts_table_as_planned(db):
     ]
 
 
-def test_creates_the_four_indexes(db):
+def test_creates_the_five_indexes(db):
     with psycopg.connect(db["owner"]) as conn:
         indexes = conn.execute(
             "select indexdef from pg_indexes where schemaname = 'memory' and tablename = 'facts'"
@@ -76,6 +76,9 @@ def test_creates_the_four_indexes(db):
     assert [row[0] for row in indexes] == [
         f"CREATE UNIQUE INDEX facts_live_body_hash ON memory.facts USING btree (project, body_hash) NULLS NOT DISTINCT {LIVE}",
         f"CREATE INDEX facts_live_embedding_idx ON memory.facts USING hnsw (embedding halfvec_cosine_ops) {LIVE}",
+        # 0008's one live digest per session (#156): the constraint's own index
+        "CREATE INDEX facts_one_live_digest_per_session ON memory.facts USING btree (session_id) WHERE"
+        " ((kind = 'digest'::text) AND (superseded_by IS NULL) AND (retired_at IS NULL))",
         "CREATE INDEX facts_search_text_idx ON memory.facts USING gin (search_text)",
         "CREATE INDEX facts_session_idx ON memory.facts USING btree (session_id)",
     ]
