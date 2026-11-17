@@ -26,6 +26,7 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+from http.client import IncompleteRead   # by name: this module's own `http` function shadows the package
 
 API = "https://api.supabase.com"
 REQUIRED = ("DEPLOY_REPO", "DEPLOY_SSH", "DEPLOY_HERMES", "DEPLOY_HERMES_HOME", "DEPLOY_UNIT", "DEPLOY_RESTART",
@@ -76,6 +77,8 @@ def proven(commit, run):
 def history(cfg, http):
     rows = http("POST", f"{API}/v1/projects/{cfg['SUPABASE_PROJECT_REF']}/database/query/read-only",
                 cfg["SUPABASE_ACCESS_TOKEN"], {"query": "select name from supabase_migrations.schema_migrations"})
+    if not isinstance(rows, list) or not all(isinstance(row, dict) and isinstance(row.get("name"), str) for row in rows):
+        raise DeployError("migrations: the store's history answer is not a list of named rows")
     return {row["name"].removesuffix(".sql") for row in rows}   # recorded without the ending; either way is the same file
 
 
@@ -91,10 +94,11 @@ def pending_migrations(commit, cfg, run, http):
             for path in files if pathlib.PurePosixPath(path).stem not in applied]
 
 
-def apply_migrations(pending, cfg, http, ask, out):
+def apply_migrations(pending, cfg, http, ask, out, sent, confirmed):
+    """Apply each pending migration, adding its name to `sent` before it goes and to `confirmed` once read back."""
     if not pending:
         out("migrations: none pending")
-        return []
+        return
     out("migrations pending, in the order they would be applied:")
     for name, _ in pending:
         out(f"  {name}")
@@ -102,12 +106,23 @@ def apply_migrations(pending, cfg, http, ask, out):
         raise DeployError("migrations: not applied, the answer was not yes")
     for name, sql in pending:
         out(f"migrations: applying {name}")
+        sent.append(name)
         http("POST", f"{API}/v1/projects/{cfg['SUPABASE_PROJECT_REF']}/database/migrations",
              cfg["SUPABASE_ACCESS_TOKEN"], {"query": sql, "name": name})
         if name not in history(cfg, http):
             raise DeployError(f"migrations: {name} was sent but the store's history does not list it")
+        confirmed.append(name)
         out(f"migrations: applied {name}")
-    return [name for name, _ in pending]
+
+
+def migrations_note(sent, confirmed):
+    if not sent:
+        return "no migration was sent"
+    note = f"migrations applied, which stay applied: {', '.join(confirmed) or 'none'}"
+    unconfirmed = [name for name in sent if name not in confirmed]
+    if unconfirmed:   # sent, then its read-back failed: read the store's history by hand
+        note += f"; sent but not confirmed, so the store may hold it: {', '.join(unconfirmed)}"
+    return note
 
 
 def on_host(cfg, run, *words, timeout=120):
@@ -170,16 +185,17 @@ def roll_back(previous, cfg, run, out, kept):
 
 
 def deploy(commit, env, run, http, ask, out):
+    sent, confirmed = [], []
     try:
         cfg = settings(env)
         proven(commit, run)
         pending = pending_migrations(commit, cfg, run, http)
         previous = installed_commit(cfg, run)
-        applied = apply_migrations(pending, cfg, http, ask, out)
+        apply_migrations(pending, cfg, http, ask, out, sent, confirmed)
     except DeployError as exc:
-        out(f"deploy stopped, the host is unchanged: {exc}")
+        out(f"deploy stopped, the host is unchanged: {exc}. Store: {migrations_note(sent, confirmed)}")
         return 1
-    kept = f"migrations applied, which stay applied: {', '.join(applied) or 'none'}"
+    kept = f"migrations applied, which stay applied: {', '.join(confirmed) or 'none'}"
     try:
         install(commit, cfg, run)
     except DeployError as exc:
@@ -219,11 +235,11 @@ def http(method, url, token, body=None, timeout=120):
             text = response.read()
     except urllib.error.HTTPError as exc:
         raise DeployError(f"{method} {path}: HTTP {exc.code} {exc.read().decode(errors='replace')[:500]}") from exc
-    except OSError as exc:   # refused, reset or timed out: whether the request took effect is unknown
+    except (OSError, IncompleteRead) as exc:   # refused, reset, cut off or timed out: whether the request took effect is unknown
         raise DeployError(f"{method} {path}: could not reach the store's API: {exc}") from exc
     try:
         return json.loads(text or b"null")
-    except json.JSONDecodeError as exc:
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise DeployError(f"{method} {path}: the store's API answered with something that is not JSON") from exc
 
 
