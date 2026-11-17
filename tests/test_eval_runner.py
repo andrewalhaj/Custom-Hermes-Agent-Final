@@ -672,8 +672,9 @@ def test_a_kept_run_asked_on_the_hosted_route_re_embeds_each_store_then_asks_thr
     assert "Which editor does the user use?" in sent and "I edit all my code in vim, every day." in sent
     assert again["embedding"] == "deepinfra" and local["embedding"] == "local"
     assert again["answerable"] == local["answerable"]   # the fakes give both routes the same vectors
-    assert sorted(path.name for path in (tmp_path / "hosted").glob("backup-*.json")) == [
-        "backup-q1.json", "backup-q2_abs.json", "backup-q3.json"]
+    # q2_abs stored no fact (its session is small talk), so there was nothing to move or back up.
+    assert sorted(path.name for path in (tmp_path / "hosted").glob("backup-*.json")) == ["backup-q1.json",
+                                                                                          "backup-q3.json"]
 
 
 def test_a_run_on_the_hosted_route_embeds_through_it_from_the_start(tmp_path, dataset, ollama, typesafe, deepinfra,
