@@ -15,6 +15,7 @@ Usage: python -m evals.longmemeval --data longmemeval_s_cleaned.json --questions
 """
 
 import argparse
+import concurrent.futures
 import contextlib
 import datetime
 import hashlib
@@ -26,6 +27,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import tomllib
 import urllib.request
 import uuid
@@ -39,6 +41,9 @@ PLUGIN = ROOT / "custom_build"
 MIGRATIONS = sorted((ROOT / "migrations").glob("*.sql"))
 GROUP_ROLES = ("memory_agent", "memory_maintenance")
 MACHINE = "eval"   # the eval host's machine name, and so its login's name
+# 0001's role statements, run once per run by roles() and left out of each question's 0001 (#219)
+ROLE_STATEMENTS = ("create role memory_agent nologin;", "create role memory_maintenance nologin;")
+SETUP = threading.Lock()   # one question's database is set up at a time
 CONFIG = pathlib.Path(__file__).with_suffix(".toml")   # the pinned revision and hash of the data file
 PROJECT_ORIGIN = "https://eval.invalid/longmemeval.git"   # every replay's project
 DATE_FORMAT = "%Y/%m/%d (%a) %H:%M"   # LongMemEval's haystack_dates
@@ -106,32 +111,59 @@ def estimate(entries):
 
 
 @contextlib.contextmanager
-def database(postgres):
-    """A throwaway database with every migration applied, and a login in memory_agent: (owner, agent) URLs.
-    The database, the login and the migrations' group roles are dropped afterwards. The group roles are the
-    whole server's, so a server that already has them is refused, never touched: it is not a throwaway one."""
-    name = f"eval_{uuid.uuid4().hex[:12]}"
-    login, password = MACHINE, uuid.uuid4().hex   # the store admits events only under the login's name (#149)
-    info = psycopg.conninfo.conninfo_to_dict(postgres)
-    owner = psycopg.conninfo.make_conninfo(**{**info, "dbname": name})
+def roles(postgres):
+    """The migrations' group roles and the eval's login in memory_agent, made once for the whole run and
+    dropped at its end; yields the login's password. They are the whole server's, so a server that already has
+    any of them is refused, never touched: it is not a throwaway one. The login has one name for every
+    question, because the store admits events only under the login's name (#149), so it is the run's too."""
+    password = uuid.uuid4().hex
     with psycopg.connect(postgres, autocommit=True) as admin:
         found = [row[0] for row in admin.execute("select rolname from pg_roles where rolname = any(%s)",
                                                  ([MACHINE, *GROUP_ROLES],))]
         if found:
             raise EvalError(f"this Postgres already has {', '.join(found)}: point the runner at a throwaway "
                             "server; it never drops a role it did not create")
-        admin.execute(sql.SQL("create database {}").format(sql.Identifier(name)))
         try:
-            with psycopg.connect(owner, autocommit=True) as conn:
-                for migration in MIGRATIONS:
-                    conn.execute(migration.read_text(encoding="utf-8"))
-                conn.execute(sql.SQL("create role {} login password {} in role memory_agent").format(
-                    sql.Identifier(login), sql.Literal(password)))
-            yield owner, psycopg.conninfo.make_conninfo(**{**info, "dbname": name, "user": login, "password": password})
+            for statement in ROLE_STATEMENTS:
+                admin.execute(statement)
+            admin.execute(sql.SQL("create role {} login password {} in role memory_agent").format(
+                sql.Identifier(MACHINE), sql.Literal(password)))
+            yield password
+        finally:
+            for role in (MACHINE, *GROUP_ROLES):
+                admin.execute(sql.SQL("drop role if exists {}").format(sql.Identifier(role)))
+
+
+def _migrations():
+    """Every migration's text, 0001 without the role statements `roles()` has already run (#219)."""
+    texts = [migration.read_text(encoding="utf-8") for migration in MIGRATIONS]
+    if not all(statement in texts[0] for statement in ROLE_STATEMENTS):
+        raise EvalError(f"{MIGRATIONS[0].name} no longer has {ROLE_STATEMENTS}: update the eval runner's roles()")
+    for statement in ROLE_STATEMENTS:
+        texts[0] = texts[0].replace(statement, "", 1)
+    return texts
+
+
+@contextlib.contextmanager
+def database(postgres, password):
+    """A throwaway database with every migration applied: (owner, agent) URLs, the agent's being the run's
+    login (`roles()`, whose `password` it takes). The database is dropped afterwards."""
+    name = f"eval_{uuid.uuid4().hex[:12]}"
+    info = psycopg.conninfo.conninfo_to_dict(postgres)
+    owner = psycopg.conninfo.make_conninfo(**{**info, "dbname": name})
+    texts = _migrations()
+    with psycopg.connect(postgres, autocommit=True) as admin:
+        try:
+            # One setup at a time: 0004 grants and revokes a role membership, which is the whole server's.
+            with SETUP, psycopg.connect(postgres, autocommit=True) as creator:
+                creator.execute(sql.SQL("create database {}").format(sql.Identifier(name)))
+                with psycopg.connect(owner, autocommit=True) as conn:
+                    for text in texts:
+                        conn.execute(text)
+            yield owner, psycopg.conninfo.make_conninfo(**{**info, "dbname": name, "user": MACHINE,
+                                                           "password": password})
         finally:
             admin.execute(sql.SQL("drop database if exists {} with (force)").format(sql.Identifier(name)))
-            for role in (login, *GROUP_ROLES):
-                admin.execute(sql.SQL("drop role if exists {}").format(sql.Identifier(role)))
 
 
 def hermes_home(tmp, template, judge_model):
@@ -188,9 +220,9 @@ def first_hit(owner, bodies, evidence):
     return None
 
 
-def one(entry, *, postgres, command, template, judge_model, judge_key):
+def one(entry, *, postgres, password, command, template, judge_model, judge_key):
     """Replay and ask one question; its scores, the build it ran on, and the failure codes it recorded."""
-    with database(postgres) as (owner, agent), tempfile.TemporaryDirectory() as directory:
+    with database(postgres, password) as (owner, agent), tempfile.TemporaryDirectory() as directory:
         tmp = pathlib.Path(directory)
         home, work = hermes_home(tmp, template, judge_model)
         question = tmp / "question.json"
@@ -276,21 +308,49 @@ def markdown(summary):
 
 
 def run(*, data, sha256, questions, seed, yes, postgres, out, replay_command=None, template=None,
-        judge_model="jev-1.14.0", judge_key=None):
-    """Estimate, or with `yes` run, the eval over a seeded subset; returns (and writes) the report."""
+        judge_model="jev-1.14.0", judge_key=None, parallel=1):
+    """Estimate, or with `yes` run, the eval over a seeded subset, up to `parallel` questions at once (#219);
+    returns (and writes) the report, its questions in the subset's order."""
     entries = subset(load(data, sha256), questions, seed=seed)
     if not yes:
         return {"estimate": estimate(entries)}
     command = replay_command or [sys.executable, "-m", "evals.replay"]
     results, stopped = [], None
+    halt = threading.Event()   # once set, no question starts: a stop or a crash in any of them
+
+    def question(entry):
+        if halt.is_set():
+            return None
+        try:
+            result = one(entry, postgres=postgres, password=password, command=command, template=template,
+                         judge_model=judge_model, judge_key=judge_key)
+        except BaseException:
+            halt.set()
+            raise
+        if result["stopped"]:   # the account was refused, or a plan limit hit: stop, keeping what was measured
+            halt.set()
+        return result
+
     try:
-        for entry in entries:
-            result = one(entry, postgres=postgres, command=command, template=template, judge_model=judge_model,
-                         judge_key=judge_key)
-            results.append(result)
-            if result["stopped"]:   # the account was refused, or a plan limit hit: stop, keeping what was measured
-                stopped = result["stopped"]
-                break
+        with roles(postgres) as password:   # the run's login, which question() hands to each one()
+            pool = concurrent.futures.ThreadPoolExecutor(max_workers=parallel)
+            futures = [pool.submit(question, entry) for entry in entries]
+            error = None
+            try:
+                concurrent.futures.wait(futures)
+            finally:   # on Ctrl-C too: start nothing more, let the running questions finish, and keep every result
+                halt.set()
+                pool.shutdown(cancel_futures=True)
+                for future in futures:   # in the subset's order, so a parallel report reads as a sequential one
+                    if future.cancelled() or not future.done():
+                        continue
+                    if future.exception() is not None:
+                        error = error or future.exception()
+                    elif (result := future.result()) is not None:
+                        results.append(result)
+                        stopped = stopped or result["stopped"]
+            if error is not None:
+                raise error
     except (EvalError, KeyboardInterrupt) as exc:   # the questions already measured are paid for: report them
         stopped = f"crashed: {type(exc).__name__}: {exc}"[:500]
         raise
@@ -317,13 +377,17 @@ def main(argv=None):
                         help="a superuser URL on a throwaway Postgres; never the shared store")
     parser.add_argument("--template", help="a Hermes home with the Claude subscription provider set up")
     parser.add_argument("--out", default="eval-report")
+    parser.add_argument("--parallel", type=int, default=1,
+                        help="questions run at once; more reach the plan's limits sooner (#219)")
     args = parser.parse_args(argv)
+    if args.parallel < 1:
+        parser.error("--parallel must be 1 or more")
     if not pinned["sha256"]:
         raise SystemExit(f"{CONFIG.name} records no revision and SHA-256 yet: pin them first (#167)")
     if args.download:
         fetch(pinned["url"].format(revision=pinned["revision"]), args.data, pinned["sha256"])
     summary = run(data=args.data, sha256=pinned["sha256"], questions=args.questions, seed=args.seed, yes=args.yes,
-                  postgres=args.postgres, out=args.out, template=args.template)
+                  postgres=args.postgres, out=args.out, template=args.template, parallel=args.parallel)
     print(json.dumps(summary if "estimate" in summary else {k: v for k, v in summary.items() if k != "per_question"},
                      indent=2))
     return 3 if summary.get("stopped") else 0

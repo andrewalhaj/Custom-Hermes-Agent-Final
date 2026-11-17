@@ -9,6 +9,7 @@ superuser connection to a throwaway Postgres, as the store tests do.
 
 import hashlib
 import http.server
+import itertools
 import json
 import os
 import pathlib
@@ -82,7 +83,15 @@ def patch(modules):
     if json.load(open(sys.argv[2]))["question_id"] == os.environ.get("EVAL_TEST_CRASH_ON"):
         raise SystemExit("the replay crashed")
 
-replay.main(sys.argv[1:], patch=patch)
+if os.environ.get("EVAL_TEST_TIMES") and sys.argv[1] == "ingest":   # when each question's replay ran (#219)
+    import time
+    started = time.time()
+    time.sleep(1)
+    replay.main(sys.argv[1:], patch=patch)
+    with open(os.environ["EVAL_TEST_TIMES"], "a") as times:
+        times.write(json.dumps([started, time.time()]) + "\n")
+else:
+    replay.main(sys.argv[1:], patch=patch)
 """
 
 
@@ -95,7 +104,7 @@ def dataset(tmp_path):
 
 def run(tmp_path, dataset, ollama, typesafe, **options):
     os.environ["EVAL_TEST_OLLAMA_URL"], os.environ["EVAL_TEST_JUDGE_URL"] = ollama.url, typesafe.url
-    for name in ("EVAL_TEST_ASK_FAILS", "EVAL_TEST_CRASH_ON", "EVAL_TEST_ROUTES", "EVAL_TEST_ENV_OUT"):
+    for name in ("EVAL_TEST_ASK_FAILS", "EVAL_TEST_CRASH_ON", "EVAL_TEST_ROUTES", "EVAL_TEST_ENV_OUT", "EVAL_TEST_TIMES"):
         os.environ.pop(name, None)
     os.environ.update(options.pop("test_env", {}))
     defaults = {"data": dataset, "sha256": hashlib.sha256(dataset.read_bytes()).hexdigest(), "questions": 3,
@@ -174,7 +183,7 @@ def test_the_run_leaves_no_database_or_role_behind(tmp_path, dataset, ollama, ty
     with psycopg.connect(os.environ["TEST_DATABASE_URL"]) as admin:
         assert admin.execute("select count(*) from pg_database where datname like 'eval_%'").fetchone() == (0,)
         assert admin.execute("select count(*) from pg_roles where rolname in ('memory_agent', 'memory_maintenance')"
-                             " or rolname like 'eval_%'").fetchone() == (0,)
+                             " or rolname = 'eval' or rolname like 'eval_%'").fetchone() == (0,)
 
 
 def test_a_subset_is_the_same_for_the_same_seed_and_spread_across_question_types():
@@ -321,6 +330,80 @@ def test_a_postgres_that_already_has_a_role_the_runner_makes_is_refused_and_left
             assert admin.execute("select count(*) from pg_roles where rolname = %s", (role,)).fetchone() == (1,)
         finally:
             admin.execute(psycopg.sql.SQL("drop role if exists {}").format(psycopg.sql.Identifier(role)))
+
+
+def test_with_parallel_two_questions_replay_at_the_same_time(tmp_path, dataset, ollama, typesafe):
+    # #219: each question has its own database and Hermes home, so N of them can run at once.
+    typesafe.default = 0.9
+    times = tmp_path / "times.jsonl"
+    run(tmp_path, dataset, ollama, typesafe, parallel=2, test_env={"EVAL_TEST_TIMES": str(times)})
+    spans = sorted(json.loads(line) for line in times.read_text(encoding="utf-8").splitlines())
+    assert len(spans) == 3 and any(later[0] < earlier[1] for earlier, later in itertools.pairwise(spans))
+
+
+def test_a_parallel_run_scores_as_the_same_questions_one_at_a_time(tmp_path, dataset, ollama, typesafe):
+    typesafe.default = 0.9
+    one_at_a_time = run(tmp_path, dataset, ollama, typesafe, out=tmp_path / "one")
+    parallel = run(tmp_path, dataset, ollama, typesafe, parallel=3, out=tmp_path / "three")
+    keep = ("questions", "answerable", "abstention", "by_type", "failure_codes")
+    assert {k: parallel[k] for k in keep} == {k: one_at_a_time[k] for k in keep}
+    assert [r["question_id"] for r in parallel["per_question"]] == [r["question_id"] for r in
+                                                                   one_at_a_time["per_question"]]
+
+
+def test_a_parallel_run_leaves_no_database_or_role_behind(tmp_path, dataset, ollama, typesafe):
+    typesafe.default = 0.9
+    run(tmp_path, dataset, ollama, typesafe, parallel=3)
+    with psycopg.connect(os.environ["TEST_DATABASE_URL"]) as admin:
+        assert admin.execute("select count(*) from pg_database where datname like 'eval_%'").fetchone() == (0,)
+        assert admin.execute("select count(*) from pg_roles where rolname in ('memory_agent', 'memory_maintenance')"
+                             " or rolname = 'eval' or rolname like 'eval_%'").fetchone() == (0,)
+
+
+def test_a_stop_in_a_parallel_run_starts_no_new_question(tmp_path, dataset, ollama, typesafe):
+    # Questions already running finish and are reported; none starts after the stop.
+    refusing = WRAPPER.replace('''def fake_call_llm(**kwargs):''', '''class Refusal(RuntimeError):
+    status_code = 403
+
+def fake_call_llm(**kwargs):
+    raise Refusal("this account is restricted")''')
+    report = run(tmp_path, dataset, ollama, typesafe, parallel=2, replay_command=[sys.executable, "-c", refusing])
+    # Both start before either is refused, so both are reported (#219 review: "<= 2" also passed with none).
+    assert report["stopped"] == "extract.refused" and report["questions"] == 2
+
+
+@pytest.mark.parametrize("parallel", [1, 2])
+def test_ctrl_c_while_questions_run_keeps_the_ones_already_measured(tmp_path, dataset, ollama, typesafe, monkeypatch,
+                                                                    parallel):
+    # #219 review: results were collected only after the wait, so Ctrl-C reported none, even at parallel 1.
+    def measured(entry, **kwargs):
+        return {"question_id": entry["question_id"], "question_type": entry["question_type"], "abstention": False,
+                "notes": 0, "recall_failed": False, "first_hit": None, "codes": [], "failures": [],
+                "embedding_build": None, "stopped": None}
+
+    def interrupted(futures, **kwargs):
+        futures[0].result()   # the first question is measured, then Ctrl-C
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(longmemeval, "one", measured)
+    monkeypatch.setattr(longmemeval.concurrent.futures, "wait", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        run(tmp_path, dataset, ollama, typesafe, parallel=parallel)
+    written = json.loads((tmp_path / "report" / "report.json").read_text(encoding="utf-8"))
+    assert written["questions"] >= 1 and written["stopped"].startswith("crashed: KeyboardInterrupt")
+
+
+def test_a_first_migration_without_the_role_statements_the_runner_removes_fails_the_run(
+        tmp_path, dataset, ollama, typesafe, monkeypatch):
+    # The roles are made once per run, so each question's database applies 0001 without them (#219); a 0001 that
+    # no longer has them must fail loudly, never apply half a migration.
+    changed = tmp_path / "0001_memory_events.sql"
+    original = longmemeval.MIGRATIONS[0]
+    changed.write_text(original.read_text(encoding="utf-8").replace("create role memory_agent nologin;\n", ""),
+                       encoding="utf-8")
+    monkeypatch.setattr(longmemeval, "MIGRATIONS", [changed, *longmemeval.MIGRATIONS[1:]])
+    with pytest.raises(longmemeval.EvalError, match="0001"):
+        run(tmp_path, dataset, ollama, typesafe)
 
 
 def test_a_turn_with_no_reply_is_not_synced_as_hermes_never_does():
