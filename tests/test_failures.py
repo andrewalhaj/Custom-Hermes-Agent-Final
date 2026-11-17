@@ -171,6 +171,7 @@ def test_the_catalog_holds_the_architecture_codes():
         "extract.refused",
         "digest.error",
         "digest.refused",
+        "digest.dropped",
         "write_gate.would_ask",
         "write_gate.would_block",
         "verify_gate.would_block",

@@ -93,6 +93,9 @@ except ValueError:
 def fake_call_llm(**kwargs):
     with open(sent_path, "a") as f:
         f.write(json.dumps(kwargs["messages"]) + "\n")
+    if answer == "die":   # the gateway stops while the digest's call is running: the process is gone (#156 item 2)
+        import os
+        os._exit(0)
     if answer == "refused":
         raise Refusal("Claude Code is not logged in")
     text = json.dumps(answers.pop(0)) if answers is not None else answer
@@ -104,6 +107,10 @@ modules = {name.rsplit(".", 1)[-1]: m for name, m in sys.modules.items() if "cus
 modules["embedding"].OLLAMA_URL = ollama_url
 modules["judge"].URL = judge_url
 provider.initialize(session_id="s1", hermes_home=sys.argv[7], platform="cli", agent_context=context)
+import threading   # a digest left by a stopped process is written on a thread at the start: let it finish
+for thread in threading.enumerate():
+    if thread.name.startswith("custom_build-pending"):
+        thread.join(60)
 provider.on_turn_start(7, "the last message")
 for messages in runs:
     provider.on_session_end(messages)
@@ -185,10 +192,21 @@ def test_a_session_with_a_digest_gets_a_later_one_even_when_its_transcript_is_sh
     assert _live_digests(db) == [LATER]
 
 
-def test_a_digest_the_judge_does_not_keep_is_dropped(home, db, ollama, typesafe):
+def test_a_digest_the_judge_does_not_keep_is_dropped_and_the_drop_recorded(home, db, ollama, typesafe):
+    # #156 item 3: a drop was silent; it is now recorded, with its session, as not a failure.
     typesafe.answers = {"worth_keeping": 0.2}
     end(home, db, ollama.url, typesafe.url, ANSWER, [_session(10)])
-    assert _rows(db) == [] and _codes(db) == []
+    assert _rows(db) == []
+    with psycopg.connect(db["owner"]) as conn:
+        assert conn.execute("select code, result, session_id from memory.events").fetchall() == [
+            ("digest.dropped", "ok", "s1")]
+
+
+def test_a_dropped_digest_is_tried_again_at_the_sessions_next_end(home, db, ollama, typesafe):
+    # Decided on #156: a later end carries a longer transcript, so the digest is tried again, each drop recorded.
+    typesafe.answers = {"worth_keeping": 0.2}
+    sent, _ = end(home, db, ollama.url, typesafe.url, ANSWER, [_session(10), _session(12)])
+    assert len(sent) == 2 and _codes(db) == ["digest.dropped", "digest.dropped"]
 
 
 def test_a_refused_account_is_recorded_as_digest_refused(home, db, ollama, typesafe):
@@ -209,6 +227,42 @@ def test_a_judge_failure_queues_the_digest_and_the_retry_still_gates_it(home, db
     end(home, db, ollama.url, typesafe.url, ANSWER, [])   # the next start retries the queue
     assert _rows(db) == []
     assert typesafe.requests[-1]["body"]["state"] == {"digest": BODY}
+
+
+def test_a_digest_a_stopped_process_could_not_finish_is_written_at_the_next_start(home, db, ollama, typesafe):
+    # #156 item 2, decided (a): the gateway stopped during the digest's call. Its transcript was queued
+    # before the call, so the next primary start writes the digest, for the session and turn it ended.
+    typesafe.answers = {"worth_keeping": 0.8}
+    end(home, db, ollama.url, typesafe.url, "die", [_session(10)])
+    assert _rows(db) == []
+    sent, _ = end(home, db, ollama.url, typesafe.url, ANSWER, [])   # the next start, no session ends
+    assert _rows(db) == [(BODY, "digest", "digest", "assistant_inferred", "github.com/Owner/Repo", "host-a", "s1", 7)]
+    assert len(sent) == 2 and sent[0] == sent[1]   # the same transcript, sent again
+
+
+def test_a_finished_digest_is_not_written_again_at_the_next_start(home, db, ollama, typesafe):
+    typesafe.answers = {"worth_keeping": 0.8}
+    end(home, db, ollama.url, typesafe.url, ANSWER, [_session(10)])
+    sent, _ = end(home, db, ollama.url, typesafe.url, ANSWER, [])
+    assert len(sent) == 1 and len(_rows(db)) == 1
+
+
+def test_a_queued_digest_whose_call_fails_again_is_recorded_and_not_kept(home, db, ollama, typesafe):
+    end(home, db, ollama.url, typesafe.url, "die", [_session(10)])
+    end(home, db, ollama.url, typesafe.url, "refused", [])
+    assert _codes(db) == ["digest.refused"]
+    sent, _ = end(home, db, ollama.url, typesafe.url, ANSWER, [])   # tried once more, not at every start
+    assert len(sent) == 2 and _rows(db) == []
+
+
+def test_the_queue_an_older_build_reads_holds_no_queued_transcript(home, db, ollama, typesafe):
+    # #229: a row a newer build writes must not stop an older build's provider. Older builds read only `queued`.
+    import sqlite3
+    end(home, db, ollama.url, typesafe.url, "die", [_session(10)])
+    with sqlite3.connect(home / "plugin-data" / "custom_build" / "store_queue.db") as queue:
+        tables = {row[0] for row in queue.execute("select name from sqlite_master where type = 'table'")}
+        assert "pending_digests" in tables
+        assert "queued" not in tables or queue.execute("select count(*) from queued").fetchone() == (0,)
 
 
 def test_nothing_is_written_outside_a_primary_session(home, db, ollama, typesafe):

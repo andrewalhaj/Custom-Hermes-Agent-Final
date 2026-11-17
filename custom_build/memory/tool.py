@@ -327,11 +327,22 @@ def write_digest(messages, *, machine, session_id, turn, embedder, judge_at, con
         return   # the store could not be reached (recorded)
     if not has and not digest.is_long(messages):
         return
-    fields = {"source": machine, "project": project.key(resolve_agent_cwd()), "session_id": session_id, "turn": turn}
+    pending = {"session_id": session_id, "project": project.key(resolve_agent_cwd()), "source": machine,
+               "turn": turn, "written_at": datetime.datetime.now(datetime.UTC).isoformat(),   # orders them (#156)
+               "transcript": digest.transcript(messages)}   # redacted
+    # Queued before the call (#156 item 2): a process stopped during it leaves the digest for the next start.
+    row_id = queue.add_digest(pending)
+    _digest_from(pending, embedder=embedder, judge_at=judge_at, connect=connect)
+    queue.digest_done(row_id)
+
+
+def _digest_from(pending, *, embedder, judge_at, connect):
+    """The digest model on a queued transcript, then the judge's gate and the store; a failure recorded."""
+    machine, session_id = pending["source"], pending["session_id"]
+    fields = {"source": machine, "project": pending["project"], "session_id": session_id, "turn": pending["turn"]}
     failure, body = None, None
-    written_at = datetime.datetime.now(datetime.UTC).isoformat()   # orders the session's digests (#156)
     try:   # with no connection open: the call can take as long as its auxiliary timeout
-        body = _redact_forced(digest.write(digest.transcript(messages)))
+        body = _redact_forced(digest.write(pending["transcript"]))
     except (extraction.ExtractRefused, extraction.ExtractError) as exc:
         failure = exc
 
@@ -344,11 +355,36 @@ def write_digest(messages, *, machine, session_id, turn, embedder, judge_at, con
             return
         # The weakest basis of its inputs: the transcript holds the agent's replies (3.3 rule 6).
         fact = store.Fact(body=body, basis="assistant_inferred", project=fields["project"], source=machine,
-                          session_id=session_id, source_turn=turn, origin="digest", kind="digest",
-                          written_at=written_at)
+                          session_id=session_id, source_turn=pending["turn"], origin="digest", kind="digest",
+                          written_at=pending["written_at"])
         _save(conn, fact, embedder=embedder, judge_at=judge_at)
 
     _with_store(machine, session_id, connect, work)
+
+
+def write_orphaned_digests(*, machine, embedder, judge_at, connect):
+    """Each digest a stopped process queued and never finished (#156 item 2), claimed by this process so that
+    only one start writes it, written now, then taken off the queue whatever happened, so a digest whose call
+    fails again is recorded once, not at every start."""
+    for row_id, owner, pending in queue.orphaned_digests():
+        if not queue.claim(row_id, owner):   # another start took it first
+            continue
+        try:
+            _digest_from(pending, embedder=embedder, judge_at=judge_at, connect=connect)
+        finally:
+            queue.digest_done(row_id)
+
+
+def start_orphaned_digests(*, machine, embedder, judge_at, connect):
+    """write_orphaned_digests() on a thread of its own, so a model call never holds the provider's start; None
+    when nothing waits. A crash in it is recorded as unhandled (CONTRIBUTING.md rule C2)."""
+    if not queue.orphaned_digests():
+        return None
+    run = failures.boundary(lambda: machine, connect, failures.Returns(lambda exc: None))(write_orphaned_digests)
+    worker = spawn_context_thread(run, name="custom_build-pending-digests", kwargs={
+        "machine": machine, "embedder": embedder, "judge_at": judge_at, "connect": connect})
+    worker.start()
+    return worker
 
 
 def _redact_forced(text):
@@ -399,8 +435,11 @@ def attempt(conn, fact, *, embedder, judge_at):
             if existing := store.identical(conn, fact.project, fact.body):
                 return {"already_stored": existing}
             if not _kept(fact, judge_at):
-                return {"dropped": "the judge did not keep it"}
-        return store.store(conn, fact, embedder=embedder, judge=judge_at, timeout=TIMEOUT)
+                return _dropped(conn, fact, "the judge did not keep it", fields)
+        outcome = store.store(conn, fact, embedder=embedder, judge=judge_at, timeout=TIMEOUT)
+        if "dropped" in outcome:   # a later digest of the session is live, or another committed first (#156)
+            return _dropped(conn, fact, outcome["dropped"], fields)
+        return outcome
     except embedding.EmbedUnavailable as exc:
         failures.record(conn, "embed.unavailable", "failed", reason=str(exc), **fields)
         return {"error": "embed.unavailable"}
@@ -419,6 +458,14 @@ def attempt(conn, fact, *, embedder, judge_at):
     except psycopg.Error as exc:
         failures.record(conn, "db.query", "failed", reason=str(exc), **fields)
         return {"error": "db.query"}
+
+
+def _dropped(conn, fact, reason, fields):
+    """{"dropped": reason}; a digest's drop is recorded, so its retries at the session's later ends are seen
+    (#156 item 3). A fact's drop by the gate is the gate's ordinary work and is not."""
+    if fact.kind == "digest":
+        failures.record(conn, "digest.dropped", "ok", reason=reason, **fields)
+    return {"dropped": reason}
 
 
 def _kept(fact, judge_at):

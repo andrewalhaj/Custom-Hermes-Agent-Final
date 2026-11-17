@@ -48,7 +48,7 @@ class CustomBuildProvider(MemoryProvider):
     @failures.boundary(_machine, settings.connect, failures.PROVIDER)
     def initialize(self, session_id: str, **kwargs) -> None:
         """Check the embedding build, recording a failed check with its code (#65 keeps is_available() out),
-        then retry the facts queued for the judge."""
+        then retry the facts queued for the judge, and write the digests a stopped process left, on a thread."""
         self.session_id = session_id
         self.embedder = embedding.Embedder(embedding.OLLAMA_URL)
         # Hermes asks providers to write only in a primary session, not a subagent, cron run or flush.
@@ -76,6 +76,9 @@ class CustomBuildProvider(MemoryProvider):
                                 session_id=session_id)
             if self.embedder.build is not None and self.primary:
                 tool.retry_queued(conn, embedder=self.embedder, judge_at=_judge())
+        if self.embedder.build is not None and self.primary:   # a stopped process's digests (#156 item 2)
+            tool.start_orphaned_digests(machine=machine, embedder=self.embedder, judge_at=_judge(),
+                                        connect=settings.connect)
 
     def on_turn_start(self, turn_number: int, message: str, **kwargs) -> None:
         self.turn = turn_number   # a fact records the user turn it was stored in
