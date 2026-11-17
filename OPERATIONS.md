@@ -180,6 +180,33 @@ The same applies to every other direct dependency: read its release notes in its
 
 The files in `migrations/` are applied to `<project-ref>` in file-name order, each once, after its pull request merges. A maintainer applies each one, or approves applying it, through the Supabase Management API's `POST /v1/projects/<project-ref>/database/migrations`, with the file's text as the query and its file name as the name. Supabase runs it and records it in the project's migration history, `supabase_migrations.schema_migrations`.[4] Read the history back afterwards: the newest entry is the file just applied. Then read back which role can grant each group role (`pg_auth_members`), because that role is the one that creates the login roles in section 3. The tests apply every file to an empty Postgres 17 as a superuser. That catches a file that is wrong in itself, but not one that fails only under Supabase's own roles and extensions; the first apply to the project shows that.
 
+## 8. Deploying to an agent host
+
+`python scripts/deploy.py <commit>`, run from a checkout on the operator's machine, does section 7 and section 3's Update step for one agent host, in a fixed order, and stops at the first step that fails. `<commit>` is the full hash of a commit on `main`.
+
+1. **Refuses an unproven commit:** one that is not on `origin/main`, or whose CI runs did not all succeed. No run yet is a refusal.
+2. **Reads before it changes anything:** the store's migration history, and the commit the host runs now, from the record Hermes keeps of a pinned install (`plugins/.install-metadata.json` in the Hermes home).[3] If either cannot be read, nothing has changed. A host with no pinned install is refused: the first install is done by hand (section 3).
+3. **Applies the pending migrations,** in file-name order, only after it lists them and the operator types `yes`, and reads the history back after each.
+4. **Updates the host:** the Update command from section 3, then `hermes custom-build check` before any restart, then the restart, then a smoke test: the service is active and `hermes custom-build heartbeat` exits 0, so the new code loads and reaches the store.
+5. **Rolls back** when step 4 fails anywhere: it installs the previous commit, restarts and smoke-tests again, and says whether that passed. A migration is never rolled back.
+
+It exits 0 when deployed, 1 when it refused with the host unchanged, 2 when it rolled back, and 3 when the rollback itself failed, which leaves the host for the operator to check by hand. It runs outside Hermes, so it writes nothing to `events` itself; the heartbeat in its smoke test does.
+
+The script reads these from the environment and refuses when one is missing. None of them belongs in this repository (section 1).
+
+| Variable | What it is |
+|---|---|
+| `DEPLOY_REPO` | `<owner>/<repo>`, as in section 3's install command |
+| `DEPLOY_SSH` | The ssh target for the account that owns the Hermes home on the agent host |
+| `DEPLOY_HERMES` | The full path of the `hermes` command on the host, as in the unit's `ExecStart=` |
+| `DEPLOY_HERMES_HOME` | The full path of the Hermes home on the host |
+| `DEPLOY_UNIT` | The gateway's systemd unit |
+| `DEPLOY_RESTART` | The whole command that restarts that unit, run on the operator's machine. Restarting a system unit needs root, so this is usually an ssh command with a login that may do it. |
+| `SUPABASE_PROJECT_REF` | `<project-ref>` |
+| `SUPABASE_ACCESS_TOKEN` | A Management API token for that project. The script never prints it. |
+
+Under the service, a startup check that fails waits 5 minutes before the unit's start fails (section 3), so a restart onto a bad commit takes that long to report, and the rollback follows it. The script has been run against fakes only; it has not yet updated a host (#181). It does not register scheduled jobs (section 4), upgrade Hermes (section 5), or cover an update whose Python packages change (#73).
+
 ## Sources
 
 - [1] [Scheduled tasks: no-agent mode (Hermes Agent documentation)](https://hermes-agent.nousresearch.com/docs/user-guide/features/cron)
