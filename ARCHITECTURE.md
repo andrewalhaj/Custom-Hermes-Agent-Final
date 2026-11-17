@@ -137,8 +137,8 @@ There are no references at first, as there are no skills: the store is added whe
 3. **A filter on each.**
    - A fact stored on purpose passes a pattern filter: it must meet the minimum length and must not match the narration patterns in the write-path configuration file, `custom_build/memory/write_path.toml`, which also holds section 3.6's supersede thresholds and the wording of the judge's questions.
    - Extracted facts and digests go to a judge model, which drops the ones not worth keeping.
-   - An extracted fact then gets a separate check: does its source turn support it? A fact its source does not support is not stored. For an extracted fact both questions go to the judge in one request, worded in `write_path.toml`; the gate drops it at the judge gate's drop score, and the support check needs its own threshold (both in section 3.6, #152). A fact queued for the judge keeps its source turn, so the retry asks both questions too.
-   - If the judge errors, the fact is queued for retry, never stored unchecked (`store.gate_error`). It waits, redacted, in the plugin's own SQLite database on the machine (section 2), and the provider retries the queue each time it starts in a primary session (not a subagent, cron run or flush), least-tried facts first, stopping at the first judge failure; a retry that resolves a fact is recorded as `store.gate_error` with the result `degraded`.
+   - An extracted fact then gets a separate check: does its source turn support it? A fact its source does not support is not stored. The questions are worded in `write_path.toml`; the gate drops the fact at the judge gate's drop score, and the support check needs its own threshold (both in section 3.6, #152). A turn's tool results can be several times the judge's context, so the judge is given the fact alone as its state, and each part of the source turn has a support question of its own: the user's message and each tool result, a long one cut into pieces, over as many requests as fit the judge's limits (#251). A fact is as supported as its best part, and the asking stops at the first part that reaches the threshold. A fact queued for the judge keeps its source turn, so the retry asks the same questions.
+   - If the judge errors, the fact is queued for retry, never stored unchecked (`store.gate_error`). It waits, redacted, in the plugin's own SQLite database on the machine (section 2), and the provider retries the queue each time it starts in a primary session (not a subagent, cron run or flush), least-tried facts first, stopping at the first judge failure; a retry that resolves a fact is recorded as `store.gate_error` with the result `degraded`. A request the judge refuses outright (HTTP 400, such as one over its context) would be refused again, so its fact is not queued, or leaves the queue, and is recorded as `judge.error` with the judge's named cause and `store.gate_error` saying the fact was dropped (#251).
 4. **One store function.** All three entrances then go through one function. It embeds the text and compares it with what is already stored in the same project. "Short" and "long" are defined in section 3.6.
 
    | Match with an existing fact | Result |
@@ -210,7 +210,7 @@ These are configuration values. Change one through an issue, with eval-set numbe
 | Supersede without the judge | Cosine similarity 0.92 or higher, short texts only |
 | Ask the judge | Cosine similarity from 0.80 up to 0.92, or 0.92 and higher for long texts. The judge returns two probabilities, "same subject" and "the new fact supersedes the old"; both must be 0.75 or higher. |
 | Judge gate | Drops at a drop score of 0.70 or higher: 1 minus the judge's probability that the fact is worth keeping (#152) |
-| Support check (extracted facts) | Kept only when the judge's probability that its source turn supports it is 0.75 or higher. A starting value; the eval set confirms or changes it. |
+| Support check (extracted facts) | Kept only when the judge's probability that one part of its source turn supports it is 0.75 or higher. A part is the user's message or a tool result, cut into pieces of 30,000 characters; one request's questions hold at most 60,000 characters (#251, measured against the judge's limits). Starting values; the eval set confirms or changes them. |
 | Results per message | 5; 8 on a question about past work; 3 for the action query |
 | Digests per message | At most 1 among the search's notes; the rest are facts. A question about open work also carries open items from up to 3 digests, each item a note of its own (3.5 point 4). A starting value (decided on #158); the eval set confirms or changes it. |
 | Digests read for "what is left to do?" | The project's newest 3. Their open items come first and fill the 8 results beside the search's 5. A starting value (#158); the eval set confirms or changes it. |
@@ -534,7 +534,7 @@ Initial codes:
 | `judge.timeout`, `judge.error` | The judge model times out or errors |
 | `rerank.fallback` | The judge could not rerank, and the pool kept its fused order (degraded) |
 | `action.skipped` | Not a failure: the action query was skipped, because the judge read the message as asking for no work (section 3.5) |
-| `store.gate_error` | The judge failed during a write; the fact is queued |
+| `store.gate_error` | The judge failed during a write; the fact is queued, or dropped when the judge refuses the request |
 | `extract.error` | The extraction model failed or answered something other than a list of facts |
 | `extract.refused` | The extraction model's provider refused the account: logged out, billing, or forbidden |
 | `digest.error` | The digest model failed or answered something other than a digest |
