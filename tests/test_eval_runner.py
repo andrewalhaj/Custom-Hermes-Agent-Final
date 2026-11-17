@@ -15,6 +15,7 @@ import sys
 
 import psycopg
 import pytest
+
 from evals import longmemeval
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
