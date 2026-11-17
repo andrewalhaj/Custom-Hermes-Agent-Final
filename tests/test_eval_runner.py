@@ -183,7 +183,7 @@ def test_the_run_leaves_no_database_or_role_behind(tmp_path, dataset, ollama, ty
     with psycopg.connect(os.environ["TEST_DATABASE_URL"]) as admin:
         assert admin.execute("select count(*) from pg_database where datname like 'eval_%'").fetchone() == (0,)
         assert admin.execute("select count(*) from pg_roles where rolname in ('memory_agent', 'memory_maintenance')"
-                             " or rolname like 'eval_%'").fetchone() == (0,)
+                             " or rolname = 'eval' or rolname like 'eval_%'").fetchone() == (0,)
 
 
 def test_a_subset_is_the_same_for_the_same_seed_and_spread_across_question_types():
@@ -357,7 +357,7 @@ def test_a_parallel_run_leaves_no_database_or_role_behind(tmp_path, dataset, oll
     with psycopg.connect(os.environ["TEST_DATABASE_URL"]) as admin:
         assert admin.execute("select count(*) from pg_database where datname like 'eval_%'").fetchone() == (0,)
         assert admin.execute("select count(*) from pg_roles where rolname in ('memory_agent', 'memory_maintenance')"
-                             " or rolname like 'eval_%'").fetchone() == (0,)
+                             " or rolname = 'eval' or rolname like 'eval_%'").fetchone() == (0,)
 
 
 def test_a_stop_in_a_parallel_run_starts_no_new_question(tmp_path, dataset, ollama, typesafe):

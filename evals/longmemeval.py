@@ -112,9 +112,11 @@ def estimate(entries):
 
 @contextlib.contextmanager
 def roles(postgres):
-    """The migrations' group roles, made once for the whole run and dropped at its end. They are the whole
-    server's, so a server that already has them, or the eval's login, is refused, never touched: it is not a
-    throwaway one."""
+    """The migrations' group roles and the eval's login in memory_agent, made once for the whole run and
+    dropped at its end; yields the login's password. They are the whole server's, so a server that already has
+    any of them is refused, never touched: it is not a throwaway one. The login has one name for every
+    question, because the store admits events only under the login's name (#149), so it is the run's too."""
+    password = uuid.uuid4().hex
     with psycopg.connect(postgres, autocommit=True) as admin:
         found = [row[0] for row in admin.execute("select rolname from pg_roles where rolname = any(%s)",
                                                  ([MACHINE, *GROUP_ROLES],))]
@@ -124,9 +126,11 @@ def roles(postgres):
         try:
             for statement in ROLE_STATEMENTS:
                 admin.execute(statement)
-            yield
+            admin.execute(sql.SQL("create role {} login password {} in role memory_agent").format(
+                sql.Identifier(MACHINE), sql.Literal(password)))
+            yield password
         finally:
-            for role in GROUP_ROLES:
+            for role in (MACHINE, *GROUP_ROLES):
                 admin.execute(sql.SQL("drop role if exists {}").format(sql.Identifier(role)))
 
 
@@ -141,11 +145,10 @@ def _migrations():
 
 
 @contextlib.contextmanager
-def database(postgres):
-    """A throwaway database with every migration applied, and a login in memory_agent: (owner, agent) URLs.
-    The database and the login are dropped afterwards; the group roles are the run's (`roles()`)."""
+def database(postgres, password):
+    """A throwaway database with every migration applied: (owner, agent) URLs, the agent's being the run's
+    login (`roles()`, whose `password` it takes). The database is dropped afterwards."""
     name = f"eval_{uuid.uuid4().hex[:12]}"
-    login, password = MACHINE, uuid.uuid4().hex   # the store admits events only under the login's name (#149)
     info = psycopg.conninfo.conninfo_to_dict(postgres)
     owner = psycopg.conninfo.make_conninfo(**{**info, "dbname": name})
     texts = _migrations()
@@ -157,12 +160,10 @@ def database(postgres):
                 with psycopg.connect(owner, autocommit=True) as conn:
                     for text in texts:
                         conn.execute(text)
-                    conn.execute(sql.SQL("create role {} login password {} in role memory_agent").format(
-                        sql.Identifier(login), sql.Literal(password)))
-            yield owner, psycopg.conninfo.make_conninfo(**{**info, "dbname": name, "user": login, "password": password})
+            yield owner, psycopg.conninfo.make_conninfo(**{**info, "dbname": name, "user": MACHINE,
+                                                           "password": password})
         finally:
             admin.execute(sql.SQL("drop database if exists {} with (force)").format(sql.Identifier(name)))
-            admin.execute(sql.SQL("drop role if exists {}").format(sql.Identifier(login)))
 
 
 def hermes_home(tmp, template, judge_model):
@@ -219,9 +220,9 @@ def first_hit(owner, bodies, evidence):
     return None
 
 
-def one(entry, *, postgres, command, template, judge_model, judge_key):
+def one(entry, *, postgres, password, command, template, judge_model, judge_key):
     """Replay and ask one question; its scores, the build it ran on, and the failure codes it recorded."""
-    with database(postgres) as (owner, agent), tempfile.TemporaryDirectory() as directory:
+    with database(postgres, password) as (owner, agent), tempfile.TemporaryDirectory() as directory:
         tmp = pathlib.Path(directory)
         home, work = hermes_home(tmp, template, judge_model)
         question = tmp / "question.json"
@@ -321,8 +322,8 @@ def run(*, data, sha256, questions, seed, yes, postgres, out, replay_command=Non
         if halt.is_set():
             return None
         try:
-            result = one(entry, postgres=postgres, command=command, template=template, judge_model=judge_model,
-                         judge_key=judge_key)
+            result = one(entry, postgres=postgres, password=password, command=command, template=template,
+                         judge_model=judge_model, judge_key=judge_key)
         except BaseException:
             halt.set()
             raise
@@ -331,7 +332,7 @@ def run(*, data, sha256, questions, seed, yes, postgres, out, replay_command=Non
         return result
 
     try:
-        with roles(postgres):
+        with roles(postgres) as password:   # the run's login, which question() hands to each one()
             pool = concurrent.futures.ThreadPoolExecutor(max_workers=parallel)
             futures = [pool.submit(question, entry) for entry in entries]
             error = None
