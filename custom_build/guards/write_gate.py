@@ -79,11 +79,21 @@ def _names(command, path, home, where):
     names (as in $HERMES_HOME/skills, or cd ~/.hermes && rm -r skills)."""
     bases = {os.path.expanduser("~"), str(where)}
     bases |= {os.path.realpath(base) for base in bases}
-    if any(spelling in command for spelling in _spellings({str(path), os.path.realpath(path)}, bases)):
+    if any(_whole(re.escape(spelling), command) for spelling in _spellings({str(path), os.path.realpath(path)}, bases)):
         return True
     entry = os.path.relpath(path, home)   # as in .env, skills or plugins/custom_build
     homes = _spellings({str(home), os.path.realpath(home)}, bases) | {"HERMES_HOME"}
-    return not entry.startswith("..") and entry in command and any(name in command for name in homes)
+    if entry.startswith("..") or not any(name in command for name in homes):
+        return False
+    # Right after a spelling of the home, as in "$HERMES_HOME"/skills, or where a relative path starts.
+    after_home = "(?:" + "|".join(re.escape(name) for name in homes) + ")[\"'}]*/"
+    return _whole(f"(?:{after_home}|(?<![/~])(?:\\./)?){re.escape(entry)}", command)
+
+
+def _whole(pattern, command):
+    """True when the command holds the path as whole components (#128): .env is not named by .envrc or
+    .env.bak, nor skills by myskills."""
+    return re.search(rf"(?<![\w.-]){pattern}(?![\w.-])", command) is not None
 
 
 def _spellings(paths, bases):
