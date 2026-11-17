@@ -76,6 +76,39 @@ def test_noqa_ban_fails_when_git_fails(tmp_path):
     check(tmp_path, script, {"a.py": CODE}, "git grep exited 129")
 
 
+# ruff 0.17.4 honours more suppression forms than the pattern above knows (#246), so a second step asks ruff
+# itself: with every suppression comment ignored, none of the three rules may fire anywhere.
+UNSUPPRESSED_STEP = "no broad catch once every suppression comment is ignored"
+BROAD = {"BLE001": "try:\n    x = 1\nexcept Exception:{line}\n    x = 2\n",
+         "S110": "try:\n    x = 1\nexcept Exception:{line}\n    pass{line}\n",
+         "E722": "try:\n    x = 1\nexcept:{line}\n    x = 2\n"}
+LINE_FORMS = [f"# {NOQA} : {{rule}}", "# ruff: ignore[{rule}]"]
+FILE_FORMS = ["# ruff: disable[{rule}]", "# ruff: file-ignore[{rule}]", f"# ruff : {NOQA}", f"# flake8 : {NOQA}"]
+UNSUPPRESSED_CASES = [("clean", {"pyproject.toml": CONFIG, "a.py": CODE}, None),
+                      ("another rule suppressed", {"pyproject.toml": CONFIG, "a.py": f"import os  # {NOQA}: F401\n"}, None)]
+UNSUPPRESSED_CASES += [
+    ("a nested file", {"pyproject.toml": CONFIG, "a.py": CODE,
+                       "pkg/sub/b.py": "# ruff: file-ignore[BLE001]\n" + BROAD["BLE001"].format(line="")}, ": BLE001 "),
+    ("ruff cannot read its configuration", {"pyproject.toml": "[tool.ruff.lint]\nselect = 1\n", "a.py": CODE},
+     "ruff exited 2"),
+]
+for rule, body in BROAD.items():
+    UNSUPPRESSED_CASES += [(f"{rule} under {form}", {"pyproject.toml": CONFIG, "a.py": body.format(
+        line="  " + form.format(rule=rule))}, f": {rule} ") for form in LINE_FORMS]
+    UNSUPPRESSED_CASES += [(f"{rule} under {form}", {"pyproject.toml": CONFIG, "a.py": form.format(rule=rule) + "\n"
+                            + body.format(line="")}, f": {rule} ") for form in FILE_FORMS]
+
+
+@pytest.mark.parametrize("label,files,expect", UNSUPPRESSED_CASES, ids=[c[0] for c in UNSUPPRESSED_CASES])
+def test_no_broad_catch_survives_under_a_suppression_comment(tmp_path, label, files, expect):
+    check(tmp_path, step_script(UNSUPPRESSED_STEP), files, expect)
+
+
+def test_the_unsuppressed_lint_fails_when_ruff_is_missing(tmp_path):
+    script = step_script(UNSUPPRESSED_STEP).replace("ruff check", "/nonexistent/ruff check")
+    check(tmp_path, script, {"pyproject.toml": CONFIG, "a.py": CODE}, "ruff exited 127")
+
+
 PROBE_STEP = "the error-handling rules are switched on"
 PROBE_CASES = [
     ("configured", {"pyproject.toml": CONFIG}, None),
