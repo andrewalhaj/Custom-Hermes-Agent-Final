@@ -185,10 +185,21 @@ def test_a_session_with_a_digest_gets_a_later_one_even_when_its_transcript_is_sh
     assert _live_digests(db) == [LATER]
 
 
-def test_a_digest_the_judge_does_not_keep_is_dropped(home, db, ollama, typesafe):
+def test_a_digest_the_judge_does_not_keep_is_dropped_and_the_drop_recorded(home, db, ollama, typesafe):
+    # #156 item 3: a drop was silent; it is now recorded, with its session, as not a failure.
     typesafe.answers = {"worth_keeping": 0.2}
     end(home, db, ollama.url, typesafe.url, ANSWER, [_session(10)])
-    assert _rows(db) == [] and _codes(db) == []
+    assert _rows(db) == []
+    with psycopg.connect(db["owner"]) as conn:
+        assert conn.execute("select code, result, session_id from memory.events").fetchall() == [
+            ("digest.dropped", "ok", "s1")]
+
+
+def test_a_dropped_digest_is_tried_again_at_the_sessions_next_end(home, db, ollama, typesafe):
+    # Decided on #156: a later end carries a longer transcript, so the digest is tried again, each drop recorded.
+    typesafe.answers = {"worth_keeping": 0.2}
+    sent, _ = end(home, db, ollama.url, typesafe.url, ANSWER, [_session(10), _session(12)])
+    assert len(sent) == 2 and _codes(db) == ["digest.dropped", "digest.dropped"]
 
 
 def test_a_refused_account_is_recorded_as_digest_refused(home, db, ollama, typesafe):
