@@ -188,7 +188,7 @@ def test_the_hosted_route_without_its_key_is_config_missing_and_calls_nothing(ho
     config_file.write_text(yaml.safe_dump(config), encoding="utf-8")
     seen = recall(home, db, ollama.url, extra_env={"HOSTED_URL": deepinfra.url})
     assert "config.missing" in seen["notes"]
-    assert deepinfra.requests == [] and set(_codes(db)) == {"config.missing"}
+    assert deepinfra.requests == [] and _codes(db) == []   # config.missing is logged, as with no store setting
 
 
 def test_a_secret_in_the_message_never_reaches_ollama(home, db, ollama):
