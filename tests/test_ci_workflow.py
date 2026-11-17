@@ -352,4 +352,8 @@ def test_dependabot_keeps_the_pinned_actions_current():
     # A pinned SHA never moves by itself, so Dependabot proposes each new release as a pull request (#176).
     config = yaml.safe_load((WORKFLOW.parent.parent / "dependabot.yml").read_text())
     assert config["version"] == 2
-    assert any(u["package-ecosystem"] == "github-actions" and u["directory"] == "/" for u in config["updates"])
+    actions = next(u for u in config["updates"] if u["package-ecosystem"] == "github-actions")
+    assert actions["directory"] == "/"
+    assert actions["schedule"]["interval"] == "weekly"
+    # Its pull request titles become commits on main, which carry a conventional prefix (CONTRIBUTING.md W4, 4.8).
+    assert actions["commit-message"]["prefix"] == "ci"
