@@ -66,13 +66,17 @@ def proven(commit, run):
 def history(cfg, http):
     rows = http("POST", f"{API}/v1/projects/{cfg['SUPABASE_PROJECT_REF']}/database/query/read-only",
                 cfg["SUPABASE_ACCESS_TOKEN"], {"query": "select name from supabase_migrations.schema_migrations"})
-    return {row["name"] for row in rows}
+    return {row["name"].removesuffix(".sql") for row in rows}   # recorded without the ending; either way is the same file
 
 
 def pending_migrations(commit, cfg, run, http):
     """The (name, SQL) of each file in `migrations/` at the commit that the store's history does not list."""
     applied = history(cfg, http)
-    files = sorted(must(run(["git", "ls-tree", "--name-only", commit, "migrations/"]), "migrations").split())
+    # --full-tree: without it git lists relative to the directory the script is run from, and prints nothing.
+    listed = must(run(["git", "ls-tree", "--full-tree", "--name-only", commit, "migrations/"]), "migrations")
+    files = sorted(path for path in listed.split() if path.endswith(".sql"))
+    if not files:   # the repository has had migrations since its first table; none listed is a failed read
+        raise DeployError(f"migrations: no .sql file found in migrations/ at {commit}")
     return [(pathlib.PurePosixPath(path).stem, must(run(["git", "show", f"{commit}:{path}"]), "migrations"))
             for path in files if pathlib.PurePosixPath(path).stem not in applied]
 
@@ -87,6 +91,7 @@ def apply_migrations(pending, cfg, http, ask, out):
     if ask(f"Apply these {len(pending)} to the store? A migration is never undone. Type yes: ") != "yes":
         raise DeployError("migrations: not applied, the answer was not yes")
     for name, sql in pending:
+        out(f"migrations: applying {name}")
         http("POST", f"{API}/v1/projects/{cfg['SUPABASE_PROJECT_REF']}/database/migrations",
              cfg["SUPABASE_ACCESS_TOKEN"], {"query": sql, "name": name})
         if name not in history(cfg, http):
@@ -119,22 +124,32 @@ def installed_commit(cfg, run):
 def install(commit, cfg, run):
     must(hermes(cfg, run, "plugins", "install", f"{cfg['DEPLOY_REPO']}#custom_build", "--force", "--ref", commit,
                 "--yes-deps", timeout=INSTALL_TIMEOUT), "install")
-    must(hermes(cfg, run, "custom-build", "check"), "check")   # before any restart: a failed check under the service takes the host offline
 
 
-def restart(cfg, run):
+def start(cfg, run):
+    """Check, restart and smoke-test whatever commit is installed."""
+    must(hermes(cfg, run, "custom-build", "check"), "check")   # before the restart: a failed check under the service takes the host offline
     must(run(shlex.split(cfg["DEPLOY_RESTART"]), timeout=RESTART_TIMEOUT), "restart")
-
-
-def smoke(cfg, run):
     must(on_host(cfg, run, "systemctl", "is-active", "--quiet", cfg["DEPLOY_UNIT"]), "service active")
     must(hermes(cfg, run, "custom-build", "heartbeat"), "heartbeat")   # the new code loads and reaches the store
 
 
-def update(commit, cfg, run):
-    install(commit, cfg, run)
-    restart(cfg, run)
-    smoke(cfg, run)
+def still_on(commit, cfg, run):
+    try:
+        return installed_commit(cfg, run) == commit
+    except DeployError:
+        return False   # unreadable is not "unchanged": the caller rolls back
+
+
+def roll_back(previous, cfg, run, out, kept):
+    try:
+        install(previous, cfg, run)
+        start(cfg, run)
+    except DeployError as back:
+        out(f"ROLLBACK FAILED at {back}. The host is not confirmed on {previous}. {kept}")
+        return 3
+    out(f"rolled back: the host runs {previous} again and passed its smoke test. {kept}")
+    return 2
 
 
 def deploy(commit, env, run, http, ask, out):
@@ -145,42 +160,49 @@ def deploy(commit, env, run, http, ask, out):
         previous = installed_commit(cfg, run)
         applied = apply_migrations(pending, cfg, http, ask, out)
     except DeployError as exc:
-        out(f"deploy refused, the host is unchanged: {exc}")
+        out(f"deploy stopped, the host is unchanged: {exc}")
         return 1
     kept = f"migrations applied, which stay applied: {', '.join(applied) or 'none'}"
     try:
-        update(commit, cfg, run)
+        install(commit, cfg, run)
     except DeployError as exc:
         out(f"deploy failed at {exc}")
-        try:
-            update(previous, cfg, run)
-        except DeployError as back:
-            out(f"ROLLBACK FAILED at {back}. The host is not confirmed on {previous}. {kept}")
-            return 3
-        out(f"rolled back: the host runs {previous} again and passed its smoke test. {kept}")
-        return 2
+        if still_on(previous, cfg, run):   # Hermes replaces the plugin only once an install succeeds
+            out(f"the host still runs {previous} and nothing was restarted. {kept}")
+            return 1
+        return roll_back(previous, cfg, run, out, kept)
+    try:
+        start(cfg, run)
+    except DeployError as exc:
+        out(f"deploy failed at {exc}")
+        return roll_back(previous, cfg, run, out, kept)
     out(f"deployed: {previous} -> {commit}. Startup check, service and heartbeat passed. {kept}")
     return 0
 
 
 def run(argv, timeout=120):
-    try:
-        return subprocess.run(argv, capture_output=True, text=True, timeout=timeout, check=False)
+    try:   # no terminal: a command that asks a question gets no answer and fails, instead of waiting unseen
+        return subprocess.run(argv, capture_output=True, text=True, timeout=timeout, check=False,
+                              stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired as exc:
         raise DeployError(f"{argv[0]}: timed out after {timeout} seconds") from exc
+    except FileNotFoundError as exc:
+        raise DeployError(f"{argv[0]}: no such program on this machine") from exc
 
 
-def http(method, url, token, body=None):
+def http(method, url, token, body=None, timeout=120):
+    path = urllib.parse.urlsplit(url).path
     request = urllib.request.Request(
         url, method=method, data=None if body is None else json.dumps(body).encode(),
         headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json",
                  "User-Agent": "custom-build-deploy"})
     try:
-        with urllib.request.urlopen(request, timeout=120) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             return json.loads(response.read() or b"null")
     except urllib.error.HTTPError as exc:
-        path = urllib.parse.urlsplit(url).path
         raise DeployError(f"{method} {path}: HTTP {exc.code} {exc.read().decode(errors='replace')[:500]}") from exc
+    except (urllib.error.URLError, TimeoutError) as exc:   # no answer: whether the request took effect is unknown
+        raise DeployError(f"{method} {path}: could not reach the store's API: {exc}") from exc
 
 
 def main(argv):
