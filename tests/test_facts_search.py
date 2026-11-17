@@ -147,7 +147,8 @@ modules = {name.rsplit(".", 1)[-1]: m for name, m in sys.modules.items() if "cus
 modules["embedding"].OLLAMA_URL = sys.argv[1]
 modules["judge"].URL = os.environ["JUDGE_URL"]
 provider.initialize(session_id="s1", hermes_home=sys.argv[3], platform="cli", agent_context="primary")
-print(json.dumps(json.loads(provider.handle_tool_call("memory_search", {"query": sys.argv[2]}))))
+query = json.loads(sys.argv[2][5:]) if sys.argv[2].startswith("json:") else sys.argv[2]   # "json:null" passes None
+print(json.dumps(json.loads(provider.handle_tool_call("memory_search", {"query": query}))))
 """
 
 
@@ -203,6 +204,13 @@ def test_an_empty_query_is_a_failure_that_hermes_reports_as_an_error(home, db, o
     status = subprocess.run([sys.executable, "-c", derive, json.dumps(outcome)], capture_output=True, text=True, timeout=60,
                             env={"HERMES_HOME": str(home), "HOME": str(home.parent), "PATH": "/usr/bin:/bin"}, check=True)
     assert status.stdout.strip() == "error"   # the status Hermes v0.23.1 gives post_tool_call for this result
+
+
+@pytest.mark.parametrize("query", ["json:null", "json:[]", "json:0", "json:false"])
+def test_a_query_that_is_not_text_is_empty_and_searches_nothing(home, db, ollama, query):
+    # #187 review: str() made "None" or "[]" of it, searched for that, and Hermes reported the call ok.
+    assert tool(home, db, ollama.url, query) == {"error": "query is empty"}
+    assert ollama.embedded == []
 
 
 def test_a_secret_in_the_query_never_reaches_ollama_the_store_or_a_log_line(home, db, owner, ollama):
