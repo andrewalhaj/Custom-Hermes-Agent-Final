@@ -76,7 +76,8 @@ def recall_notes(query, *, machine, session_id, turn, embedder, connect):
         return ""   # 3.5 point 1: only an empty message is skipped
     limits = write_path.load()["recall"]
     kind = recall.question_kind(query)   # the recall gate's patterns (3.5 points 3-4)
-    wanted = limits["results_past_work"] if kind else limits["results"]
+    # Past work widens the search; open work keeps the normal search and adds open items on top (#158, A).
+    wanted = limits["results_past_work"] if kind == "past_work" else limits["results"]
     box = {}
 
     # The recall thread is a Hermes entry point's work too: the boundary wrapper records a crash in it as
@@ -103,9 +104,11 @@ def recall_notes(query, *, machine, session_id, turn, embedder, connect):
     outcome = box["outcome"]
     if "error" in outcome:
         return recall.failed(outcome["error"])
-    if kind == "open_work":
-        return recall.notes(recall.open_items(outcome["results"])[:wanted])
-    return recall.notes(recall.capped(outcome["results"], wanted=wanted, digests=limits["digests_per_message"]))
+    results = recall.capped(outcome["results"], wanted=wanted, digests=limits["digests_per_message"])
+    if kind == "open_work":   # first, within the past-work count, so a misfired pattern only adds notes
+        items = recall.open_items(outcome["open"])[:max(limits["results_past_work"] - len(results), 0)]
+        return recall.notes(items + results)
+    return recall.notes(results)
 
 
 def _searched(query, *, machine, session_id, turn, embedder, connect, wanted, deadline=None, open_work=False):
@@ -118,9 +121,11 @@ def _searched(query, *, machine, session_id, turn, embedder, connect, wanted, de
         if deadline is not None:   # an int in milliseconds, so it is safe to write into the statement
             conn.execute(f"set statement_timeout = {int(deadline * 1000)}")
         try:
-            if open_work:   # not a similarity search: the newest digests (3.5 point 4)
-                return {"results": search.newest_digests(conn, key, write_path.load()["recall"]["open_work_digests"])}
-            return {"results": search.candidates(conn, embedder, query, key, wanted=wanted, timeout=TIMEOUT)}
+            results = search.candidates(conn, embedder, query, key, wanted=wanted, timeout=TIMEOUT)
+            if open_work:   # the newest digests too, by recency, not similarity (3.5 point 4)
+                return {"results": results,
+                        "open": search.newest_digests(conn, key, write_path.load()["recall"]["open_work_digests"])}
+            return {"results": results}
         except embedding.EmbedUnavailable as exc:
             failures.record(conn, "embed.unavailable", "failed", reason=str(exc), **fields)
             return {"error": "embed.unavailable"}
