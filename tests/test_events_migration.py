@@ -6,7 +6,7 @@ The `db` fixture (conftest.py) gives each test an empty database with every migr
 import psycopg
 import pytest
 
-GROUP_ROLES = ("memory_agent", "memory_maintenance")
+GROUP_ROLES = ("memory_agent", "memory_maintenance", "memory_viewer")
 
 
 def _insert(conn, code="job.failed"):
@@ -58,7 +58,7 @@ def test_group_roles_cannot_log_in(db):
         rows = conn.execute(
             "select rolname, rolcanlogin from pg_roles where rolname = any(%s) order by rolname", (list(GROUP_ROLES),)
         ).fetchall()
-    assert rows == [("memory_agent", False), ("memory_maintenance", False)]
+    assert rows == [("memory_agent", False), ("memory_maintenance", False), ("memory_viewer", False)]
 
 
 def test_result_must_be_one_of_the_four_outcomes(db):
@@ -106,6 +106,7 @@ def test_the_policies_are_exactly_these(db):
         ("events_maintenance_delete", "DELETE", ["memory_maintenance"]),
         ("events_maintenance_insert", "INSERT", ["memory_maintenance"]),   # retention records its run (0004)
         ("events_maintenance_select", "SELECT", ["memory_maintenance"]),
+        ("events_viewer_select", "SELECT", ["memory_viewer"]),   # the events page reads, and only reads (0009)
     ]
 
 
