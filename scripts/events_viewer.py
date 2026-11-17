@@ -22,6 +22,7 @@ import json
 import os
 import sys
 import urllib.parse
+import zoneinfo
 
 import psycopg
 from psycopg.rows import dict_row
@@ -32,6 +33,7 @@ URL = "CUSTOM_BUILD_VIEWER_URL"
 PORT = 9120
 LIMIT = 500   # rows on one page, newest first
 WINDOWS = {1: "1 hour", 24: "24 hours", 168: "7 days", 720: "30 days", 2160: "90 days"}   # 90 days: retention's
+EASTERN = zoneinfo.ZoneInfo("America/New_York")   # the maintainer's clock, whatever machine serves the page
 CONNECT_TIMEOUT = 5   # seconds: nothing waits on this but the maintainer
 GUARD_PREFIXES = ("write_gate.", "verify_gate.", "fact_gate.", "recall_gate.", "guard.")
 GUARDS = sorted(code for code in CATALOG if code.startswith(GUARD_PREFIXES))
@@ -258,12 +260,13 @@ def _rows(rows):
     """The table's rows, under one heading for each day."""
     parts, day = [], None
     for row in rows:
-        at = row["at"].astimezone()
+        at = row["at"].astimezone(EASTERN)
         if at.date() != day:
             day = at.date()
             parts.append(f'<tr class="day"><th colspan="5" scope="colgroup">{at:%A} {at.day} {at:%B %Y}</th></tr>')
+        clock = f"{at:%I:%M:%S %p %Z}".lstrip("0")   # 3:05:09 PM EST
         parts.append(
-            f'<tr class="{row["result"]}"><td class="at"><time datetime="{at.isoformat()}">{at:%H:%M:%S}</time></td>'
+            f'<tr class="{row["result"]}"><td class="at"><time datetime="{at.isoformat()}">{clock}</time></td>'
             f'<td class="result">{row["result"]}</td>'
             f'<td><code>{html.escape(row["code"])}</code>'
             f'<p class="means">{html.escape(CATALOG.get(row["code"], "Not in the catalog"))}</p></td>'
@@ -304,7 +307,7 @@ def page(rows, by_code, by_source, filters):
 <main id="events"><div class="bar"><div class="seg" role="group" aria-label="Machine"><span>Machine</span>{sources}</div>
 <div class="seg" role="group" aria-label="Result"><span>Result</span>{results}</div>{clear}</div>
 {table}</main></div>
-<footer>Read-only. Times are this machine's local time. Reload the page for newer rows.</footer></body></html>"""
+<footer>Read-only. Times are Eastern. Reload the page for newer rows.</footer></body></html>"""
 
 
 def _problem(title, text):
