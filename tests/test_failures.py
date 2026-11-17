@@ -164,6 +164,7 @@ def test_every_code_recorded_in_the_package_is_in_the_catalog():
 def test_the_catalog_holds_the_architecture_codes():
     assert set(failures.CATALOG) == {
         "embed.unavailable", "embed.model_mismatch", "db.unreachable", "db.auth", "db.query", "recall.timeout",
+        "db.behind",
         "judge.timeout", "judge.error", "rerank.fallback", "store.gate_error", "guard.crash", "guard.not_loaded",
         "guard.bypassed",
         "extract.error",
