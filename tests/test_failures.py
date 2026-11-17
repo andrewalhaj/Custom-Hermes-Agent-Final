@@ -286,6 +286,52 @@ def test_boundary_records_a_provider_crash_as_unhandled_and_re_raises(db, caplog
     assert any(r.exc_info and r.exc_info[0] is KeyError for r in caplog.records)   # the traceback is logged
 
 
+FAKE_TOKEN = "ghp_" + "a1B2c3D4e5" * 4   # assembled at run time, never a literal token; a shape Hermes's redactor knows
+
+
+def _crash_naming_a_secret(*args, **kwargs):
+    raise KeyError(f"cannot read {FAKE_TOKEN}")
+
+
+@pytest.mark.parametrize(("on_crash", "code"), [(_block, "guard.crash"), (failures.PROVIDER, "unhandled"),
+                                                (failures.Returns(lambda exc: "note"), "unhandled")])
+def test_a_secret_in_a_crashs_message_never_reaches_the_store_or_its_log_line(db, caplog, on_crash, code):
+    # #116, rule L4: an exception's message can carry content, as a KeyError names its key.
+    caplog.set_level(logging.INFO, logger=failures.__name__)
+    call = failures.boundary(_host_a, lambda: psycopg.connect(db["agent"], autocommit=True), on_crash)(_crash_naming_a_secret)
+    if on_crash is failures.PROVIDER:
+        with pytest.raises(KeyError):
+            call(session_id="s1")
+    else:
+        call(session_id="s1")
+    rows = _rows(db["owner"])
+    assert [r[4] for r in rows] == [code]
+    assert rows[0][6].startswith("KeyError: ") and "cannot read" in rows[0][6]   # still says what happened
+    assert FAKE_TOKEN not in rows[0][6]
+    assert not any(FAKE_TOKEN in json.dumps(line) for _, line in _json_lines(caplog))
+
+
+def test_a_crash_is_recorded_by_its_type_alone_when_the_redactor_raises(db, monkeypatch):
+    def broken(*args, **kwargs):
+        raise RuntimeError("redactor down")
+
+    monkeypatch.setattr("agent.redact.redact_sensitive_text", broken)
+    guard = failures.boundary(_host_a, lambda: psycopg.connect(db["agent"], autocommit=True), _block)(_crash_naming_a_secret)
+    assert guard(session_id="s1") == {"action": "block", "message": "blocked after KeyError"}
+    assert [(r[4], r[6]) for r in _rows(db["owner"])] == [("guard.crash", "KeyError")]   # the text is not stored
+
+
+def test_a_secret_in_a_job_crashs_message_never_reaches_the_store_or_its_log_lines(db, caplog):
+    caplog.set_level(logging.INFO, logger=failures.__name__)
+    with pytest.raises(SystemExit):
+        failures.run_job("nightly", _crash_naming_a_secret, source="host-a",
+                         connect=lambda: psycopg.connect(db["agent"], autocommit=True))
+    rows = _rows(db["agent"])
+    assert [r[4] for r in rows] == ["unhandled", "job.failed"]
+    assert all(r[6].startswith("KeyError: ") and FAKE_TOKEN not in r[6] for r in rows)
+    assert not any(FAKE_TOKEN in json.dumps(line) for _, line in _json_lines(caplog))
+
+
 def test_boundary_re_raises_a_provider_crash_with_no_store(caplog):
     caplog.set_level(logging.INFO, logger=failures.__name__)
     with pytest.raises(KeyError):
