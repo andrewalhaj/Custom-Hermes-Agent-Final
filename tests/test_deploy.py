@@ -12,6 +12,7 @@ import shlex
 import subprocess
 import sys
 import threading
+import time
 import typing
 
 import pytest
@@ -49,6 +50,9 @@ class Fake:
         self.applied = ["0001_a"]
         self.metadata = {"custom_build": {"pinned": True, "revision": OLD}}
         self.posted = []                # migration names sent to the store, in order
+        self.host_steps_at_post = []    # how many steps had touched the host when each one was sent
+        self.timeouts = {}              # a word in a command -> the timeout it was given
+        self.install_fails_after_publishing = False
         self.sticks = True              # whether an applied migration then shows in the history
         self.history_fails = False
         self.answers = ["yes"]
@@ -58,10 +62,18 @@ class Fake:
     def run(self, argv, timeout=120):
         self.calls.append(list(argv))
         text = " ".join(argv)
+        for word in ("plugins install", "systemctl restart", "custom-build check"):
+            if word in text:
+                self.timeouts[word] = timeout
+        installing = NEW if NEW in text else OLD
         for word, left in self.fail.items():
             if word in text and left:
                 self.fail[word] = left - 1
+                if "plugins install" in text and self.install_fails_after_publishing:
+                    self.metadata = {"custom_build": {"pinned": True, "revision": installing}}
                 return subprocess.CompletedProcess(argv, 1, "", f"{word} failed")
+        if "plugins install" in text:
+            self.metadata = {"custom_build": {"pinned": True, "revision": installing}}
         out = ""
         code = 0
         if "merge-base" in text:
@@ -69,6 +81,7 @@ class Fake:
         elif argv[:3] == ["gh", "run", "list"]:
             out = json.dumps(self.ci)
         elif "ls-tree" in text:
+            assert "--full-tree" in argv    # without it git lists relative to the directory it is run from
             out = "\n".join(self.files) + "\n"
         elif argv[:2] == ["git", "show"]:
             out = f"-- {argv[2]}\n"
@@ -85,6 +98,7 @@ class Fake:
             return [{"name": name} for name in self.applied]
         assert url.endswith("/database/migrations"), url
         self.posted.append(body["name"])
+        self.host_steps_at_post.append(len(self.steps()))
         if self.sticks:
             self.applied.append(body["name"])
         return []
@@ -175,7 +189,8 @@ def test_migrations_are_applied_before_the_host_changes(deploy):
     fake = Fake()
     fake.fail = {"plugins install": 2}
     fake.go(deploy)
-    assert fake.posted == ["0002_b", "0003_c"]   # sent although the install then failed, so they came first
+    assert fake.posted == ["0002_b", "0003_c"]
+    assert fake.host_steps_at_post == [0, 0]     # nothing had touched the host when either was sent
 
 
 def test_with_nothing_pending_nobody_is_asked(deploy):
@@ -261,7 +276,6 @@ def test_a_failed_check_never_restarts_the_new_code_and_rolls_back(deploy):
 
 
 @pytest.mark.parametrize("word, done", [
-    ("plugins install", ["install new"]),
     ("systemctl restart", ["install new", "check", "restart"]),
     ("is-active", ["install new", "check", "restart", "active"]),
     ("custom-build heartbeat", ["install new", "check", "restart", "active", "heartbeat"]),
@@ -321,6 +335,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         body = self.rfile.read(int(self.headers["Content-Length"]))
         Handler.seen.append((self.path, self.headers["Authorization"], json.loads(body)))
+        if self.path.endswith("/slow"):
+            time.sleep(1)
         status = 500 if self.path.endswith("/broken") else 200
         self.send_response(status)
         self.end_headers()
@@ -355,3 +371,109 @@ def test_http_reports_an_error_status_without_the_token(deploy, server):
 def test_the_command_line_needs_exactly_one_commit(deploy, capsys):
     assert deploy.main(["deploy.py"]) != 0
     assert "usage" in capsys.readouterr().err.lower()
+
+
+# Findings from the review of #181's pull request.
+
+def test_a_history_that_records_names_with_the_sql_ending_still_matches(deploy):
+    fake = Fake()
+    fake.applied = ["0001_a.sql", "0002_b.sql", "0003_c.sql"]
+    assert fake.go(deploy) == 0
+    assert fake.questions == [] and fake.posted == []    # nothing is sent a second time
+
+
+def test_only_sql_files_in_migrations_are_migrations(deploy):
+    fake = Fake()
+    fake.files = [*fake.files, "migrations/README.md"]
+    assert fake.go(deploy) == 0
+    assert fake.posted == ["0002_b", "0003_c"]
+
+
+def test_a_commit_with_no_migration_files_is_refused(deploy):
+    fake = Fake()
+    fake.files = []     # what git prints when the path is wrong: it must not read as "none pending"
+    assert fake.go(deploy) != 0
+    assert "migrations" in fake.printed()
+    assert fake.steps() == []
+
+
+def test_each_migration_is_named_before_it_is_sent(deploy):
+    fake = Fake()
+    fake.sticks = False
+    fake.go(deploy)
+    assert "applying 0002_b" in fake.printed()
+
+
+def test_a_failed_install_that_left_the_previous_commit_in_place_restarts_nothing(deploy):
+    fake = Fake()
+    fake.fail = {"plugins install": 1}
+    assert fake.go(deploy) != 0
+    assert fake.steps() == ["install new"]
+    assert "ROLLBACK" not in fake.printed() and "rolled back" not in fake.printed()
+    assert OLD in fake.printed() and "0002_b" in fake.printed()
+
+
+def test_a_failed_install_that_replaced_the_previous_commit_rolls_back(deploy):
+    fake = Fake()
+    fake.fail = {"plugins install": 1}
+    fake.install_fails_after_publishing = True
+    assert fake.go(deploy) != 0
+    assert fake.steps() == ["install new", *BACK]
+    assert "rolled back" in fake.printed()
+
+
+def test_a_failed_install_whose_record_cannot_be_read_rolls_back(deploy):
+    fake = Fake()
+    fake.fail = {"plugins install": 1, ".install-metadata.json": 0}
+    original = fake.run
+
+    def run(argv, timeout=120):
+        if "plugins install" in " ".join(argv):
+            fake.fail[".install-metadata.json"] = 1     # the next read of the record fails
+        return original(argv, timeout=timeout)
+
+    assert deploy.deploy(NEW, ENV, run, fake.http, fake.ask, fake.out) != 0
+    assert fake.steps() == ["install new", *BACK]
+
+
+def test_the_install_and_the_restart_get_their_own_long_timeouts(deploy):
+    fake = Fake()
+    fake.go(deploy)
+    assert fake.timeouts["plugins install"] == 600
+    assert fake.timeouts["systemctl restart"] == 660    # above the unit's 10-minute start timeout
+    assert fake.timeouts["custom-build check"] == 120
+
+
+def test_run_turns_a_missing_program_into_a_failed_step(deploy):
+    with pytest.raises(deploy.DeployError, match="no-such-program-for-the-deploy-test"):
+        deploy.run(["no-such-program-for-the-deploy-test", "now"])
+
+
+def test_a_restart_command_that_cannot_start_rolls_back(deploy):
+    fake = Fake()
+    original = fake.run
+
+    def run(argv, timeout=120):
+        if " ".join(argv) == ENV["DEPLOY_RESTART"] and not fake.fail.get("used"):
+            fake.fail["used"] = 1
+            fake.calls.append(list(argv))
+            raise deploy.DeployError("ssh: not found on this machine")
+        return original(argv, timeout=timeout)
+
+    assert deploy.deploy(NEW, ENV, run, fake.http, fake.ask, fake.out) == 2
+    assert fake.steps() == ["install new", "check", "restart", *BACK]
+
+
+def test_run_gives_a_command_no_terminal_to_wait_on(deploy):
+    done = deploy.run([sys.executable, "-c", "import sys; print(repr(sys.stdin.read()))"], timeout=5)
+    assert done.stdout.strip() == "''"
+
+
+def test_http_reports_a_host_it_cannot_reach(deploy):
+    with pytest.raises(deploy.DeployError, match="could not reach"):
+        deploy.http("POST", "http://127.0.0.1:9/unreachable", TOKEN, {})
+
+
+def test_http_reports_an_answer_that_never_comes(deploy, server):
+    with pytest.raises(deploy.DeployError, match="could not reach"):
+        deploy.http("POST", f"{server}/slow", TOKEN, {}, timeout=0.3)
