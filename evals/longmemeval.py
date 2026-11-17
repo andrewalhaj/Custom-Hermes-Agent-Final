@@ -332,20 +332,20 @@ def run(*, data, sha256, questions, seed, yes, postgres, out, replay_command=Non
         with roles(postgres):
             pool = concurrent.futures.ThreadPoolExecutor(max_workers=parallel)
             futures = [pool.submit(question, entry) for entry in entries]
+            error = None
             try:
                 concurrent.futures.wait(futures)
-            finally:   # on Ctrl-C too: start nothing more, and let the questions already running finish
+            finally:   # on Ctrl-C too: start nothing more, let the running questions finish, and keep every result
                 halt.set()
                 pool.shutdown(cancel_futures=True)
-            error = None
-            for future in futures:   # in the subset's order, so a parallel report reads as a sequential one
-                if future.cancelled():
-                    continue
-                if future.exception() is not None:
-                    error = error or future.exception()
-                elif (result := future.result()) is not None:
-                    results.append(result)
-                    stopped = stopped or result["stopped"]
+                for future in futures:   # in the subset's order, so a parallel report reads as a sequential one
+                    if future.cancelled() or not future.done():
+                        continue
+                    if future.exception() is not None:
+                        error = error or future.exception()
+                    elif (result := future.result()) is not None:
+                        results.append(result)
+                        stopped = stopped or result["stopped"]
             if error is not None:
                 raise error
     except (EvalError, KeyboardInterrupt) as exc:   # the questions already measured are paid for: report them
