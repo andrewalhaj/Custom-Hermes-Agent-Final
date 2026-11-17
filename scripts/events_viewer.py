@@ -15,6 +15,7 @@ outside Hermes with the maintainer reading its output, so it records no failure 
 
 import argparse
 import contextlib
+import datetime
 import html
 import http.server
 import ipaddress
@@ -44,7 +45,7 @@ STYLE = """
 :root {
   --bg: #eef1f5; --surface: #ffffff; --ink: #10141c; --muted: #566070; --line: #d3d9e2; --hover: #f4f6f9;
   --accent: #b93c0a; --on-ink: #ffffff;
-  --failed: #c01f1f; --degraded: #94590a; --ok: #14733a; --empty: #7a8494;
+  --failed: #c01f1f; --degraded: #94590a; --ok: #14733a; --empty: #566070; --bar: #e2e7ee;
   --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --gutter: clamp(16px, 3vw, 40px);
@@ -53,7 +54,7 @@ STYLE = """
   :root {
     --bg: #0b0e13; --surface: #12161d; --ink: #e7eaf0; --muted: #909baa; --line: #252c38; --hover: #181d26;
     --accent: #ff9a4a; --on-ink: #0b0e13;
-    --failed: #ff7b72; --degraded: #e3a94a; --ok: #56c97f; --empty: #6f7a8a;
+    --failed: #ff7b72; --degraded: #e3a94a; --ok: #56c97f; --empty: #909baa; --bar: #1f2631;
   }
 }
 * { box-sizing: border-box; }
@@ -65,11 +66,8 @@ a { color: inherit; text-decoration: none; }
 
 header { display: flex; flex-wrap: wrap; gap: 16px 40px; align-items: end; justify-content: space-between;
   padding: 24px var(--gutter) 18px; border-bottom: 2px solid var(--ink); }
-h1 { margin: 0 0 6px; font: 600 12px var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
-h1::before { content: ""; display: inline-block; width: 8px; height: 8px; margin-right: 10px; background: var(--accent); }
-.count { margin: 0; color: var(--muted); }
-.count b { margin-right: 10px; color: var(--ink); font: 600 44px/1 var(--mono); letter-spacing: -.04em;
-  font-variant-numeric: tabular-nums; }
+h1 { margin: 0 0 4px; font: 650 26px/1.15 var(--sans); letter-spacing: -.02em; }
+.count { margin: 0; color: var(--muted); font: 13px var(--mono); }
 
 .seg { display: flex; flex-wrap: wrap; align-items: center; }
 .seg > span { margin-right: 10px; color: var(--muted); font: 11px var(--mono); letter-spacing: .1em; text-transform: uppercase; }
@@ -93,16 +91,16 @@ h1::before { content: ""; display: inline-block; width: 8px; height: 8px; margin
 .rail a[aria-current] { background: var(--ink); color: var(--on-ink); }
 .group { margin-bottom: 4px; border-bottom: 1px solid var(--ink); font: 600 11px var(--mono); letter-spacing: .12em;
   text-transform: uppercase; }
-.code { font: 12.5px var(--mono); }
-.code i { position: absolute; left: 8px; bottom: 2px; width: calc((100% - 16px) * var(--w)); height: 2px;
-  background: var(--accent); opacity: .55; }
+.code { font: 12.5px var(--mono);
+  background-image: linear-gradient(to right, var(--bar) calc(var(--w) * 100%), transparent 0); }
+.code[aria-current] { background-image: none; }
 
 main { min-width: 0; padding: 20px var(--gutter) 0 24px; }
-.bar { display: flex; flex-wrap: wrap; gap: 10px 28px; align-items: center; margin-bottom: 16px; }
+.bar { display: flex; flex-wrap: wrap; gap: 10px 28px; align-items: center; margin-bottom: 18px; }
 .clear { margin-left: auto; color: var(--accent); font: 12px var(--mono); text-decoration: underline; text-underline-offset: 3px; }
 .scroll { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); }
 table { width: 100%; border-collapse: collapse; }
-thead th { padding: 8px 14px; border-bottom: 1px solid var(--line); color: var(--muted); font: 11px var(--mono);
+thead th { padding: 12px 14px; border-bottom: 1px solid var(--line); color: var(--muted); font: 11px var(--mono);
   letter-spacing: .1em; text-transform: uppercase; text-align: left; white-space: nowrap; }
 .day th { padding: 18px 14px 6px; border-bottom: 1px solid var(--ink); font: 600 12px var(--mono); text-align: left; }
 td { padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
@@ -115,6 +113,7 @@ tbody tr:not(.day):hover { background: var(--hover); }
 .degraded .at { border-left-color: var(--degraded); } .degraded .result { color: var(--degraded); }
 .ok .at { border-left-color: var(--ok); } .ok .result { color: var(--ok); }
 .source { white-space: nowrap; font: 13px var(--mono); color: var(--muted); }
+td a:hover { text-decoration: underline; text-decoration-color: var(--accent); text-underline-offset: 3px; }
 code { font: 600 13px var(--mono); white-space: nowrap; }
 .means { margin: 2px 0 0; max-width: 32ch; color: var(--muted); font-size: 12.5px; line-height: 1.4; }
 .why { min-width: 20ch; overflow-wrap: anywhere; }
@@ -137,9 +136,22 @@ footer { margin-top: 24px; padding: 14px var(--gutter) 28px; border-top: 1px sol
   .rail > ul { display: flex; flex-wrap: wrap; gap: 8px; }
   .rail > ul > li { margin: 0; }
   .rail ul ul { display: none; }   /* a phone gets the three groups; the codes need the width */
-  .group { margin: 0; border: 1px solid var(--line); }
+  .group { margin: 0 0 0 -1px; padding: 0 12px; border: 1px solid var(--line); background: var(--surface);
+    font: 13px var(--mono); letter-spacing: 0; text-transform: none; }
+  .group[aria-current] { border-color: var(--ink); }
   main { padding: 16px var(--gutter) 0; }
-  .tab, .rail a { min-height: 44px; }
+  .tab, .rail a, .clear { min-height: 44px; }
+  .clear { display: inline-flex; align-items: center; }
+  /* A phone reads each event as a block, so nothing scrolls sideways. */
+  thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  table, tbody, tr, td, .day th { display: block; }
+  tbody tr:not(.day) { padding: 10px 14px; border-bottom: 1px solid var(--line); border-left: 3px solid var(--empty); }
+  tbody tr.failed { border-left-color: var(--failed); } tbody tr.degraded { border-left-color: var(--degraded); }
+  tbody tr.ok { border-left-color: var(--ok); }
+  td { padding: 0; border: 0; }
+  .at, .result, .source { display: inline-block; width: auto; margin-right: 12px; border-left: 0; }
+  .what { margin: 4px 0; }
+  .means { max-width: none; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 """
@@ -191,13 +203,14 @@ def events(conn, **filters):
             f" where {where} order by at desc, id desc limit {LIMIT}", values).fetchall()
 
 
-def counts(conn, hours):
-    """How many rows each code and each machine has in the window, whatever the other filters are."""
-    by_code = dict(conn.execute("select code, count(*) from memory.events"
-                                " where at > now() - make_interval(hours => %s) group by code", (hours,)).fetchall())
-    by_source = dict(conn.execute("select source, count(*) from memory.events"
-                                  " where at > now() - make_interval(hours => %s) group by source", (hours,)).fetchall())
-    return by_code, by_source
+def counts(conn, filters):
+    """How many rows each code, machine and result would list: each count obeys every filter but its own."""
+    def by(column, *own):
+        where, values = _where(**{**filters, **dict.fromkeys(own)})
+        return dict(conn.execute(f"select {column}, count(*) from memory.events where {where} group by {column}",
+                                 values).fetchall())
+
+    return by("code", "code", "group"), by("source", "source"), by("result", "result")
 
 
 def filters_of(query):
@@ -229,79 +242,89 @@ def _chip(label, href, on, count=None):
 
 
 def _rail(filters, by_code):
-    parts, most = [], max(by_code.values(), default=1)
+    by_code = {filters["code"]: 0, **by_code} if filters["code"] else by_code   # the chosen code stays listed
+    most = max(by_code.values(), default=0) or 1
+    current = "" if filters["code"] or filters["group"] else ' aria-current="true"'
+    parts = [(f'<li><a class="group" href="{html.escape(_href(filters, group=None, code=None))}"{current}>All events'
+              f'<span class="n">{sum(by_code.values())}</span></a></li>')]
     for group, title in GROUPS.items():
         codes = sorted(code for code in by_code if group_of(code) == group)
-        total = sum(by_code[code] for code in codes)
-        on = filters["group"] == group and not filters["code"]
-        current = ' aria-current="true"' if on else ""
+        current = ' aria-current="true"' if filters["group"] == group and not filters["code"] else ""
         parts.append(f'<li><a class="group" href="{html.escape(_href(filters, group=group, code=None))}"{current}>'
-                     f'{title}<span class="n">{total}</span></a><ul>')
+                     f'{title}<span class="n">{sum(by_code[code] for code in codes)}</span></a><ul>')
         for code in codes:
             current = ' aria-current="true"' if filters["code"] == code else ""
-            # The line under a code is its share of the busiest code's rows.
+            # The shading behind a code is its share of the busiest code's rows.
             parts.append(f'<li><a class="code" href="{html.escape(_href(filters, code=code, group=None))}"{current}'
-                         f' title="{html.escape(CATALOG.get(code, ""))}">{html.escape(code)}'
-                         f'<span class="n">{by_code[code]}</span>'
-                         f'<i style="--w: {by_code[code] / most:.2f}"></i></a></li>')
+                         f' style="--w: {by_code[code] / most:.2f}" title="{html.escape(CATALOG.get(code, ""))}">'
+                         f'{html.escape(code)}<span class="n">{by_code[code]}</span></a></li>')
         parts.append("</ul></li>")
     return "".join(parts)
 
 
 def _context(row):
-    """What a row carries besides its reason: where it happened, then its detail, one `key value` each."""
+    """What a row carries besides its reason: where it happened, then its detail, one `key=value` each."""
     pairs = [(key, row[key]) for key in ("project", "session_id", "turn") if row[key] is not None]
     pairs += sorted((row["detail"] or {}).items())
     return "".join(f"<span><b>{html.escape(str(key))}</b>{html.escape(value if isinstance(value, str) else json.dumps(value))}"
                    "</span>" for key, value in pairs)
 
 
-def _rows(rows):
-    """The table's rows, under one heading for each day."""
+def _clock(at):
+    return f"{at:%I:%M:%S %p %Z}".lstrip("0")   # 3:05:09 PM EST
+
+
+def _rows(rows, filters):
+    """The table's rows, under one heading for each day. A row's code and machine filter by themselves."""
     parts, day = [], None
     for row in rows:
         at = row["at"].astimezone(EASTERN)
         if at.date() != day:
             day = at.date()
-            parts.append(f'<tr class="day"><th colspan="5" scope="colgroup">{at:%A} {at.day} {at:%B %Y}</th></tr>')
-        clock = f"{at:%I:%M:%S %p %Z}".lstrip("0")   # 3:05:09 PM EST
+            parts.append(f'<tr class="day"><th colspan="5" scope="colgroup">{at:%A, %B} {at.day}, {at.year}</th></tr>')
         parts.append(
-            f'<tr class="{row["result"]}"><td class="at"><time datetime="{at.isoformat()}">{clock}</time></td>'
+            f'<tr class="{row["result"]}"><td class="at"><time datetime="{at.isoformat()}">{_clock(at)}</time></td>'
             f'<td class="result">{row["result"]}</td>'
-            f'<td><code>{html.escape(row["code"])}</code>'
+            f'<td class="what"><a href="{html.escape(_href(filters, code=row["code"], group=None))}">'
+            f'<code>{html.escape(row["code"])}</code></a>'
             f'<p class="means">{html.escape(CATALOG.get(row["code"], "Not in the catalog"))}</p></td>'
-            f'<td class="source">{html.escape(row["source"])}</td>'
+            f'<td class="source"><a href="{html.escape(_href(filters, source=row["source"]))}">'
+            f'{html.escape(row["source"])}</a></td>'
             f'<td class="why">{html.escape(row["reason"] or "")}<div class="context">{_context(row)}</div></td></tr>')
     return "".join(parts)
 
 
-def page(rows, by_code, by_source, filters):
+def page(rows, by_code, by_source, by_result, filters):
     """The whole page, as HTML. Every stored value is escaped."""
     window = WINDOWS[filters["hours"]]
-    total = sum(by_code.values())
     windows = "".join(_chip(label, _href(filters, hours=hours), filters["hours"] == hours)
                       for hours, label in WINDOWS.items())
     sources = _chip("all", _href(filters, source=None), not filters["source"]) + "".join(
         _chip(source, _href(filters, source=source), filters["source"] == source, count)
-        for source, count in sorted(by_source.items()))
+        for source, count in sorted({filters["source"]: 0, **by_source}.items() if filters["source"] else by_source.items()))
     results = _chip("any", _href(filters, result=None), not filters["result"]) + "".join(
-        _chip(result, _href(filters, result=result), filters["result"] == result) for result in RESULTS)
-    cut = f" Showing the newest {LIMIT}." if len(rows) == LIMIT else ""
-    shown = f"<b>{len(rows)}</b>of {total} events in the last {window}.{cut}"
+        _chip(result, _href(filters, result=result), filters["result"] == result, by_result.get(result, 0))
+        for result in RESULTS)
+    narrowed = _href(filters) != _href({"hours": filters["hours"]})
+    count = f"The newest {LIMIT} events" if len(rows) == LIMIT else f"{len(rows)} event{'' if len(rows) == 1 else 's'}"
+    shown = (f"{count}{' match' if narrowed else ''} in the last {window}. "
+             f"As of {_clock(datetime.datetime.now(EASTERN))}.")
     if rows:
         table = ('<div class="scroll"><table><thead><tr><th>Time</th><th>Result</th><th>Code</th><th>Machine</th>'
-                 "<th>Reason and detail</th></tr></thead><tbody>" + _rows(rows) + "</tbody></table></div>")
+                 "<th>Reason and detail</th></tr></thead><tbody>" + _rows(rows, filters) + "</tbody></table></div>")
     else:
         wider = next((hours for hours in WINDOWS if hours > filters["hours"]), None)
         table = '<p class="empty">Nothing was recorded for these filters.' + (
             f' <a href="{html.escape(_href(filters, hours=wider))}">Look back {WINDOWS[wider]}</a>' if wider else "") + "</p>"
-    clear = "" if _href(filters) == "/" else '<a class="clear" href="/">Clear filters</a>'
+    # Clearing the filters keeps the window: it is how far back the page looks, not what it looks for.
+    clear = (f'<a class="clear" href="{html.escape(_href({"hours": filters["hours"]}))}">Clear filters</a>'
+             if narrowed else "")
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark"><title>Events</title><style>{STYLE}</style></head>
 <body><a class="skip" href="#events">Skip to the events</a>
-<header><div><h1>Events</h1><p class="count">{shown}</p></div>
-<nav aria-label="Time window" class="seg"><span>Window</span>{windows}</nav></header>
+<header><div><h1>Events</h1><p class="count">{html.escape(shown)}</p></div>
+<nav aria-label="Time window" class="seg"><span>Last</span>{windows}</nav></header>
 <div class="layout">
 <nav aria-label="Codes" class="rail"><ul>{_rail(filters, by_code)}</ul></nav>
 <main id="events"><div class="bar"><div class="seg" role="group" aria-label="Machine"><span>Machine</span>{sources}</div>
@@ -337,7 +360,7 @@ def server(host, port, url):
                 return self._send(400, _problem("Unknown filter", str(bad)))
             try:
                 with psycopg.connect(url, connect_timeout=CONNECT_TIMEOUT) as conn:
-                    body = page(events(conn, **filters), *counts(conn, filters["hours"]), filters)
+                    body = page(events(conn, **filters), *counts(conn, filters), filters)
             except psycopg.Error as failed:
                 # The class only: a driver's message can carry the host and the login's name.
                 return self._send(502, _problem("The store did not answer", type(failed).__name__))
