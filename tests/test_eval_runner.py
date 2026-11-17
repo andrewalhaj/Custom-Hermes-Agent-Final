@@ -70,6 +70,10 @@ auxiliary_client.call_llm = fake_call_llm
 def patch(modules):
     modules["embedding"].OLLAMA_URL = os.environ["EVAL_TEST_OLLAMA_URL"]
     modules["judge"].URL = os.environ["EVAL_TEST_JUDGE_URL"]
+    if sys.argv[1] == "ask" and os.environ.get("EVAL_TEST_ASK_FAILS"):
+        modules["embedding"].OLLAMA_URL = "http://127.0.0.1:9"   # nothing listens: recall fails
+    if json.load(open(sys.argv[2]))["question_id"] == os.environ.get("EVAL_TEST_CRASH_ON"):
+        raise SystemExit("the replay crashed")
 
 replay.main(sys.argv[1:], patch=patch)
 """
@@ -84,6 +88,9 @@ def dataset(tmp_path):
 
 def run(tmp_path, dataset, ollama, typesafe, **options):
     os.environ["EVAL_TEST_OLLAMA_URL"], os.environ["EVAL_TEST_JUDGE_URL"] = ollama.url, typesafe.url
+    for name in ("EVAL_TEST_ASK_FAILS", "EVAL_TEST_CRASH_ON"):
+        os.environ.pop(name, None)
+    os.environ.update(options.pop("test_env", {}))
     defaults = {"data": dataset, "sha256": hashlib.sha256(dataset.read_bytes()).hexdigest(), "questions": 3,
                 "seed": 1, "yes": True, "postgres": os.environ["TEST_DATABASE_URL"], "out": tmp_path / "report",
                 "replay_command": [sys.executable, "-c", WRAPPER], "judge_key": "test-key-not-a-real-one"}
@@ -104,8 +111,10 @@ def test_the_runner_scores_recall_mrr_and_abstention_through_the_whole_build(tmp
 
 def test_without_yes_the_runner_only_estimates_what_a_run_would_call(tmp_path, dataset, ollama, typesafe):
     report = run(tmp_path, dataset, ollama, typesafe, yes=False)
-    # 5 user turns, each an extraction call; 5 sessions, each ending in a digest when long enough (none is).
-    assert report == {"estimate": {"questions": 3, "user_turns": 5, "sessions": 5, "haiku_calls_at_least": 5}}
+    # 5 user turns, each an extraction call; 5 sessions, each ending in a digest when long enough (none is);
+    # the judge at least once per question, for the rerank (#167 review).
+    assert report == {"estimate": {"questions": 3, "user_turns": 5, "sessions": 5, "haiku_calls_at_least": 5,
+                                   "judge_calls_at_least": 3}}
     assert typesafe.requests == [] and ollama.embedded == []
 
 
@@ -169,3 +178,72 @@ def test_the_data_file_is_downloaded_and_kept_only_when_its_hash_matches(tmp_pat
     with pytest.raises(longmemeval.EvalError, match="SHA-256"):
         longmemeval.fetch(url, tmp_path / "bad.json", "0" * 64)
     assert sorted(path.name for path in tmp_path.iterdir()) == ["good.json"]   # nothing half-written is kept
+
+
+def _chatty(turns):
+    """One question whose single session has `turns` user turns, each with a reply."""
+    session = []
+    for n in range(turns):
+        session += [{"role": "user", "content": f"Message {n}."}, {"role": "assistant", "content": "Noted."}]
+    return [{"question_id": "q-long", "question_type": "single-session-user", "question": "Anything?",
+             "answer": "no", "question_date": "2023/05/30 (Tue) 10:00", "haystack_session_ids": ["s-long"],
+             "haystack_dates": ["2023/05/20 (Sat) 02:21"], "haystack_sessions": [session],
+             "answer_session_ids": ["s-long"]}]
+
+
+def _events(report, code):
+    return sum(1 for result in report["per_question"] for seen in result["codes"] if seen == code)
+
+
+@pytest.mark.parametrize("status, message, code", [
+    (403, "this account is restricted", "extract.refused"),           # the enforcement alert (#148)
+    (429, "You've hit your session limit", "extract.error"),          # a plan limit (#167 item 4)
+])
+def test_a_refusal_or_a_plan_limit_stops_the_replay_at_once(tmp_path, ollama, typesafe, status, message, code):
+    # #167 review: the run stopped only after the whole question, calling a refused account again and again.
+    data = tmp_path / "long.json"
+    data.write_text(json.dumps(_chatty(10)), encoding="utf-8")
+    failing = WRAPPER.replace('''def fake_call_llm(**kwargs):''', f'''class Refusal(RuntimeError):
+    status_code = {status}
+
+def fake_call_llm(**kwargs):
+    raise Refusal("{message}")''')
+    report = run(tmp_path, data, ollama, typesafe, questions=1, replay_command=[sys.executable, "-c", failing],
+                 sha256=hashlib.sha256(data.read_bytes()).hexdigest())
+    assert report["stopped"] and _events(report, code) == 1
+
+
+def test_a_failed_recall_is_counted_as_a_failure_never_as_a_correct_abstention(tmp_path, dataset, ollama, typesafe):
+    typesafe.default = 0.9
+    report = run(tmp_path, dataset, ollama, typesafe, test_env={"EVAL_TEST_ASK_FAILS": "1"})
+    assert report["abstention"] == {"count": 1, "correct": 0}
+    assert report["recall_failed"] == 3
+    assert report["failure_codes"].get("embed.unavailable")
+
+
+def test_a_crashed_replay_keeps_the_report_of_what_was_measured(tmp_path, dataset, ollama, typesafe):
+    typesafe.default = 0.9
+    with pytest.raises(longmemeval.EvalError):
+        run(tmp_path, dataset, ollama, typesafe, questions=3, test_env={"EVAL_TEST_CRASH_ON": "q3"})
+    written = json.loads((tmp_path / "report" / "report.json").read_text(encoding="utf-8"))
+    assert written["stopped"].startswith("crashed") and written["questions"] >= 1
+
+
+def test_a_postgres_that_already_has_the_memory_roles_is_refused_and_left_alone(tmp_path, dataset, ollama, typesafe):
+    # #167 review: the runner drops the cluster-wide roles it creates; on a cluster that has them, it would
+    # drop someone else's. It refuses instead.
+    with psycopg.connect(os.environ["TEST_DATABASE_URL"], autocommit=True) as admin:
+        admin.execute("create role memory_agent nologin")
+        try:
+            with pytest.raises(longmemeval.EvalError, match="memory_agent"):
+                run(tmp_path, dataset, ollama, typesafe)
+            assert admin.execute("select count(*) from pg_roles where rolname = 'memory_agent'").fetchone() == (1,)
+        finally:
+            admin.execute("drop role memory_agent")
+
+
+def test_a_turn_with_no_reply_is_not_synced_as_hermes_never_does():
+    session = [{"role": "user", "content": "First."}, {"role": "user", "content": "Second."},
+               {"role": "assistant", "content": "Reply."}, {"role": "user", "content": "Unanswered."}]
+    from evals import replay
+    assert [(user, reply) for user, reply, _ in replay.turns(session)] == [("Second.", "Reply.")]
