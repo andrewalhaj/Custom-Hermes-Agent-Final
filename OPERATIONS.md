@@ -141,6 +141,13 @@ A run that succeeds prints nothing, so Hermes sends nothing; a failed run sends 
 
 The report runs as a Hermes script-only cron job (`--no-agent`): it uses no model, and Hermes delivers the script's output to the configured target. A script that exits non-zero or times out makes Hermes deliver an error alert instead.[1]
 
+**Looking at the events** on the maintainer's own machine (#255). The daily report covers failures; the events page lists every row of `memory.events`, the guards' log-mode rows among them, newest first, with filters for the code, the machine, the result and the time window. It only reads.
+
+1. Once `0009_memory_events_viewer.sql` is applied (section 7), a maintainer creates the page's login as a machine's is created (section 3, item 2), in the group role `memory_viewer`: `create role "<viewer-login>" login in role memory_viewer;`, then `\password "<viewer-login>"`. That role may select from `memory.events` and nothing else: it cannot write, and cannot read facts.
+2. From a checkout's root, with the login's connection string in `CUSTOM_BUILD_VIEWER_URL`: `python -m scripts.events_viewer`, then open `http://127.0.0.1:9120`. `--port` changes the port. The connection string is never an argument, and the page never shows it.
+
+The page has no sign-in, so it serves on a loopback address only and refuses any other: anything running on that machine as the same user can read it, so stop it (Ctrl-C) when done. It runs outside Hermes and records no failure code; a store that does not answer shows on the page as the error's class.
+
 ## 5. Upgrading Hermes
 
 Before upgrading:
