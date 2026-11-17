@@ -32,12 +32,12 @@ from agent.turn_finalizer import apply_llm_output_transform
 discover_plugins()
 entry = next((p for p in get_plugin_manager().list_plugins() if p["name"] == "custom_build"), None)
 scenario, steps = sys.argv[1], json.loads(sys.argv[2])
-if scenario in ("crash", "worker_crash"):
+if scenario != "plain":
     loaded = [m for name, m in sys.modules.items() if name.endswith("custom_build.guards.recall_gate")]
     assert len(loaded) == 1, sorted(n for n in sys.modules if "custom_build" in n)
     def crash(*args, **kwargs):
         raise KeyError("boom")
-    setattr(loaded[0], "arm" if scenario == "crash" else "write_event", crash)
+    setattr(loaded[0], scenario, crash)   # the scenario names the function that raises
 
 def settle():
     for thread in threading.enumerate():
@@ -60,7 +60,7 @@ for kind, session, turn, value, *rest in steps:
         reply, transformed, _ = apply_llm_output_transform(agent, value, turn_id=turn)
         answers.append(reply if transformed else None)
     settle()
-print(json.dumps({"entry": entry, "answers": answers}))
+print(json.dumps({"entry": entry, "answers": answers, "holds_stream": get_plugin_manager().holds_stream()}))
 """
 
 
@@ -135,11 +135,14 @@ def test_an_armed_turn_without_both_searches_is_recorded_and_delivered(tmp_path,
         ["reply", "s1", "u5", reply],   # another turn's searches
         ["turn", "s1", "u6", ASK], ["post", "s1", "u6", "terminal", "ok"], ["post", "s1", "u6", "delegate_task", "ok"],
         ["reply", "s1", "u6", reply],   # neither is one of the two searches
+        ["turn", "s1", "u7", ASK], ["post", "s1", "u7", memory, "blocked"], ["post", "s1", "u7", session, "timeout"],
+        ["reply", "s1", "u7", reply],   # 5.3: any status other than ok does not count
     ]
     report, output, rows = run_gate(tmp_path, db, steps)
     assert all(answer in (None, ["", []]) for answer in report["answers"]), output   # no reply is rewritten
     both = "no memory_search or session_search"
-    assert withheld(rows) == [both, "no session_search", "no memory_search", "no memory_search", both, both], output
+    assert withheld(rows) == [both, "no session_search", "no memory_search", "no memory_search", both, both, both], output
+    assert report["holds_stream"] is False   # log mode holds no reply back from the stream
 
 
 def test_an_armed_turn_that_ran_both_searches_records_only_that_it_was_armed(tmp_path, db):
@@ -178,12 +181,15 @@ def test_a_mode_other_than_log_or_off_fails_the_load(tmp_path, db, mode):
     assert report["entry"]["error"], output
 
 
-@pytest.mark.parametrize("scenario", ["crash", "worker_crash"])
-def test_a_crash_in_the_gate_or_its_worker_is_recorded_and_the_turn_goes_ahead(tmp_path, db, scenario):
-    report, output, rows = run_gate(tmp_path, db, [["turn", "s1", "u1", ASK]], scenario=scenario)
-    assert report["answers"] == [["", []]], output
-    assert [(code, reason, session) for code, _, reason, _, _, session in rows] == [
-        ("guard.crash", "KeyError: 'boom'", "s1")], output
+@pytest.mark.parametrize(("raises", "then"), [
+    ("arm", []), ("write_event", []),   # the first hook, and the worker that writes its event
+    ("count", [["post", "s1", "u1", "memory_search", "ok"]]), ("check", [["reply", "s1", "u1", "Yes."]]),
+])
+def test_a_crash_in_any_hook_or_the_worker_is_recorded_and_the_turn_goes_ahead(tmp_path, db, raises, then):
+    report, output, rows = run_gate(tmp_path, db, [["turn", "s1", "u1", ASK], *then], scenario=raises)
+    assert all(answer in (None, ["", []]) for answer in report["answers"]), output
+    crashes = [(reason, session) for code, _, reason, _, _, session in rows if code == "guard.crash"]
+    assert crashes == [("KeyError: 'boom'", "s1")], output
 
 
 def test_a_turn_keeps_its_count_when_compression_gives_the_session_a_new_id(tmp_path, db):
@@ -201,10 +207,13 @@ def test_a_turn_is_judged_once_and_its_reply_text_is_never_stored(tmp_path, db):
              ["reply", "s1", "u1", reply]]   # a second call for the same turn finds it already judged
     _, output, rows = run_gate(tmp_path, db, steps)
     assert [code for code, *_ in events(rows)] == ["recall_gate.armed", "recall_gate.would_withhold"], output
+    assert rows[1][1:] == ("ok", None, {"kind": "past_work", "rule": "did_we", "why": "no memory_search or session_search"},
+                           "host-a", "s1"), output   # the pattern's name is what #163's counts need
     assert "4242" not in json.dumps(rows)
 
 
 def test_only_the_1000_most_recent_armed_turns_are_held(tmp_path, db):
-    steps = [["turn", "s1", f"u{n}", ASK] for n in range(1001)] + [["reply", "s1", "u0", "Yes."], ["reply", "s1", "u1000", "Yes."]]
+    steps = [["turn", "s1", f"u{n}", ASK] for n in range(1001)] + [
+        ["post", "s1", "u1000", "memory_search", "ok"], ["reply", "s1", "u0", "Yes."], ["reply", "s1", "u1000", "Yes."]]
     _, output, rows = run_gate(tmp_path, db, steps)
-    assert len(withheld(rows)) == 1, output   # u0 was dropped
+    assert withheld(rows) == ["no session_search"], output   # u0, the oldest, was dropped; u1000 kept its count

@@ -116,6 +116,7 @@ def test_an_ordinary_message_is_neither(message):
 @pytest.mark.parametrize(("message", "named"), [
     ("Did we already fix the gateway?", ("past_work", "did_we")),
     ("What is left to do?", ("open_work", "left")),
+    ("What's left from what we did yesterday?", ("open_work", "left")),   # both tables match: open work is checked first
     ("Thanks, that worked.", (None, None)),
 ])
 def test_a_question_is_named_by_its_table_and_first_matching_pattern(message, named):
