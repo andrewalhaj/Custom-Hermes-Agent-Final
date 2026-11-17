@@ -107,7 +107,7 @@ def test_a_long_tool_result_is_asked_about_in_pieces_and_none_of_it_is_left_out(
     typesafe.default = 0.1
     long = "".join(f"line {n} of the unit file\n" for n in range(3500))   # about 90,000 characters
     _big_gate(typesafe, [long])
-    pieces = [text.split("Tool result: ", 1)[-1] for text in _texts(typesafe) if "A tool result" in text]
+    pieces = [text.split("A tool result: ", 1)[1] for text in _texts(typesafe) if "A tool result: " in text]
     assert len(pieces) > 1 and all(len(piece) <= 30_000 for piece in pieces)
     assert "".join(pieces) == long
 

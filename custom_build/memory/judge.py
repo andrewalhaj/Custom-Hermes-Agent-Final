@@ -36,9 +36,31 @@ def supersede_answers(stored, new, *, url, key, model, timeout):
 
 
 def keep_answers(fact, source, *, url, key, model, timeout):
-    """The judge's probability for each gate question about an extracted fact and its source turn (#148)."""
-    return _answers({"fact": fact, "source": source}, write_path.load()["extraction"]["questions"],
-                    url=url, key=key, model=model, timeout=timeout)
+    """The judge's probability that an extracted fact is worth keeping, and that its source turn supports it
+    (#148). The turn can be far larger than the judge's context, so the state is the fact alone and each part
+    of the source has a support question of its own: the user's message and each tool result, a long one cut
+    into pieces, over as many requests as fit the judge's limits (`write_path.toml`, #251). A fact is as
+    supported as its best part, and the asking stops at the first part that reaches the support threshold."""
+    config = write_path.load()["extraction"]
+    wording, size = config["part_question"], config["part_chars"]
+    texts = [("The user's message", source.get("user") or "")]
+    texts += [("A tool result", result) for result in source.get("tool_results") or []]
+    parts = [(label, text[at:at + size]) for label, text in texts for at in range(0, len(text), size)]
+    batches = [{"worth_keeping": config["questions"]["worth_keeping"]}]
+    for n, (label, text) in enumerate(parts):
+        question = {**wording, "instructions": wording["instructions"].replace("{label}", label).replace("{text}", text)}
+        asked = sum(len(q["instructions"]) for q in batches[-1].values())
+        if len(batches[-1]) > 1 and asked + len(question["instructions"]) > config["request_chars"]:
+            batches.append({})
+        batches[-1][f"s{n}"] = question
+    worth, supported = None, 0.0
+    for batch in batches:
+        answers = _answers({"fact": fact}, batch, url=url, key=key, model=model, timeout=timeout)
+        worth = answers.pop("worth_keeping", worth)
+        supported = max([supported, *answers.values()])
+        if supported >= config["support_threshold"]:
+            break
+    return {"worth_keeping": worth, "supported": supported}
 
 
 def digest_answers(digest, *, url, key, model, timeout):

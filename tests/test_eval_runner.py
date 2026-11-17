@@ -338,7 +338,7 @@ def test_the_report_lists_each_failure_reason_with_its_count(tmp_path, dataset, 
 def test_a_miss_the_score_floor_cut_is_counted_as_cut_by_the_floor(tmp_path, dataset, ollama, typesafe):
     # #234: the gate keeps each fact, but the judge scores every candidate under the floor (0.30), so recall
     # brings nothing; the evidence was stored and found, then cut.
-    typesafe.answers, typesafe.default = {"worth_keeping": 0.9, "supported": 0.9}, 0.1
+    typesafe.answers, typesafe.default = {"worth_keeping": 0.9, "s0": 0.9, "s1": 0.9}, 0.1
     report = run(tmp_path, dataset, ollama, typesafe)
     assert report["answerable"]["recall_at_5"] == 0.0
     assert report["misses"] == {"cut_by_floor": 2}

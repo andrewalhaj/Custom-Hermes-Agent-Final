@@ -156,7 +156,7 @@ ONE_FACT = json.dumps([{"body": FACT, "basis": "tool_observed"}])
 
 
 def test_a_fact_the_judge_keeps_is_stored_as_extracted(home, db, ollama, typesafe):
-    typesafe.answers = {"worth_keeping": 0.9, "supported": 0.9}
+    typesafe.answers = {"worth_keeping": 0.9, "s0": 0.9, "s1": 0.9}
     turn(home, db, ollama.url, typesafe.url, ONE_FACT)
     assert _facts(db) == [(FACT, "extracted", "tool_observed", "github.com/Owner/Repo", "host-a", "s1", 4)]
     [gate] = typesafe.requests
@@ -165,7 +165,7 @@ def test_a_fact_the_judge_keeps_is_stored_as_extracted(home, db, ollama, typesaf
 
 
 def test_a_fact_the_judge_does_not_keep_is_dropped(home, db, ollama, typesafe):
-    typesafe.answers = {"worth_keeping": 0.9, "supported": 0.3}
+    typesafe.answers = {"worth_keeping": 0.9, "s0": 0.3, "s1": 0.3}
     turn(home, db, ollama.url, typesafe.url, ONE_FACT)
     assert _facts(db) == []
     assert _codes(db) == []
@@ -187,7 +187,7 @@ def test_a_judge_failure_queues_the_fact_and_the_retry_still_gates_it(home, db, 
     turn(home, db, ollama.url, typesafe.url, ONE_FACT)
     assert _facts(db) == []
     assert _codes(db) == ["judge.error", "store.gate_error"]
-    typesafe.status, typesafe.answers = 200, {"worth_keeping": 0.9, "supported": 0.2}
+    typesafe.status, typesafe.answers = 200, {"worth_keeping": 0.9, "s0": 0.2, "s1": 0.2}
     turn(home, db, ollama.url, typesafe.url, "[]")   # the next start retries the queue
     assert _facts(db) == []   # the retry asked the gate, which refused it
     assert typesafe.requests[-1]["body"]["state"]["fact"] == FACT
@@ -230,7 +230,7 @@ def test_queued_facts_the_judge_refuses_leave_the_queue_in_one_pass(home, db, ol
 
 
 def test_a_fact_already_stored_does_not_ask_the_judge_again(home, db, ollama, typesafe):
-    typesafe.answers = {"worth_keeping": 0.9, "supported": 0.9}
+    typesafe.answers = {"worth_keeping": 0.9, "s0": 0.9, "s1": 0.9}
     turn(home, db, ollama.url, typesafe.url, ONE_FACT)
     turn(home, db, ollama.url, typesafe.url, ONE_FACT)
     assert len(typesafe.requests) == 1   # the second proposal is the same text, already live
@@ -244,7 +244,7 @@ def test_nothing_is_extracted_outside_a_primary_session(home, db, ollama, typesa
 
 
 def test_a_secret_in_the_turn_never_reaches_the_model_the_judge_the_store_or_a_log_line(home, db, ollama, typesafe):
-    typesafe.answers = {"worth_keeping": 0.9, "supported": 0.9}
+    typesafe.answers = {"worth_keeping": 0.9, "s0": 0.9, "s1": 0.9}
     user = f"The store key is {FAKE_KEY}, why does it fail?"
     messages = [{"role": "user", "content": user}, {"role": "tool", "tool_call_id": "c", "content": f"key={FAKE_KEY}"}]
     answer = json.dumps([{"body": f"The store key is {FAKE_KEY}.", "basis": "user_stated"}])

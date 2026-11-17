@@ -83,7 +83,7 @@ def test_the_store_fact_tool_keeps_the_recall_limit(db):
 
 @pytest.fixture
 def judge_at(typesafe):
-    typesafe.answers = {"worth_keeping": 0.9, "supported": 0.9}
+    typesafe.answers = {"worth_keeping": 0.9, "s0": 0.9, "s1": 0.9}
     return store.Judge(url=typesafe.url, key="test-key-not-a-real-one", model="jev-1.14.0")
 
 
