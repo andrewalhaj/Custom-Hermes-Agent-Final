@@ -74,6 +74,17 @@ jobs:
           set -e
           # 1 = no match (pass); 0 = the matches printed above; anything else = git failed
           [ "$rc" -eq 1 ] || { echo "noqa ban: git grep exited $rc (0 = the matches above, other = git failed)"; exit 1; }
+      - name: no broad catch once every suppression comment is ignored
+        shell: bash
+        run: |
+          # The pattern above knows only the comment forms it lists. This asks ruff itself, whatever the form (#246).
+          set +e
+          out=$(ruff check --no-cache --ignore-noqa --select BLE001,S110,E722 --output-format concise .)
+          rc=$?
+          set -e
+          echo "$out"
+          # 0 = none of the rules fires; 1 = the findings above, each hidden by a comment; anything else = ruff failed or is missing
+          [ "$rc" -eq 0 ] || { echo "suppression ban: ruff exited $rc with suppression comments ignored (1 = the findings above)"; exit 1; }
       - name: the error-handling rules are switched on
         shell: bash
         run: |

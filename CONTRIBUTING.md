@@ -329,7 +329,7 @@ The lint fails a pull request on:
 - `except Exception` or `except BaseException` (`BLE001`).[11]
 - `try`-`except`-`pass` on a catch-everything block (`S110`). By default it flags only `Exception`, `BaseException` and a bare `except:`.[13][14]
 - A bare `except:` (`E722`).
-- Any suppression of `BLE001`, `S110` or `E722`: a `noqa` comment, a file-level `ruff: noqa` or `flake8: noqa`, ruff configuration that turns a rule off, globally or per file, or that excludes files or lives outside the root `pyproject.toml` (separate CI steps, section 8.2).
+- Any suppression of `BLE001`, `S110` or `E722`: a `noqa` comment, a `ruff: ignore`, `ruff: disable` or `ruff: file-ignore` comment, a file-level `ruff: noqa` or `flake8: noqa`, ruff configuration that turns a rule off, globally or per file, or that excludes files or lives outside the root `pyproject.toml` (separate CI steps, section 8.2).
 
 The reviewer checks what the lint cannot:
 
@@ -368,7 +368,7 @@ A rule in this file does not block anything. These guards do. Each is proven wit
 | Guard | Rules | Where it lives | The failing case that proves it |
 |---|---|---|---|
 | Lint over the whole repository: ruff's default rules plus `BLE001` and `S110` | C1, C2 | `pyproject.toml`, the CI workflow | A pull request that adds `except Exception: pass` anywhere fails |
-| Suppression ban for `BLE001`, `S110`, `E722` | C2 | The CI workflow | A pull request that adds `# noqa: BLE001`, a bare `# noqa`, a file-level `# ruff: noqa`, ruff configuration that turns one of these rules off, an `exclude`, or a ruff configuration file outside the root `pyproject.toml`, fails |
+| Suppression ban for `BLE001`, `S110`, `E722` | C2 | The CI workflow | A pull request that adds `# noqa: BLE001`, a bare `# noqa`, a file-level `# ruff: noqa`, a broad catch under any other suppression comment such as `# ruff: ignore[BLE001]`, ruff configuration that turns one of these rules off, an `exclude`, or a ruff configuration file outside the root `pyproject.toml`, fails |
 | Tests in CI | W3 | The CI workflow | A pull request with a failing test fails |
 | Actions pinned to a full commit SHA | 8.2 | The test suite | A step or a job in any workflow file whose `uses:` names a tag or a branch fails the build |
 | Plugin validation: `hermes plugins doctor --ci` and a load test, added with the plugin's first code | ARCHITECTURE.md 5.5 | The CI workflow | A plugin whose `register(ctx)` raises fails doctor; a manifest without `kind: standalone` fails the load test |
