@@ -309,10 +309,26 @@ def test_a_credential_in_a_command_never_reaches_the_store(tmp_path, db, env):
         f"ssh other-host 'export KEY={FAKE_SECRET}'": "ssh",
         f"wget 'https://example.com/file?token={URL_TOKEN}'": "wget",
         f"echo TOKEN={PASSWORD} >> ~/home/.env": str((tmp_path / "home" / ".env").resolve()),
+        # review: text glued to the program or the verb, where no space separates it from the credential
+        f"curl {USER_FLAG} conda:{PASSWORD} https://repo.example.com/install.sh": "conda … install",
+        "curl -d '{\"tool\":\"pip\",\"pw\":\"" + PASSWORD + "\",\"action\":\"install\"}' https://example.com/api": "pip … install",
+        f"psql 'postgres://apt:{PASSWORD}@db/x' -c 'alter table t add c int'": "apt … add",
+        f"go run . -dsn 'app:{PASSWORD}@tcp(db:3306)/add'": "go … add",
+        f"poetry config http-basic.repo user {PASSWORD}/install": "poetry … install",
+        f"brew={PASSWORD} ./run add": "brew … add",
     }
     _, output, rows = run_gate(tmp_path, db, [["terminal", {"command": c}] for c in commands], env=env)
     assert [reason for _, _, reason, *_ in rows] == list(commands.values()), output
     assert not any(secret in json.dumps(rows) for secret in (PASSWORD, FAKE_SECRET, URL_TOKEN))
+
+
+@pytest.mark.parametrize("env", [None, {"HERMES_REDACT_SECRETS": "false"}])
+def test_a_secret_in_a_recorded_path_is_redacted_even_with_hermes_redaction_off(tmp_path, db, env):
+    # Rule L4: a path is the one part of a call the gate still stores as written.
+    skill = tmp_path / "home" / "skills" / f"{FAKE_SECRET}.md"
+    _, output, rows = run_gate(tmp_path, db, [["write_file", {"path": str(skill), "content": "x"}]], env=env)
+    assert len(rows) == 1 and rows[0][2].startswith(str((tmp_path / "home" / "skills").resolve())), output
+    assert FAKE_SECRET not in json.dumps(rows)
 
 
 def test_an_unreachable_store_is_logged_and_the_call_goes_ahead(tmp_path, db):
