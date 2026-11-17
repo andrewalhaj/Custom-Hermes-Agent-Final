@@ -39,11 +39,20 @@ class DeployError(Exception):
     """A refusal or a failed step. Its text starts with the step's name."""
 
 
+class TimedOut(DeployError):
+    """A command that was stopped waiting. What it did on the host is unknown."""
+
+
 def settings(env):
     missing = [name for name in REQUIRED if not env.get(name, "").strip()]
     if missing:
         raise DeployError("settings: not set in the environment: " + ", ".join(missing))
-    return {name: env[name].strip() for name in REQUIRED}
+    cfg = {name: env[name].strip() for name in REQUIRED}
+    try:   # split here, so a value that cannot be split is a refusal and not a crash after the install
+        cfg["DEPLOY_RESTART"] = shlex.split(cfg["DEPLOY_RESTART"])
+    except ValueError as exc:
+        raise DeployError(f"settings: DEPLOY_RESTART cannot be split into a command: {exc}") from exc
+    return cfg
 
 
 def must(done, step):
@@ -114,9 +123,13 @@ def installed_commit(cfg, run):
     """The commit Hermes pinned the plugin to (Hermes v0.23.1, `hermes_cli/plugins_cmd_git.py`)."""
     text = must(on_host(cfg, run, "cat", f"{cfg['DEPLOY_HERMES_HOME']}/plugins/.install-metadata.json"),
                 "installed commit")
-    entry = json.loads(text).get("custom_build", {})
-    revision = entry.get("revision", "")
-    if entry.get("pinned") is not True or not COMMIT.fullmatch(revision):
+    try:
+        record = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise DeployError(f"installed commit: the host's install record is not JSON: {exc}") from exc
+    entry = record.get("custom_build") if isinstance(record, dict) else None
+    revision = entry.get("revision") if isinstance(entry, dict) else None
+    if not isinstance(revision, str) or entry.get("pinned") is not True or not COMMIT.fullmatch(revision):
         raise DeployError("installed commit: the host has no install pinned to a full commit; "
                           "the first install is done by hand (OPERATIONS.md section 3)")
     return revision
@@ -130,7 +143,7 @@ def install(commit, cfg, run):
 def start(cfg, run):
     """Check, restart and smoke-test whatever commit is installed."""
     must(hermes(cfg, run, "custom-build", "check"), "check")   # before the restart: a failed check under the service takes the host offline
-    must(run(shlex.split(cfg["DEPLOY_RESTART"]), timeout=RESTART_TIMEOUT), "restart")
+    must(run(cfg["DEPLOY_RESTART"], timeout=RESTART_TIMEOUT), "restart")
     must(on_host(cfg, run, "systemctl", "is-active", "--quiet", cfg["DEPLOY_UNIT"]), "service active")
     must(hermes(cfg, run, "custom-build", "heartbeat"), "heartbeat")   # the new code loads and reaches the store
 
@@ -168,7 +181,8 @@ def deploy(commit, env, run, http, ask, out):
         install(commit, cfg, run)
     except DeployError as exc:
         out(f"deploy failed at {exc}")
-        if still_on(previous, cfg, run):   # Hermes replaces the plugin only once an install succeeds
+        # Hermes replaces the plugin only once an install succeeds. One that timed out may still finish.
+        if not isinstance(exc, TimedOut) and still_on(previous, cfg, run):
             out(f"the host still runs {previous} and nothing was restarted. {kept}")
             return 1
         return roll_back(previous, cfg, run, out, kept)
@@ -186,9 +200,9 @@ def run(argv, timeout=120):
         return subprocess.run(argv, capture_output=True, text=True, timeout=timeout, check=False,
                               stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired as exc:
-        raise DeployError(f"{argv[0]}: timed out after {timeout} seconds") from exc
-    except FileNotFoundError as exc:
-        raise DeployError(f"{argv[0]}: no such program on this machine") from exc
+        raise TimedOut(f"{argv[0]}: timed out after {timeout} seconds") from exc
+    except OSError as exc:   # no such program, or one this account may not execute
+        raise DeployError(f"{argv[0]}: could not be started: {exc}") from exc
 
 
 def http(method, url, token, body=None, timeout=120):
@@ -199,11 +213,15 @@ def http(method, url, token, body=None, timeout=120):
                  "User-Agent": "custom-build-deploy"})
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
-            return json.loads(response.read() or b"null")
+            text = response.read()
     except urllib.error.HTTPError as exc:
         raise DeployError(f"{method} {path}: HTTP {exc.code} {exc.read().decode(errors='replace')[:500]}") from exc
-    except (urllib.error.URLError, TimeoutError) as exc:   # no answer: whether the request took effect is unknown
+    except OSError as exc:   # refused, reset or timed out: whether the request took effect is unknown
         raise DeployError(f"{method} {path}: could not reach the store's API: {exc}") from exc
+    try:
+        return json.loads(text or b"null")
+    except json.JSONDecodeError as exc:
+        raise DeployError(f"{method} {path}: the store's API answered with something that is not JSON") from exc
 
 
 def main(argv):
