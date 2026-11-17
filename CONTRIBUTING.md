@@ -81,13 +81,13 @@ Placeholders used below: `<owner>/<repo>`, `<branch>`, `<n>` (an issue or pull r
 
 ### 4.1 Rules
 
-- **W1. Issue first.** Every pull request answers one issue. If none exists, create it before writing code: what was observed or asked for, and what done looks like. The issue is the whole scope. No change is too small for one.
+- **W1. Issue first.** Every pull request answers one issue. If none exists, create it before writing code: what was observed or asked for, and what done looks like. The issue is the whole scope. No change is too small for one. The one exception is a pull request Dependabot opens to move a pinned action (section 8.2).
 - **W2. One branch per issue.** Name it `<type>/<short-description>`, cut it fresh from an up-to-date `main`, never reuse it for a second issue, and delete it once its pull request merges. `main` is the only long-lived branch.
 - **W3. Test first, where a test can express it.** Write the test, watch it fail for the right reason, then write the minimum that passes. Write an error handler only when a test names the failure it handles. When a test cannot express the change, say so and report what was measured instead.
 - **W4. One concern per commit**, with a conventional prefix: `feat:`, `fix:`, `refactor:`, `test:`, `chore:`, `docs:`, `ci:`.[4] A commit that needs "and" in its subject is two commits.
 - **W5. Small pull requests.** One purpose each, with the tests for the change in the same pull request.
 - **W6. Review before opening.** Review the branch's whole diff against `main`. Fix every must-fix finding on the branch and review again, until a round finds nothing or the remaining findings are recorded as open. Record in the pull request who reviewed, how many rounds, and the verdict.
-- **W7. The pull request says what was actually done.** A conventional-commit title, `Closes #<n>`, the commits by concern, a Review section, a Validation section, and a "Found, not fixed" list.
+- **W7. The pull request says what was actually done.** A conventional-commit title, `Closes #<n>`, the commits by concern, a Review section, a Validation section, and a "Found, not fixed" list. A pull request Dependabot opens keeps its own description (section 8.2).
 - **W8. Maintainers merge, by squash, and only on green.** The maintainer reads `gh pr checks <n>` and merges only when every check passed. Contributors never merge a pull request, never enable auto-merge, and never push to `main`. Where branch protection is unavailable (section 8.1), a red check does not block a merge by itself, so this reading is the gate.
 - **W9. Never rewrite or delete without a maintainer's yes.** That covers a hard reset, a force-push, and deleting a branch, local or remote.
 - **W10. Maintainers change repository, account and database settings.** Propose the change with what it does, the risk and the rollback. Read the setting back after it is made.
@@ -397,135 +397,7 @@ Branch protection and rulesets are available on public repositories, and on priv
 
 ### 8.2 The CI workflow
 
-Run the same commands a developer runs locally, on every pull request to `main` and on every push to it. Check the action versions before copying.
-
-```yaml
-name: CI
-on:
-  pull_request:
-    branches: [main]
-  push:
-    branches: [main]
-permissions:
-  contents: read
-jobs:
-  tests:
-    runs-on: ubuntu-latest
-    services:
-      postgres:   # a throwaway server the tests apply the migrations to; its password is not a secret
-        image: pgvector/pgvector:0.8.0-pg17@sha256:40b404964359299eefdd5f8518facf1886c562848cf4de13b6eaf91cb70c2b87   # Postgres 17 with pgvector 0.8.0, as the store has (#96)
-        env: { POSTGRES_PASSWORD: postgres }
-        ports: ["5432:5432"]
-        options: >-
-          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
-    env:
-      TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
-        with: { fetch-depth: 0 }   # the secret scan reads the whole history
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0   # v7.1.0
-        with: { python-version: "3.14", cache: pip }
-      - name: install Hermes v0.23.1 from its own lock file
-        shell: bash
-        run: |
-          # Hermes refuses to build a wheel and its pyproject pins conflict, so: its locked pins, then
-          # Hermes itself editable at the tag's commit, neither resolved again.
-          git clone --quiet --depth 1 --branch v0.23.1 https://github.com/NousResearch/hermes-agent "$RUNNER_TEMP/hermes-agent"
-          [ "$(git -C "$RUNNER_TEMP/hermes-agent" rev-parse HEAD)" = 3b421578588243f920886e6fe79a6faa87ea026e ] \
-            || { echo "tag v0.23.1 no longer points at the pinned commit"; exit 1; }
-          pip install --no-deps -r hermes-requirements.txt
-          pip install --no-deps -e "$RUNNER_TEMP/hermes-agent"
-      - run: pip install -e ".[dev]"
-      - name: install gitleaks 8.30.1, checked against its published checksum
-        shell: bash
-        run: |
-          curl -sSfL -o "$RUNNER_TEMP/gitleaks.tar.gz" \
-            https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
-          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  $RUNNER_TEMP/gitleaks.tar.gz" \
-            | sha256sum -c -
-          mkdir -p "$RUNNER_TEMP/gitleaks-bin"
-          tar -xzf "$RUNNER_TEMP/gitleaks.tar.gz" -C "$RUNNER_TEMP/gitleaks-bin" gitleaks
-          echo "$RUNNER_TEMP/gitleaks-bin" >> "$GITHUB_PATH"
-      - name: no secret in the repository's history
-        shell: bash
-        run: |
-          command -v gitleaks >/dev/null || { echo "secret scan: gitleaks is not installed"; exit 1; }
-          errors=$(mktemp)
-          # Findings, redacted, go to stdout; at this log level only gitleaks's errors go to stderr.
-          # --diff-merges=remerge also shows what a merge commit itself brings in.
-          set +e
-          gitleaks git --redact --no-banner -v --log-level error --exit-code 1 \
-            --log-opts="--full-history --all --diff-filter=tuxdb --diff-merges=remerge" . 2>"$errors"
-          code=$?
-          set -e
-          # gitleaks exits 0 when git itself fails: that is no scan, not a clean history.
-          if [ -s "$errors" ]; then
-            cat "$errors"
-            echo "secret scan: gitleaks reported an error, so the history was not scanned"
-            exit 1
-          fi
-          [ "$code" -eq 0 ] || { echo "secret scan: gitleaks found a secret (above, redacted)"; exit "$code"; }
-      - run: ruff check .
-      - name: no noqa that can silence the error-handling rules
-        shell: bash
-        run: |
-          # Matches a bare noqa, a noqa naming one of these rules, and file-level ruff/flake8 noqa, in any case.
-          set +e
-          git grep -n -i -E '#[[:space:]]*noqa([[:space:]]*$|[[:space:]]*[^:[:space:]]|:[^#]*(BLE001|S110|E722))|(ruff|flake8):[[:space:]]*noqa' -- '*.py'
-          rc=$?
-          set -e
-          # 1 = no match (pass); 0 = the matches printed above; anything else = git failed
-          [ "$rc" -eq 1 ] || { echo "noqa ban: git grep exited $rc (0 = the matches above, other = git failed)"; exit 1; }
-      - name: the error-handling rules are switched on
-        shell: bash
-        run: |
-          # Lint a probe that breaks all three rules, with the repository's own ruff configuration.
-          # Any configuration that turns a rule off (ignore, select, ruff.toml) makes its code disappear.
-          set +e
-          out=$(printf 'try:\n    pass\nexcept Exception:\n    pass\ntry:\n    pass\nexcept:\n    pass\n' \
-            | ruff check --no-cache --output-format concise --stdin-filename ci_probe.py -)
-          rc=$?
-          set -e
-          echo "$out"
-          # 1 = findings reported (expected); 0 = the rules are off; anything else = ruff failed or is missing
-          [ "$rc" -eq 1 ] || { echo "probe: ruff exited $rc, expected 1 (findings reported)"; exit 1; }
-          for code in BLE001 S110 E722; do grep -q "$code" <<< "$out" || { echo "ruff no longer reports $code"; exit 1; }; done
-      - name: ruff lints every tracked Python file
-        shell: bash
-        run: |
-          # Catches anything that drops files from linting: include, exclude, .gitignore, ruff's default excludes.
-          python - <<'PY'
-          import pathlib, subprocess, sys
-          root = pathlib.Path.cwd().resolve()
-          run = lambda *cmd: subprocess.run(cmd, check=True, capture_output=True, text=True).stdout.splitlines()
-          linted = {pathlib.Path(p).resolve().relative_to(root).as_posix() for p in run("ruff", "check", "--show-files", ".") if p.strip()}
-          missing = sorted(set(run("git", "ls-files", "*.py")) - linted)
-          sys.exit("tracked Python files that ruff does not lint:\n" + "\n".join(missing) if missing else 0)
-          PY
-      - name: ruff configuration lives in the root pyproject.toml and narrows nothing
-        shell: bash
-        run: |
-          python - <<'PY'
-          import os, subprocess, sys, tomllib
-          if not os.path.exists("pyproject.toml"):
-              sys.exit("no pyproject.toml at the repository root")
-          rules = ("BLE001", "S110", "E722")
-          def covers(code):   # a code or prefix that covers one of the rules, such as "E", "BLE" or "ALL"
-              return code == "ALL" or any(r.startswith(code) for r in rules)
-          tracked = subprocess.run(["git", "ls-files", "*ruff.toml", "*pyproject.toml"],
-                                   check=True, capture_output=True, text=True).stdout.split()
-          bad = [f"ruff configuration outside the root pyproject.toml: {f}" for f in tracked if f != "pyproject.toml"]
-          ruff = tomllib.load(open("pyproject.toml", "rb")).get("tool", {}).get("ruff", {})
-          for section in (ruff, ruff.get("lint", {})):
-              for key in ("exclude", "extend-exclude"):
-                  bad += [f"{key}: {pattern}" for pattern in section.get(key, [])]
-              for key in ("per-file-ignores", "extend-per-file-ignores"):
-                  bad += [f"{key}: {glob}: {c}" for glob, codes in section.get(key, {}).items() for c in codes if covers(c)]
-          sys.exit("\n".join(bad) if bad else 0)
-          PY
-      - run: python -m pytest -q
-      - run: pip-audit   # audits the whole environment the tests ran in, Hermes's packages included
-```
+The workflow is `.github/workflows/ci.yml`. It runs the same commands a developer runs locally, on every pull request to `main` and on every push to it. This section does not repeat the file, so the two cannot differ; the notes below say why its steps are the way they are.
 
 Lint selection in `pyproject.toml`. Use `extend-select`, which adds to ruff's default rules and keeps `E722` on.[13][14]
 
@@ -535,12 +407,12 @@ extend-select = ["BLE001", "S110"]
 ```
 
 - `ruff check .` covers every Python file in the repository, tests included. All ruff configuration lives in the root `pyproject.toml`: no `ruff.toml`, `.ruff.toml` or nested `pyproject.toml`, no `exclude` or `extend-exclude`, and no per-file ignores for these rules. With one configuration file, the probe step proves the rules are on for every file, and the coverage step proves every tracked Python file is linted, whatever would otherwise drop it (`include`, `.gitignore`, or ruff's default excludes such as `dist/`).
-- A plugin declares the Python packages it needs in its manifest (`python_dependencies`). Hermes v0.23.1 also accepts a `pyproject.toml` beside the manifest,[24] but a second `pyproject.toml` fails the configuration step above.
+- A plugin declares the Python packages it needs in its manifest (`python_dependencies`). Hermes v0.23.1 also accepts a `pyproject.toml` beside the manifest,[24] but a second `pyproject.toml` fails the workflow's configuration step.
 - Validate the plugin with `hermes plugins doctor <path> --ci` from the pull request that adds its first code. In Hermes v0.23.1 it loads the plugin through Hermes's own discovery and registration, and exits non-zero on an error.[24] Doctor loads the plugin directly, as an ordinary plugin only, and skips both the enable gate and the memory-provider loader (Hermes v0.23.1 source, `hermes_cli/plugin_dev.py`). The same pull request therefore adds a test that loads the plugin the way a host does: through ordinary discovery with the plugin enabled, and through the memory-provider loader (ARCHITECTURE.md section 1). Both steps need Hermes installed on the runner, and both are tests in `tests/test_plugin_load.py`, so `pytest` runs them. Hermes is installed from its own lock file: `hermes-requirements.txt` holds the pins exported from the tag's `uv.lock`, installed with `--no-deps`, and Hermes itself is installed editable at the tag's commit, because it refuses to build a wheel and its `pyproject.toml` pins conflict when resolved as an ordinary package. A local environment is set up the same way, on Python 3.14.
 - Pin ruff to one version in the project's dev dependencies, so local runs and CI agree.
-- Pin every action to a full-length commit SHA, with the released version in a comment beside it: a tag can be moved to other code, a SHA cannot.[26] `.github/dependabot.yml` has Dependabot propose each new release as a pull request, so a pin does not go stale. A test fails on a `uses:` that is not a SHA.
+- Pin every action to a full-length commit SHA, with the released version in a comment beside it: a tag can be moved to other code, a SHA cannot.[26] `.github/dependabot.yml` has Dependabot propose each new release as a pull request, so a pin does not go stale. That pull request is the one exception to W1 and W7: it has no issue and keeps Dependabot's own description. Its diff should change only a pinned SHA and the version comment beside it. The maintainer reads the diff and the checks, then merges it like any other. A test fails on a `uses:` that is not a SHA.
 - The job name is what appears as the status check to require.
-- Give any step that pipes a tool into a count or a test `shell: bash`, and never end it with `|| true`. Without `shell: bash` a failed command in the middle of a pipe does not stop the step, so a tool that did not start reads as a count of 0 and the check passes.[21] A check must tell "found nothing" from "the tool failed", as the `noqa` step above does. Prove each step with its failing case before relying on it (C6).
+- Give any step that pipes a tool into a count or a test `shell: bash`, and never end it with `|| true`. Without `shell: bash` a failed command in the middle of a pipe does not stop the step, so a tool that did not start reads as a count of 0 and the check passes.[21] A check must tell "found nothing" from "the tool failed", as the workflow's `noqa` step does. Prove each step with its failing case before relying on it (C6).
 - The secret scan runs gitleaks, at a pinned version checked against its published checksum, over the whole history (`fetch-depth: 0`), merge commits included. It fails on a finding and on any error gitleaks reports, because gitleaks exits 0 when git itself fails.
 - Add a dependency audit when there are dependencies: `pip-audit` with no arguments.[22]
 
