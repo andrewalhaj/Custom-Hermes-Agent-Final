@@ -11,7 +11,7 @@ import tomllib
 
 # The recall gate's file (5.3): the search and the gate read the same patterns, so they agree.
 PATTERNS = pathlib.Path(__file__).resolve().parent.parent / "guards" / "recall_gate.toml"
-OPEN_ITEMS = "Open items:"   # how a digest's open items are written (digest.py)
+OPEN_ITEMS = "\n\nOpen items:\n"   # how digest.write() starts a digest's open items
 
 
 def question_kind(message):
@@ -27,10 +27,14 @@ def open_items(digests):
     """Each digest's open items as notes of their own, with the digest's provenance, in the digests' order."""
     items = []
     for digest in digests:
-        _, found, tail = digest["body"].partition(OPEN_ITEMS)
+        _, found, tail = digest["body"].rpartition(OPEN_ITEMS)   # the last: a summary may mention open items
+        texts = []
         for line in tail.splitlines() if found else []:
-            if line.strip().startswith("- "):
-                items.append({**digest, "body": line.strip()[2:].strip()})
+            if line.startswith("- "):   # digest.write() starts each item so; anything else continues the one before
+                texts.append(line[2:].strip())
+            elif texts and line.strip():
+                texts[-1] = f"{texts[-1]} {line.strip()}".strip()
+        items += [{**digest, "body": text} for text in texts if text]
     return items
 
 

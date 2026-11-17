@@ -17,7 +17,7 @@ def newest_digests(conn, project, count):
     rows = conn.execute(
         "select body, kind, origin, basis, created_at, last_verified_at from memory.facts"
         " where kind = 'digest' and superseded_by is null and retired_at is null and project is not distinct from %s"
-        " order by created_at desc limit %s", (project, count)).fetchall()
+        " order by created_at desc, id desc limit %s", (project, count)).fetchall()   # id: ties keep an order
     return [{"body": body, "kind": kind, "origin": origin, "basis": basis, "stored": created.date().isoformat(),
              "last_verified": verified.date().isoformat() if verified else None, "found_by": ["newest"],
              "ranked_by": "newest"}

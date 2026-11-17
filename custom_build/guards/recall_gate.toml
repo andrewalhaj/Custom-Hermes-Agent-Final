@@ -1,20 +1,33 @@
 # The recall gate's patterns (ARCHITECTURE.md sections 3.5 and 5.3; #158, decided there).
 # Memory's recall reads them now, to widen the search for a question about past work and to answer a
 # question about open work from the newest digests; the recall gate reads the same file when the guards
-# track builds it, so the search and the gate always agree on what such a question is.
-# Each is a Python regular expression, matched case-insensitively anywhere in the user's message. Open
-# work is checked first. A change here is a pull request, with tests/test_recall_questions.py updated.
+# track builds it, and counts a match in either table as a question about past work, so the search and the
+# gate always agree.
+# Each is a Python regular expression, matched case-insensitively against the user's message. They are
+# narrow on purpose: an open-work match replaces the similarity search, and the gate will require searches
+# on every past-work match, so a pattern that fires on an ordinary message costs a turn its recall or adds
+# work. Open work is checked first. A change here is a pull request, with tests/test_recall_questions.py
+# updated, and eval-set numbers once the eval set exists (CONTRIBUTING.md rule C8).
 
+# Past work: we or I in the past, asked about. Not "you": that is this session, which needs no memory.
 [past_work]
-what_did = '''(?i)\bwhat\s+did\s+(?:we|i|you)\s+(?:decide|say|do|agree|choose|pick|find|change)\b'''
-did_we = '''(?i)\b(?:did|have|had)\s+(?:we|i|you)\s+(?:already\s+)?(?:decide|do|done|fix|fixed|try|tried|set|discuss|talk|say|agree|change|install|pin|use|build)'''
-last_time = '''(?i)\b(?:last|previous|earlier)\s+(?:time|session|conversation|chat|week)\b'''
-remember = '''(?i)\b(?:remember|recall)\b'''
-left_off = '''(?i)\b(?:left|leave)\s+off\b'''
-before = '''(?i)\b(?:earlier|before|yesterday|previously)\s*\?'''   # "... earlier?", a question about the past
+what_did = '''(?i)\bwhat\s+did\s+(?:we|i)\s+(?:decide|say|do|agree|choose|pick|find|change|conclude|settle)\b'''
+did_we = '''(?i)\b(?:did|have|had)\s+we\s+(?:already\s+|ever\s+)?(?:decide|do|done|fix|fixed|try|tried|set|discuss|discussed|talk|talked|say|said|agree|agreed|change|changed|install|installed|pin|pinned|use|used|build|built|see|seen)\b'''
+working_on = '''(?i)\bwhat\s+(?:were|was)\s+(?:we|i)\s+(?:working\s+on|doing)\b'''
+where_were_we = '''(?i)\bwhere\s+(?:were\s+we|did\s+we\s+(?:leave|stop))\b|\bwe\s+(?:left|leave)\s+off\b'''
+remind_me = '''(?i)\bremind\s+me\s+(?:what|how|why|where|when|which)\s+(?:we|i)\b'''
+remember = '''(?i)\b(?:do|can|did)\s+you\s+(?:still\s+)?(?:remember|recall)\b|^\W*remember\b(?!\s+to\b)[^\n]*\?\s*$'''
+last_time = '''(?i)\b(?:we|i)\b[^.?!\n]{0,60}\b(?:last\s+time|last\s+session|previous\s+session|earlier|before|yesterday|previously)\s*\?'''
 
+# Open work: the whole message is the question, with at most a short lead-in and a short "on/for/from ..."
+# tail, so "what is pending in kubectl ..." or "explain what next() does" do not count.
 [open_work]
-left = '''(?i)\bwhat(?:['’]s|\s+is|\s+are)?\s+(?:still\s+)?(?:left|remaining|outstanding|pending)\b'''
-still_to_do = '''(?i)\bwhat(?:['’]s|\s+is|\s+are)?\s+(?:still\s+)?(?:left\s+)?to\s+do\b'''
-next = '''(?i)\bwhat(?:['’]s|\s+is)?\s+next\b'''
-open_items = '''(?i)\bopen\s+(?:items|work|tasks)\b'''
+left = '''(?i)^\W*(?:(?:so|ok|okay|and|then|alright)\W+)?what(?:['’]?s|\s+is|\s+are)?\s+(?:still\s+)?(?:left|remaining|outstanding|open)(?:\s+to\s+(?:do|be\s+done))?(?:\s+(?:on|for|from|in|before)\s+[\w .'’-]{1,40})?\s*[?.!]*\s*$'''
+else_left = '''(?i)^\W*what\s+else\s+(?:is|are)\s+(?:still\s+)?(?:left|remaining|open)(?:\s+to\s+do)?\s*[?.!]*\s*$'''
+still_to_do = '''(?i)^\W*(?:(?:so|ok|okay|and|then|alright)\W+)?what(?:['’]?s|\s+is|\s+are)?\s+(?:still\s+)?(?:left\s+)?to\s+(?:do|be\s+done)(?:\s+(?:on|for|from|in|before)\s+[\w .'’-]{1,40})?\s*[?.!]*\s*$'''
+remains = '''(?i)^\W*what\s+(?:else\s+)?(?:still\s+)?remains(?:\s+to\s+(?:do|be\s+done))?\s*[?.!]*\s*$'''
+next = '''(?i)^\W*(?:(?:so|ok|okay|and|then|alright)\W+)?what(?:['’]?s|s|\s+is)?\s+(?:up\s+)?next\s*[?.!]*\s*$'''
+anything_left = '''(?i)^\W*(?:is\s+there\s+)?anything\s+(?:else\s+)?(?:left|remaining|open)(?:\s+to\s+do)?\s*[?.!]*\s*$'''
+still_need = '''(?i)^\W*what\s+do\s+(?:we|i)\s+still\s+(?:need|have)\s+to\s+do\b[^\n]{0,60}$'''
+open_items = '''(?i)^\W*(?:(?:any|are\s+there(?:\s+any)?|list|show(?:\s+me)?)\s+)?(?:the\s+)?open\s+items(?:\s+(?:on|for|from|in)\s+[\w .'’-]{1,40})?\s*[?.!]*\s*$'''
+todo_list = '''(?i)^\W*what(?:['’]?s|\s+is)\s+on\s+(?:the|our|my)\s+to-?do\s+list\s*[?.!]*\s*$'''
