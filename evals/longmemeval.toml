@@ -1,0 +1,6 @@
+# The LongMemEval-S data file the eval runner uses (ARCHITECTURE.md 3.8, issue #167): the cleaned release's
+# S file, MIT-licensed, about 280 MB, never committed. The revision and SHA-256 are recorded at the first
+# download, which is the maintainer's to approve; until then the runner refuses to run.
+url = "https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve/{revision}/longmemeval_s_cleaned.json"
+revision = ""
+sha256 = ""
