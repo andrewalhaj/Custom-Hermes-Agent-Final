@@ -101,8 +101,8 @@ def test_the_runner_scores_recall_mrr_and_abstention_through_the_whole_build(tmp
 
 def test_without_yes_the_runner_only_estimates_what_a_run_would_call(tmp_path, dataset, ollama, typesafe):
     report = run(tmp_path, dataset, ollama, typesafe, yes=False)
-    # 6 user turns, each an extraction call; 5 sessions, each ending in a digest when long enough (none is).
-    assert report == {"estimate": {"questions": 3, "user_turns": 6, "sessions": 5, "haiku_calls_at_least": 6}}
+    # 5 user turns, each an extraction call; 5 sessions, each ending in a digest when long enough (none is).
+    assert report == {"estimate": {"questions": 3, "user_turns": 5, "sessions": 5, "haiku_calls_at_least": 5}}
     assert typesafe.requests == [] and ollama.embedded == []
 
 
