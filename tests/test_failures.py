@@ -313,6 +313,24 @@ def test_boundary_logs_the_loss_when_the_record_itself_raises(caplog):
         {"lost_code": "guard.crash"}]
 
 
+def test_boundary_records_every_crash_when_many_arrive_at_once_on_a_store_that_answers(caplog):
+    # Review: a cap on records in flight, not on records left waiting, dropped 38 of 40 on a healthy store.
+    caplog.set_level(logging.INFO, logger=failures.__name__)
+
+    def slow():
+        time.sleep(0.05)   # a store that answers, a little slowly
+
+    guard = failures.boundary(_host_a, slow, _block)(_guard_that_crashes)
+    callers = [threading.Thread(target=guard, kwargs={"session_id": f"s{n}"}) for n in range(20)]
+    for caller in callers:
+        caller.start()
+    for caller in callers:
+        caller.join(30)
+    lines = [line for _, line in _json_lines(caplog)]
+    assert sum(line["code"] == "guard.crash" for line in lines) == 20   # each was sent
+    assert not any("already waiting" in line["reason"] for line in lines if line["code"] == "events.write_failed")
+
+
 def test_boundary_keeps_only_a_few_workers_waiting_on_a_silent_store(caplog, monkeypatch):
     # Each crash against a store that never answers would otherwise leave a thread and a connection behind.
     caplog.set_level(logging.INFO, logger=failures.__name__)
