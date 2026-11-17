@@ -144,6 +144,35 @@ def test_a_secret_in_a_recorded_path_is_redacted_even_with_hermes_redaction_off(
     assert len(rows) == 1 and secret not in json.dumps(rows), output
 
 
+def test_reading_one_file_in_the_plugins_folder_clears_only_that_file(tmp_path, db):
+    # #128: reads of a listed folder are kept by the file read, not once for the whole folder.
+    plugin = tmp_path / "home" / "plugins" / "custom_build"
+    steps = [
+        ["post", "s1", "read_file", {"path": str(plugin / "failures.py")}, "ok"],
+        ["pre", "s1", "patch", {"path": str(plugin / "failures.py"), "old_string": "a", "new_string": "b"}],   # read
+        ["pre", "s1", "write_file", {"path": str(plugin / "guards" / "verify_gate.toml"), "content": "x"}],   # never read
+        ["post", "s1", "terminal", {"command": f"cat {plugin}/guards/verify_gate.toml"}, "ok"],
+        ["pre", "s1", "write_file", {"path": str(plugin / "guards" / "verify_gate.toml"), "content": "x"}],   # read now
+        ["pre", "s1", "terminal", {"command": f"sed -i s/a/b/ {plugin}/guards/verify_gate.toml"}],   # read
+        ["pre", "s1", "terminal", {"command": f"sed -i s/a/b/ {plugin}/settings.py"}],   # never read
+        ["post", "s1", "terminal", {"command": f"ls {plugin}"}, "ok"],   # a listing reads no file
+        ["pre", "s1", "terminal", {"command": f"rm -r {plugin}"}],   # the whole folder
+    ]
+    _, output, rows = run_gate(tmp_path, db, steps)
+    assert [(row[2], row[3]["rule"]) for row in rows] == [
+        (str((plugin / "guards" / "verify_gate.toml").resolve()), "plugin"),
+        (str((plugin / "settings.py").resolve()), "plugin"), (str(plugin.resolve()), "plugin")], output
+
+
+def test_a_name_that_only_contains_a_listed_name_is_not_a_read_of_it(tmp_path, db):
+    # #128: `cat .env.bak` counted as a read of .env, so the change after it was not recorded.
+    home = tmp_path / "home"
+    steps = [["post", "s1", "terminal", {"command": "cat ~/home/.env.bak ~/home/.envrc"}, "ok"],
+             ["pre", "s1", "patch", {"path": str(home / ".env"), "old_string": "a", "new_string": "b"}]]
+    _, output, rows = run_gate(tmp_path, db, steps)
+    assert rules(rows) == [("verify_gate.would_block", "env")], output
+
+
 def test_a_read_reported_ok_clears_the_change(tmp_path, db):
     home = tmp_path / "home"
     steps = [

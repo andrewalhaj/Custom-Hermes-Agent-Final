@@ -214,6 +214,22 @@ def test_a_command_naming_a_path_from_where_it_runs_records_it(tmp_path, db):
     ], output
 
 
+def test_a_name_that_only_contains_a_listed_name_is_off_the_list(tmp_path, db):
+    # #128: a listed name counts only as a whole path component, at the Hermes home.
+    commands = ["cat ~/home/.envrc", "cp ~/home/.env.bak /tmp/x", "ls $HERMES_HOME/myskills", "rm -r ~/home/skills-old",
+                "ls ~/home/hermes-agent/skills", "cat ~/home/old-config.yaml", "cat $HERMES_HOME/config.yaml.orig",
+                "cd $HERMES_HOME && cat hermes-agent/.env"]
+    _, output, rows = run_gate(tmp_path, db, [["terminal", {"command": c}] for c in commands])
+    assert rows == [], output
+
+
+def test_a_listed_name_as_a_whole_component_is_still_recorded(tmp_path, db):
+    commands = {"rm ${HERMES_HOME}/.env": "env", 'cat "$HERMES_HOME"/config.yaml > /tmp/c': "config",
+                "cd $HERMES_HOME && rm ./.env": "env", "ls ~/home/skills/": "skills", "tar czf s.tgz ~/home/skills;": "skills"}
+    _, output, rows = run_gate(tmp_path, db, [["terminal", {"command": c}] for c in commands])
+    assert [detail["rule"] for _, _, _, detail, _, _ in rows] == list(commands.values()), output
+
+
 def test_a_command_naming_a_linked_config_records_it(tmp_path, db):
     home = tmp_path / "home"
     calls = [["terminal", {"command": "sed -i s/a/b/ ~/home/config.yaml"}],
