@@ -222,8 +222,21 @@ def exit_note(stop):
     return "unhandled and job.failed; the traceback is in Hermes's errors.log"
 
 
+def _crash_reason(exc):
+    """An exception's type and message for an event's reason, through Hermes's redactor with force on (rule
+    L4, #116): a message can carry content, as a KeyError names its key. If the redactor raises, only the
+    type is kept, so the text is not stored."""
+    from agent.redact import redact_sensitive_text
+
+    try:
+        return redact_sensitive_text("".join(traceback.format_exception_only(exc)).strip(), force=True)
+    except Exception:   # the crash is still recorded, without its message (rule F5)
+        logger.exception("the redactor raised on a crash's reason")
+        return type(exc).__name__
+
+
 def _record_job_crash(conn, name, source, exc):
-    reason = "".join(traceback.format_exception_only(exc)).strip()
+    reason = _crash_reason(exc)
     record(conn, "unhandled", "failed", source=source, reason=reason)
     record(conn, "job.failed", "failed", source=source, reason=reason, detail={"job": name})
 
@@ -262,7 +275,7 @@ def boundary(source, connect, on_crash):
                 return guard(*args, **kwargs)
             except Exception as exc:
                 logger.exception("guard %s crashed", guard.__qualname__)
-                reason = "".join(traceback.format_exception_only(exc)).strip()
+                reason = _crash_reason(exc)
                 machine, conn = "unknown", None
                 try:
                     machine = source()
