@@ -40,6 +40,16 @@ def digest_answers(digest, *, url, key, model, timeout):
                     timeout=timeout)
 
 
+def relevance_answers(message, notes, *, url, key, model, timeout):
+    """The judge's probability that each note helps answer the message, in the notes' order (3.4 step 4).
+    Each note is in its own question, not looked up by id in a shared list."""
+    wording = write_path.load()["rerank"]["question"]
+    questions = {f"c{n}": {**wording, "instructions": wording["instructions"].replace("{note}", note)}
+                 for n, note in enumerate(notes)}
+    answers = _answers({"message": message}, questions, url=url, key=key, model=model, timeout=timeout)
+    return [answers[f"c{n}"] for n in range(len(notes))]
+
+
 def _answers(state, wording, *, url, key, model, timeout):
     questions = {name: {"type": "noul", **question} for name, question in wording.items()}
     body = json.dumps({"model": model, "state": state, "questions": questions}).encode()

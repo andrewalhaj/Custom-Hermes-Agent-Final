@@ -133,7 +133,7 @@ class CustomBuildProvider(MemoryProvider):
                             session_id=self.session_id)
             return recall.failed("config.missing")
         return tool.recall_notes(query, machine=machine, session_id=self.session_id, turn=self.turn,
-                                 embedder=self.embedder, connect=settings.connect)
+                                 embedder=self.embedder, judge_at=_judge(), connect=settings.connect)
 
     def get_tool_schemas(self) -> list:
         return [tool.SCHEMA, tool.SEARCH_SCHEMA]
@@ -149,7 +149,7 @@ class CustomBuildProvider(MemoryProvider):
             return json.dumps({"error": "config.missing"})
         if tool_name == tool.SEARCH_SCHEMA["name"]:
             outcome = tool.memory_search(args, machine=machine, session_id=self.session_id, turn=self.turn,
-                                         embedder=self.embedder, connect=settings.connect)
+                                         embedder=self.embedder, judge_at=_judge(), connect=settings.connect)
         else:
             outcome = tool.store_fact(args, machine=machine, session_id=self.session_id, turn=self.turn,
                                       embedder=self.embedder, judge_at=_judge(), connect=settings.connect)
