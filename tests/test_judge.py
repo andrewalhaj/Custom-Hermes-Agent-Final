@@ -104,7 +104,7 @@ def _big_gate(typesafe, results):
 
 
 def test_a_long_tool_result_is_asked_about_in_pieces_and_none_of_it_is_left_out(typesafe):
-    typesafe.default = 0.1
+    typesafe.answers, typesafe.default = {"worth_keeping": 0.9}, 0.1
     long = "".join(f"line {n} of the unit file\n" for n in range(3500))   # about 90,000 characters
     _big_gate(typesafe, [long])
     pieces = [text.split("A tool result: ", 1)[1] for text in _texts(typesafe) if "A tool result: " in text]
@@ -120,7 +120,7 @@ def _texts(typesafe):
 
 
 def test_a_big_turn_is_split_over_requests_that_each_fit_the_judge(typesafe):
-    typesafe.default = 0.1   # nothing supports it, so every part is asked about
+    typesafe.answers, typesafe.default = {"worth_keeping": 0.9}, 0.1   # nothing supports it, so every part is asked about
     _big_gate(typesafe, ["x" * 25_000] * 6)
     assert len(typesafe.requests) > 1
     for request in typesafe.requests:
@@ -137,7 +137,7 @@ def test_the_gate_stops_asking_once_one_part_supports_the_fact(typesafe):
 
 def test_no_request_holds_more_question_text_than_the_request_budget(typesafe):
     # Review of #251: only the first request was held to the budget.
-    typesafe.default = 0.1
+    typesafe.answers, typesafe.default = {"worth_keeping": 0.9}, 0.1
     _big_gate(typesafe, ["x" * 30_000] * 4)
     for request in typesafe.requests:
         parts = [q["instructions"].split(": ", 1)[1] for name, q in request["body"]["questions"].items()

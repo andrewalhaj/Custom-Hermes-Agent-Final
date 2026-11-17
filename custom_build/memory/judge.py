@@ -14,6 +14,7 @@ from . import write_path
 
 URL = "https://api.typesafe.ai"
 DEADLINE = 2   # seconds for one judge request (ARCHITECTURE.md 3.6)
+TOO_BIG = "max_tokens_exceeded"   # TypeSafe's error type for a request over a context limit (seen 2026-11-17)
 
 
 class JudgeError(Exception):
@@ -21,8 +22,8 @@ class JudgeError(Exception):
 
 
 class JudgeRefused(JudgeError):
-    """`judge.error`, for a request the judge answers with HTTP 400. The same request gets the same answer, so
-    the caller does not try it again (#251)."""
+    """`judge.error`, for a request the judge refuses as over its context (HTTP 400, `max_tokens_exceeded`).
+    The same request gets the same answer, so the caller does not try it again (#251)."""
 
 
 class JudgeTimeout(Exception):
@@ -40,26 +41,28 @@ def keep_answers(fact, source, *, url, key, model, timeout):
     (#148). The turn can be far larger than the judge's context, so the state is the fact alone and each part
     of the source has a support question of its own: the user's message and each tool result, a long one cut
     into pieces, over as many requests as fit the judge's limits (`write_path.toml`, #251). A fact is as
-    supported as its best part, and the asking stops at the first part that reaches the support threshold."""
+    supported as its best part, and the asking stops at the first part that reaches the support threshold, or
+    after the first request when the fact is not worth keeping."""
     config = write_path.load()["extraction"]
     wording, size = config["part_question"], config["part_chars"]
     texts = [("The user's message", source.get("user") or "")]
     texts += [("A tool result", result) for result in source.get("tool_results") or []]
     parts = [(label, text[at:at + size]) for label, text in texts for at in range(0, len(text), size)]
-    batches = [{"worth_keeping": config["questions"]["worth_keeping"]}]
+    batches, held = [{"worth_keeping": config["questions"]["worth_keeping"]}], 0   # held: the last batch's text
     for n, (label, text) in enumerate(parts):
-        question = {**wording, "instructions": wording["instructions"].replace("{label}", label).replace("{text}", text)}
-        asked = sum(len(q["instructions"]) for q in batches[-1].values())
-        if len(batches[-1]) > 1 and asked + len(question["instructions"]) > config["request_chars"]:
+        if held and held + len(text) > config["request_chars"]:
             batches.append({})
-        batches[-1][f"s{n}"] = question
+            held = 0
+        held += len(text)
+        batches[-1][f"s{n}"] = {
+            **wording, "instructions": wording["instructions"].replace("{label}", label).replace("{text}", text)}
     worth, supported = None, 0.0
     for batch in batches:
         answers = _answers({"fact": fact}, batch, url=url, key=key, model=model, timeout=timeout)
         worth = answers.pop("worth_keeping", worth)
         supported = max([supported, *answers.values()])
-        if supported >= config["support_threshold"]:
-            break
+        if supported >= config["support_threshold"] or not keeps({"worth_keeping": worth, "supported": 1}):
+            break   # decided: one part supports it, or the gate drops it whatever its support
     return {"worth_keeping": worth, "supported": supported}
 
 
@@ -117,9 +120,10 @@ def _request(state, questions, *, url, key, model, timeout):
     # urllib's URLError and HTTPError, and a dropped connection, are OSError; an answer cut off while it is
     # read is http.client's IncompleteRead (HTTPException).
     except urllib.error.HTTPError as exc:
-        if exc.code == 400:   # the request itself is refused, such as one over the judge's context
-            raise JudgeRefused(f"HTTPError: {exc}{_cause(exc)}") from exc
-        raise JudgeError(f"HTTPError: {exc}"[:200]) from exc
+        cause = _cause(exc) if exc.code == 400 else ""
+        if cause == TOO_BIG:   # the one refusal known to repeat; any other 400 stays an error a retry may fix
+            raise JudgeRefused(f"HTTPError: {exc}: {cause}"[:200]) from exc
+        raise JudgeError(f"HTTPError: {exc}{cause and ': ' + cause}"[:200]) from exc
     except (OSError, http.client.HTTPException) as exc:
         raise JudgeError(f"{type(exc).__name__}: {exc}"[:200]) from exc
     try:
@@ -129,13 +133,13 @@ def _request(state, questions, *, url, key, model, timeout):
 
 
 def _cause(error):
-    """": <error type>" from a refusal's body when it is a plain code name, such as max_tokens_exceeded, else
+    """A refusal's error type from its body when it is a plain code name, such as max_tokens_exceeded, else
     nothing: the body is the judge's text and could repeat the request's, so no other part of it is kept."""
     try:
         cause = json.loads(error.read())["detail"]["error_type"]
     except (OSError, http.client.HTTPException, ValueError, KeyError, TypeError):
         return ""
-    return f": {cause}" if isinstance(cause, str) and re.fullmatch(r"[a-z_]{1,60}", cause) else ""
+    return cause if isinstance(cause, str) and re.fullmatch(r"[a-z_]{1,60}", cause) else ""
 
 
 def supersedes(answers):

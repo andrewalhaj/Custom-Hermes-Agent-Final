@@ -47,7 +47,10 @@ support_threshold = 0.75   # the support check: kept only when one part's "suppo
 # characters a token): one question was refused from about 46,000 characters and one request from about
 # 93,000; a full request answered in under a second.
 part_chars = 30000         # a part longer than this is asked about in pieces
-request_chars = 60000      # the questions of one request hold at most this much text; more parts, more requests
+request_chars = 60000      # the parts in one request hold at most this much text; more parts, more requests
+# shortcut: sized for text of about 1.5 characters a token or more. Text denser than about 1 character a token
+# (CJK, emoji) can still put a piece over the judge's context; that fact is dropped and recorded (judge.error,
+# max_tokens_exceeded). Lower part_chars if those rows appear.
 
 [extraction.questions.worth_keeping]
 instructions = "Is `fact` worth remembering in a later session with this user?"
