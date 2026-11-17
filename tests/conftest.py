@@ -145,6 +145,7 @@ class FakeTypeSafe(http.server.ThreadingHTTPServer):
         self.cut_off = False
         self.hang_up = False
         self.refuse_new = None   # answer 422 when the new fact contains this text
+        self.default = None      # the probability for a question `answers` does not name, such as a rerank's c0, c1...
         self.requests = []
         self.url = f"http://127.0.0.1:{self.server_address[1]}"
 
@@ -157,9 +158,10 @@ class _TypeSafeHandler(http.server.BaseHTTPRequestHandler):
         if self.server.hang_up:
             self.close_connection = True
             return
-        refused = self.server.refuse_new and self.server.refuse_new in body["state"]["new"]
+        refused = self.server.refuse_new and self.server.refuse_new in body["state"].get("new", "")
         if self.server.status == 200 and not refused:
-            answers = {name: {"type": "noul", "noul": self.server.answers[name]} for name in body["questions"]}
+            answers = {name: {"type": "noul", "noul": self.server.answers[name] if self.server.default is None
+                              else self.server.answers.get(name, self.server.default)} for name in body["questions"]}
             payload = {"model": body["model"], "answers": answers, "usage": {"input_tokens": 1, "output_tokens": 1}}
         else:
             payload = {"detail": "refused"}
