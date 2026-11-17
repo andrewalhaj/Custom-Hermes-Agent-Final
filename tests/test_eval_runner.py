@@ -155,9 +155,9 @@ def test_the_replay_never_inherits_the_callers_claude_or_anthropic_settings(
 def test_without_yes_the_runner_only_estimates_what_a_run_would_call(tmp_path, dataset, ollama, typesafe):
     report = run(tmp_path, dataset, ollama, typesafe, yes=False)
     # 5 user turns, each an extraction call; 5 sessions, each ending in a digest when long enough (none is);
-    # the judge at least once per question, for the rerank (#167 review).
+    # the judge at least twice per question: the rerank (#167 review), and the scores before the floor (#234).
     assert report == {"estimate": {"questions": 3, "user_turns": 5, "sessions": 5, "haiku_calls_at_least": 5,
-                                   "judge_calls_at_least": 3}}
+                                   "judge_calls_at_least": 6}}
     assert typesafe.requests == [] and ollama.embedded == []
 
 
@@ -335,6 +335,60 @@ def test_the_report_lists_each_failure_reason_with_its_count(tmp_path, dataset, 
     assert reason in (tmp_path / "report" / "report.md").read_text(encoding="utf-8")
 
 
+def test_a_miss_the_score_floor_cut_is_counted_as_cut_by_the_floor(tmp_path, dataset, ollama, typesafe):
+    # #234: the gate keeps each fact, but the judge scores every candidate under the floor (0.30), so recall
+    # brings nothing; the evidence was stored and found, then cut.
+    typesafe.answers, typesafe.default = {"worth_keeping": 0.9, "supported": 0.9}, 0.1
+    report = run(tmp_path, dataset, ollama, typesafe)
+    assert report["answerable"]["recall_at_5"] == 0.0
+    assert report["misses"] == {"cut_by_floor": 2}
+    first = report["per_question"][0]
+    assert (first["evidence_stored"], first["pool_hit"], first["pool_best_score"]) == (1, 1, 0.1)
+    assert "Misses: 2 cut by the floor" in (tmp_path / "report" / "report.md").read_text(encoding="utf-8")
+
+
+def test_a_miss_whose_evidence_was_never_stored_is_counted_as_not_stored(tmp_path, dataset, ollama, typesafe):
+    typesafe.default = 0.9
+    extracting_nothing = WRAPPER.replace('if ("vim" in user or "Porto" in user)', 'if False')
+    report = run(tmp_path, dataset, ollama, typesafe, replay_command=[sys.executable, "-c", extracting_nothing])
+    assert report["misses"] == {"not_stored": 2}
+    assert report["per_question"][0]["evidence_stored"] == 0
+
+
+def test_a_run_with_no_miss_counts_none(tmp_path, dataset, ollama, typesafe):
+    typesafe.default = 0.9
+    assert run(tmp_path, dataset, ollama, typesafe)["misses"] == {}
+
+
+def _missed(**fields):
+    """An answerable question's result that missed, with `fields` changed."""
+    return {"first_hit": None, "codes": [], "evidence_rows": 1, "evidence_stored": 1, "pool": True, "pool_hit": 1,
+            "pool_best_score": 0.1, **fields}
+
+
+@pytest.mark.parametrize("fields, cause", [
+    ({"evidence_rows": 0, "evidence_stored": 0}, "not_stored"),
+    ({"evidence_stored": 0}, "replaced"),   # stored, then superseded or retired (#234 review)
+    ({"pool": False, "pool_hit": None, "pool_best_score": None}, "unknown"),   # the second fetch failed
+    ({"pool_hit": None, "pool_best_score": None}, "not_in_pool"),
+    ({"codes": ["rerank.fallback"]}, "fused_order"),   # recall's judge failed: no floor ran (#234 review)
+    ({"pool_best_score": None}, "unscored"),   # the second judge request failed (#234 review)
+    ({"pool_best_score": 0.1}, "cut_by_floor"),
+    ({"pool_best_score": 0.7}, "above_floor"),
+    ({"first_hit": 7}, "below_rank_5"),   # a past-work question's hit at 6 to 8 still misses recall@5
+])
+def test_each_miss_is_put_down_to_one_cause(fields, cause):
+    assert longmemeval._miss(_missed(**fields), 0.3) == cause
+
+
+def test_the_best_evidence_score_decides_not_the_first_candidates():
+    # #234 review: recall sorts by score, so an evidence candidate further down with a higher score is the one
+    # that counts; the first evidence candidate's 0.1 must not make it "cut by the floor".
+    assert longmemeval._best_score([{"score": 0.1}, {"score": 0.9}, {"score": 0.7}], [1, 3]) == 0.7
+    assert longmemeval._best_score([{"score": None}, {"score": 0.4}], [1, 2]) == 0.4
+    assert longmemeval._best_score([{"score": None}], [1]) is None
+
+
 def test_a_failed_recall_is_counted_as_a_failure_never_as_a_correct_abstention(tmp_path, dataset, ollama, typesafe):
     typesafe.default = 0.9
     report = run(tmp_path, dataset, ollama, typesafe, test_env={"EVAL_TEST_ASK_FAILS": "1"})
@@ -414,6 +468,7 @@ def test_ctrl_c_while_questions_run_keeps_the_ones_already_measured(tmp_path, da
     def measured(entry, **kwargs):
         return {"question_id": entry["question_id"], "question_type": entry["question_type"], "abstention": False,
                 "notes": 0, "recall_failed": False, "first_hit": None, "codes": [], "failures": [],
+                "evidence_rows": 0, "evidence_stored": 0, "pool": True, "pool_hit": None, "pool_best_score": None,
                 "embedding_build": None, "stopped": None}
 
     def interrupted(futures, **kwargs):

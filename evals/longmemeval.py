@@ -101,14 +101,15 @@ def subset(entries, count, *, seed):
 
 def estimate(entries):
     """What a run would call, at least: one Haiku extraction per user turn and one digest per long session
-    (the build's own setting, 3.6), and one judge rerank per question (plus a gate call per proposed fact)."""
+    (the build's own setting, 3.6), and two judge requests per question, the rerank and the scores before the
+    floor (#234), plus a gate call per proposed fact."""
     long_session = tomllib.loads((PLUGIN / "memory" / "write_path.toml").read_text(encoding="utf-8"))[
         "digest"]["long_session"]
     sessions = [session for entry in entries for session in entry["haystack_sessions"]]
     user_turns = sum(1 for session in sessions for message in session if message["role"] == "user")
     long_sessions = sum(1 for session in sessions if len(session) >= long_session)
     return {"questions": len(entries), "user_turns": user_turns, "sessions": len(sessions),
-            "haiku_calls_at_least": user_turns + long_sessions, "judge_calls_at_least": len(entries)}
+            "haiku_calls_at_least": user_turns + long_sessions, "judge_calls_at_least": 2 * len(entries)}
 
 
 @contextlib.contextmanager
@@ -239,19 +240,72 @@ def one(entry, *, postgres, password, command, template, judge_model, judge_key)
                 when = datetime.datetime.strptime(date, DATE_FORMAT).replace(tzinfo=datetime.UTC)
                 conn.execute("update memory.facts set created_at = %s where session_id = %s", (when, session_id))
             build = conn.execute("select embedding_model from memory.facts limit 1").fetchone()
-        notes = replay(command, "ask", question, home, work, env)["notes"]
+        asked = replay(command, "ask", question, home, work, env)
+        notes, pool = asked["notes"], asked.get("pool")   # pool None: the second fetch failed
+        evidence = set(entry["answer_session_ids"])
         with psycopg.connect(owner) as conn:   # after the question too, so recall's own failures are counted
             codes = [row[0] for row in conn.execute("select code from memory.events order by id")]
             failures = [{"code": code, "reason": reason, "count": count} for code, reason, count in conn.execute(
                 "select code, reason, count(*) from memory.events group by code, reason")]
+            rows, live = conn.execute(
+                "select count(*), count(*) filter (where superseded_by is null and retired_at is null)"
+                " from memory.facts where session_id = any(%s)", (list(evidence),)).fetchone()
         bodies = note_bodies(notes)
+        ranks = _evidence_ranks(owner, [candidate["body"] for candidate in pool or []], evidence)
         return {"question_id": entry["question_id"], "question_type": entry["question_type"],
                 "abstention": entry["question_id"].endswith("_abs"), "notes": len(bodies),
                 # recall reported a failure: never "no notes", so never a correct abstention (3.5)
                 "recall_failed": notes.startswith(FAILED),
-                "first_hit": first_hit(owner, bodies, set(entry["answer_session_ids"])), "codes": codes,
+                "first_hit": first_hit(owner, bodies, evidence), "codes": codes,
                 "failures": failures,
+                # Why a miss missed (#234): the evidence's facts ever and live, and its candidates before the floor.
+                "evidence_rows": rows, "evidence_stored": live, "pool": pool is not None,
+                "pool_hit": ranks[0] if ranks else None, "pool_best_score": _best_score(pool or [], ranks),
                 "embedding_build": build[0] if build else None, "stopped": stopped}
+
+
+def _evidence_ranks(owner, bodies, evidence):
+    """The 1-based ranks of every body stored from an evidence session."""
+    with psycopg.connect(owner) as conn:
+        return [rank for rank, body in enumerate(bodies, start=1)
+                if any(row[0] in evidence for row in conn.execute(
+                    "select session_id from memory.facts where body = %s", (body,)).fetchall())]
+
+
+def _best_score(pool, ranks):
+    """The highest score among the evidence candidates, or None when none was scored: recall sorts by score,
+    so the best one decides whether the floor cut the evidence (#234 review)."""
+    scores = [pool[rank - 1]["score"] for rank in ranks if pool[rank - 1]["score"] is not None]
+    return max(scores) if scores else None
+
+
+def _miss(result, floor):
+    """Why an answerable question missed recall@5 (#234): found below rank 5; never stored; stored, then
+    superseded or retired; unknown, when the second fetch failed; stored but not in recall's candidate pool;
+    ranked out by the fused order, when recall's own rerank failed and no floor ran; unscored, when the
+    second judge request failed; or in the pool with its best score under the floor, or above it."""
+    if result["first_hit"] is not None:
+        return "below_rank_5"
+    if not result["evidence_rows"]:
+        return "not_stored"
+    if not result["evidence_stored"]:
+        return "replaced"
+    if not result["pool"]:
+        return "unknown"
+    if result["pool_hit"] is None:
+        return "not_in_pool"
+    if "rerank.fallback" in result["codes"]:
+        return "fused_order"
+    if result["pool_best_score"] is None:
+        return "unscored"
+    return "cut_by_floor" if result["pool_best_score"] < floor else "above_floor"
+
+
+MISSES = {"below_rank_5": "found below rank 5", "not_stored": "never stored",
+          "replaced": "stored, then superseded or retired", "unknown": "cause unknown (the second fetch failed)",
+          "not_in_pool": "stored but not found", "fused_order": "ranked out after recall's rerank failed (no floor)",
+          "unscored": "found but unscored (the second judge request failed)", "cut_by_floor": "cut by the floor",
+          "above_floor": "found above the floor but not delivered"}
 
 
 def _scores(results):
@@ -274,7 +328,12 @@ def report(results, *, sha256, seed, judge_model, ids=None):
         for failure in result["failures"]:   # each distinct reason across the run: the databases are dropped
             key = (failure["code"], failure["reason"])
             reasons[key] = reasons.get(key, 0) + failure["count"]
+    floor = tomllib.loads((PLUGIN / "memory" / "write_path.toml").read_text(encoding="utf-8"))["rerank"]["floor"]
+    missed = [_miss(r, floor) for r in answerable
+              if (r["first_hit"] is None or r["first_hit"] > 5) and not r["recall_failed"]]
     return {"questions": len(results), "answerable": _scores(answerable),
+            # Answerable misses by cause (#234); a recall that failed is counted under recall_failed instead.
+            "misses": {cause: missed.count(cause) for cause in MISSES if cause in missed},
             # First cut: an abstention question is answered right when recall brings no notes (3.8).
             "abstention": {"count": len(abstaining),
                            "correct": sum(1 for r in abstaining if r["notes"] == 0 and not r["recall_failed"])},
@@ -302,6 +361,9 @@ def markdown(summary):
     abstention = summary["abstention"]
     lines += ["", f"Abstention: {abstention['correct']} of {abstention['count']} with no notes.",
               f"Recall failed on {summary['recall_failed']} questions (counted as misses)."]
+    if summary["misses"]:   # the candidates' scores come from a second judge request, so can differ slightly
+        lines += ["", "Misses: " + ", ".join(f"{count} {MISSES[cause]}" for cause, count in summary["misses"].items())
+                  + " (scores before the floor come from a second judge request)."]
     if summary["failure_reasons"]:
         lines += ["", "Failures recorded:", ""]
         lines += [f"- `{f['code']}` x{f['count']}: {f['reason']}" for f in summary["failure_reasons"]]
