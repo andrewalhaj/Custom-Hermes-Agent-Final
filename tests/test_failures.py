@@ -295,8 +295,10 @@ def _crash_naming_a_secret(*args, **kwargs):
 
 @pytest.mark.parametrize(("on_crash", "code"), [(_block, "guard.crash"), (failures.PROVIDER, "unhandled"),
                                                 (failures.Returns(lambda exc: "note"), "unhandled")])
-def test_a_secret_in_a_crashs_message_never_reaches_the_store_or_its_log_line(db, caplog, on_crash, code):
+def test_a_secret_in_a_crashs_message_never_reaches_the_store_or_its_log_line(db, caplog, monkeypatch, on_crash, code):
     # #116, rule L4: an exception's message can carry content, as a KeyError names its key.
+    # Hermes's own redaction switched off, as HERMES_REDACT_SECRETS=false leaves it: the build's is forced.
+    monkeypatch.setattr("agent.redact._REDACT_ENABLED", False)
     caplog.set_level(logging.INFO, logger=failures.__name__)
     call = failures.boundary(_host_a, lambda: psycopg.connect(db["agent"], autocommit=True), on_crash)(_crash_naming_a_secret)
     if on_crash is failures.PROVIDER:
@@ -311,11 +313,15 @@ def test_a_secret_in_a_crashs_message_never_reaches_the_store_or_its_log_line(db
     assert not any(FAKE_TOKEN in json.dumps(line) for _, line in _json_lines(caplog))
 
 
-def test_a_crash_is_recorded_by_its_type_alone_when_the_redactor_raises(db, monkeypatch):
+@pytest.mark.parametrize("missing", [False, True])
+def test_a_crash_is_recorded_by_its_type_alone_when_the_redactor_raises_or_is_gone(db, monkeypatch, missing):
     def broken(*args, **kwargs):
         raise RuntimeError("redactor down")
 
-    monkeypatch.setattr("agent.redact.redact_sensitive_text", broken)
+    if missing:   # a later Hermes that renames it: the import fails
+        monkeypatch.delattr("agent.redact.redact_sensitive_text")
+    else:
+        monkeypatch.setattr("agent.redact.redact_sensitive_text", broken)
     guard = failures.boundary(_host_a, lambda: psycopg.connect(db["agent"], autocommit=True), _block)(_crash_naming_a_secret)
     assert guard(session_id="s1") == {"action": "block", "message": "blocked after KeyError"}
     assert [(r[4], r[6]) for r in _rows(db["owner"])] == [("guard.crash", "KeyError")]   # the text is not stored
