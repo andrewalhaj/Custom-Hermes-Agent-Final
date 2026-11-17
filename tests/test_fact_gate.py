@@ -163,7 +163,7 @@ def test_a_subagents_turn_arms_nothing(tmp_path, db):
 
 
 def test_each_event_carries_its_turns_id_and_every_judged_turn_ends_in_a_row(tmp_path, db):
-    # #188: an armed row joins to its turn's later row by the id; an armed row with none means no reply came.
+    # #188: an armed row joins to its turn's later row by the id; an armed row with none got no reply, or its event was lost.
     ask = "How many facts are in the store?"
     steps = [["turn", "s1", "u1", ask], ["reply", "s1", "u1", "There are 42."],
              ["turn", "s1", "u2", ask, "telegram"], ["post", "s1", "u2", "terminal", "ok"],   # any platform but a subagent's

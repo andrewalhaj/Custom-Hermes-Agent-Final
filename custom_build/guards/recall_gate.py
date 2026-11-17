@@ -3,7 +3,7 @@
 Three hooks, keyed by the turn. `pre_llm_call` arms a turn whose message asks about past work or open
 work, by the patterns memory's recall reads, and records `recall_gate.armed`. `post_tool_call` counts a
 search Hermes reports `ok`. `transform_llm_output` records `recall_gate.would_withhold` for an armed
-turn's reply that came without both searches. In `log` mode no reminder is added and nothing is withheld;
+turn's reply that came without both searches, and `recall_gate.passed` for one that came with both. In `log` mode no reminder is added and nothing is withheld;
 events are written from a worker thread, as the other gates' are. `off` registers no hook.
 """
 
@@ -61,8 +61,8 @@ def count(ctx, config, *, tool_name, turn_id="", status=None, **kwargs):
 
 
 def check(ctx, config, *, session_id="", turn_id="", **kwargs):
-    """`transform_llm_output`: record an armed turn's reply that would be withheld. Returns nothing, so
-    the reply is delivered as written."""
+    """`transform_llm_output`: record an armed turn's reply as one that would be withheld, or as passed.
+    Returns nothing, so the reply is delivered as written."""
     with _turns_lock:
         turn = _turns.pop(turn_id, None)
     if turn is None:
@@ -85,12 +85,12 @@ def _record(ctx, *, session_id, turn_id, kind, rule, why):
 def write_event(*, source, session_id, turn_id, kind, rule, why):
     """Write one of the gate's events; runs on the worker thread `_record` starts. No message or reply
     text is stored, only table and pattern names (rule L5). Each carries Hermes's id for the turn, so an
-    armed row joins to its turn's later row, or shows that it has none (#188)."""
+    armed row joins to its turn's later row (#188)."""
     detail = {"kind": kind, "rule": rule, "turn_id": turn_id}
     with failures.store(source, settings.connect) as conn:
         if why is None:
             failures.record(conn, "recall_gate.armed", "ok", source=source, session_id=session_id, detail=detail)
-        elif why == PASSED:   # so an armed row with no later row means no reply came (#188)
+        elif why == PASSED:   # so an armed row with no later row got no reply, or its event was lost (#188)
             failures.record(conn, "recall_gate.passed", "ok", source=source, session_id=session_id, detail=detail)
         else:
             failures.record(conn, "recall_gate.would_withhold", "ok", source=source, session_id=session_id,

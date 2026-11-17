@@ -12,8 +12,8 @@
 
 # The gate's mode (ARCHITECTURE.md 5.4 item 6, #173).
 # log: record each turn whose message matches a pattern below, as recall_gate.armed, and each armed turn whose
-#      reply came without both searches, as recall_gate.would_withhold. No reminder is added and nothing is
-#      withheld.
+#      reply came without both searches, as recall_gate.would_withhold, or with both, as recall_gate.passed.
+#      No reminder is added and nothing is withheld.
 # off: register no hook. Memory's recall still reads the patterns.
 # on: refused until the gate can enforce.
 mode = "log"

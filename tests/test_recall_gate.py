@@ -148,7 +148,7 @@ def test_an_armed_turn_without_both_searches_is_recorded_and_delivered(tmp_path,
 
 
 def test_an_armed_turn_that_ran_both_searches_is_recorded_as_passed(tmp_path, db):
-    # #188: every armed turn that gets a reply ends in a row, so an armed row with none means no reply came.
+    # #188: every armed turn that gets a reply ends in a row, so an armed row with none got no reply, or its event was lost.
     steps = [["turn", "s1", "u1", ASK, "telegram"], ["post", "s1", "u1", "session_search", "ok"],   # any platform but a subagent's
              ["post", "s1", "u1", "memory_search", "ok"], ["reply", "s1", "u1", "We fixed it on Tuesday."]]
     _, output, rows = run_gate(tmp_path, db, steps)
