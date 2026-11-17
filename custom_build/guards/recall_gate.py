@@ -33,9 +33,12 @@ def load_config(path=CONFIG):
 
 def arm(ctx, config, *, session_id="", turn_id="", user_message=None, **kwargs):
     """`pre_llm_call`: arm a turn that asks about past work. Returns nothing, so the turn is unchanged."""
-    if not isinstance(user_message, str):   # shortcut: a message given as parts (images, files) is not read; widen if counts show it
-        return
-    kind, rule = recall.question(user_message)   # memory's own matcher, so the search and the gate agree
+    from agent.message_content import flatten_message_text
+
+    # The text Hermes hands prefetch() for the same message, parts included, read by memory's own matcher,
+    # so the search and the gate agree.
+    text = flatten_message_text(user_message) if isinstance(user_message, (str, list)) else ""
+    kind, rule = recall.question(text)
     if kind is None:
         return
     with _turns_lock:
