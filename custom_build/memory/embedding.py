@@ -132,7 +132,8 @@ class HostedEmbedder:
         self.reference = pathlib.Path(reference or REFERENCE)
         self.build = None
 
-    def _vectors(self, texts, *, timeout):
+    def vectors(self, texts, *, timeout):
+        """One vector per text, straight from the service, with no check: `embed` is the build's way in."""
         body = json.dumps({"model": HOSTED_MODEL, "input": texts, "encoding_format": "float"}).encode()
         request = urllib.request.Request(self.url, data=body, headers={
             "Content-Type": "application/json", "Authorization": f"Bearer {self.key}"})
@@ -152,7 +153,9 @@ class HostedEmbedder:
                                 f"not {DIMENSIONS}")
         return vectors
 
-    def check(self, conn, *, timeout):
+    def reference_cosine(self, *, timeout):
+        """(the cosine between the service's vector for the reference sentence and the recorded one, the threshold
+        it must keep). ModelMismatch when no reference is recorded or its file cannot be read: it fails closed."""
         if not self.reference.exists():
             raise ModelMismatch(f"no reference vector recorded at {self.reference}")
         try:
@@ -160,12 +163,20 @@ class HostedEmbedder:
             text, recorded, threshold = str(reference["text"]), reference["vector"], float(reference["threshold"])
             if len(recorded) != DIMENSIONS:
                 raise ValueError(f"a vector of {len(recorded)} numbers, not {DIMENSIONS}")
-        except (OSError, ValueError, KeyError, TypeError) as exc:   # fails closed, as a different build would
+        except (OSError, ValueError, KeyError, TypeError) as exc:
             raise ModelMismatch(f"the reference file {self.reference} cannot be read: {exc!r}") from exc
-        [vector] = self._vectors([text], timeout=timeout)
-        if (cosine := _cosine(vector, recorded)) < threshold:
+        [vector] = self.vectors([text], timeout=timeout)
+        return _cosine(vector, recorded), threshold
+
+    def check_reference(self, *, timeout):
+        """ModelMismatch unless the service still gives the reference sentence the recorded vector."""
+        cosine, threshold = self.reference_cosine(timeout=timeout)
+        if cosine < threshold:
             raise ModelMismatch(f"the reference sentence's vector has moved: cosine {cosine:.4f} with the recorded "
                                 f"one, under {threshold}")
+
+    def check(self, conn, *, timeout):
+        self.check_reference(timeout=timeout)
         if other := _other_build(conn, HOSTED_BUILD):
             raise ModelMismatch(f"the hosted route is {HOSTED_BUILD}; the store holds vectors from {other}")
         self.build = HOSTED_BUILD
@@ -174,4 +185,4 @@ class HostedEmbedder:
         """One vector of DIMENSIONS numbers per text, once a check has passed."""
         if self.build is None:
             self.check(conn, timeout=timeout)
-        return self._vectors(texts, timeout=timeout)
+        return self.vectors(texts, timeout=timeout)

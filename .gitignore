@@ -39,6 +39,7 @@
 /custom_build/memory/*
 !/custom_build/memory/*.py
 !/custom_build/memory/*.toml
+!/custom_build/memory/embed_reference.json
 !/custom_build/*.py
 !/custom_build/plugin.yaml
 !/custom_build/scripts/

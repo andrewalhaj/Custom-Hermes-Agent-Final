@@ -55,6 +55,7 @@ VISIBLE = [
     "migrations/0002_next.sql",
     "custom_build/memory/new_module.py",
     "custom_build/memory/write_path.toml",
+    "custom_build/memory/embed_reference.json",   # the hosted route's reference, committed and deployed (#239)
     "custom_build/new_module.py",
     "custom_build/plugin.yaml",
     "custom_build/scripts/custom-build-new-job.py",
