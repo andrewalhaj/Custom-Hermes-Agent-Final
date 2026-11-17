@@ -210,7 +210,7 @@ These are configuration values. Change one through an issue, with eval-set numbe
 | Judge gate | Drops at a drop score of 0.70 or higher: 1 minus the judge's probability that the fact is worth keeping (#152) |
 | Support check (extracted facts) | Kept only when the judge's probability that its source turn supports it is 0.75 or higher. A starting value; the eval set confirms or changes it. |
 | Results per message | 5; 8 on a question about past work; 3 for the action query |
-| Digests per message | At most 1 among a message's notes; the rest are facts. A starting value (decided on #158); the eval set confirms or changes it. |
+| Digests per message | At most 1 among the search's notes; the rest are facts. A question about open work also carries open items from up to 3 digests, each item a note of its own (3.5 point 4). A starting value (decided on #158); the eval set confirms or changes it. |
 | Digests read for "what is left to do?" | The project's newest 3. Their open items come first and fill the 8 results beside the search's 5. A starting value (#158); the eval set confirms or changes it. |
 | Score floor | 0.30, on facts the judge reranked, where the score is the judge's probability that the fact helps answer the message: under 0.3 reads as no, as in the "Asks for work at all" row. No floor on results ranked by fusion alone. A starting value; the eval set confirms or changes it. |
 | Recall deadline (`prefetch()`) | 6 seconds |
