@@ -404,6 +404,7 @@ def test_ctrl_c_while_questions_run_keeps_the_ones_already_measured(tmp_path, da
     def measured(entry, **kwargs):
         return {"question_id": entry["question_id"], "question_type": entry["question_type"], "abstention": False,
                 "notes": 0, "recall_failed": False, "first_hit": None, "codes": [], "failures": [],
+                "evidence_stored": 0, "pool_hit": None, "pool_hit_score": None,
                 "embedding_build": None, "stopped": None}
 
     def interrupted(futures, **kwargs):

@@ -238,19 +238,43 @@ def one(entry, *, postgres, password, command, template, judge_model, judge_key)
                 when = datetime.datetime.strptime(date, DATE_FORMAT).replace(tzinfo=datetime.UTC)
                 conn.execute("update memory.facts set created_at = %s where session_id = %s", (when, session_id))
             build = conn.execute("select embedding_model from memory.facts limit 1").fetchone()
-        notes = replay(command, "ask", question, home, work, env)["notes"]
+        asked = replay(command, "ask", question, home, work, env)
+        notes, pool = asked["notes"], asked.get("pool", [])
+        evidence = set(entry["answer_session_ids"])
         with psycopg.connect(owner) as conn:   # after the question too, so recall's own failures are counted
             codes = [row[0] for row in conn.execute("select code from memory.events order by id")]
             failures = [{"code": code, "reason": reason, "count": count} for code, reason, count in conn.execute(
                 "select code, reason, count(*) from memory.events group by code, reason")]
+            stored = conn.execute("select count(*) from memory.facts where session_id = any(%s)"
+                                  " and superseded_by is null and retired_at is null", (list(evidence),)).fetchone()[0]
         bodies = note_bodies(notes)
+        pool_hit = first_hit(owner, [candidate["body"] for candidate in pool], evidence)
         return {"question_id": entry["question_id"], "question_type": entry["question_type"],
                 "abstention": entry["question_id"].endswith("_abs"), "notes": len(bodies),
                 # recall reported a failure: never "no notes", so never a correct abstention (3.5)
                 "recall_failed": notes.startswith(FAILED),
-                "first_hit": first_hit(owner, bodies, set(entry["answer_session_ids"])), "codes": codes,
+                "first_hit": first_hit(owner, bodies, evidence), "codes": codes,
                 "failures": failures,
+                # Why a miss missed (#234): the evidence's live facts, and its first candidate before the floor.
+                "evidence_stored": stored, "pool_hit": pool_hit,
+                "pool_hit_score": pool[pool_hit - 1]["score"] if pool_hit else None,
                 "embedding_build": build[0] if build else None, "stopped": stopped}
+
+
+def _miss(result, floor):
+    """Why an answerable question missed (#234): never stored, stored but not in recall's candidate pool, in it
+    but scored under the floor, or in it above the floor and not delivered all the same."""
+    if not result["evidence_stored"]:
+        return "not_stored"
+    if result["pool_hit"] is None:
+        return "not_in_pool"
+    if result["pool_hit_score"] is not None and result["pool_hit_score"] < floor:
+        return "cut_by_floor"
+    return "above_floor"
+
+
+MISSES = {"not_stored": "never stored", "not_in_pool": "stored but not found", "cut_by_floor": "cut by the floor",
+          "above_floor": "found above the floor but not delivered"}
 
 
 def _scores(results):
@@ -273,7 +297,11 @@ def report(results, *, sha256, seed, judge_model):
         for failure in result["failures"]:   # each distinct reason across the run: the databases are dropped
             key = (failure["code"], failure["reason"])
             reasons[key] = reasons.get(key, 0) + failure["count"]
+    floor = tomllib.loads((PLUGIN / "memory" / "write_path.toml").read_text(encoding="utf-8"))["rerank"]["floor"]
+    missed = [_miss(r, floor) for r in answerable if r["first_hit"] is None and not r["recall_failed"]]
     return {"questions": len(results), "answerable": _scores(answerable),
+            # Answerable misses by cause (#234); a recall that failed is counted under recall_failed instead.
+            "misses": {cause: missed.count(cause) for cause in MISSES if cause in missed},
             # First cut: an abstention question is answered right when recall brings no notes (3.8).
             "abstention": {"count": len(abstaining),
                            "correct": sum(1 for r in abstaining if r["notes"] == 0 and not r["recall_failed"])},
@@ -299,6 +327,9 @@ def markdown(summary):
     abstention = summary["abstention"]
     lines += ["", f"Abstention: {abstention['correct']} of {abstention['count']} with no notes.",
               f"Recall failed on {summary['recall_failed']} questions (counted as misses)."]
+    if summary["misses"]:   # the candidates' scores come from a second judge request, so can differ slightly
+        lines += ["", "Misses: " + ", ".join(f"{count} {MISSES[cause]}" for cause, count in summary["misses"].items())
+                  + " (scores before the floor come from a second judge request)."]
     if summary["failure_reasons"]:
         lines += ["", "Failures recorded:", ""]
         lines += [f"- `{f['code']}` x{f['count']}: {f['reason']}" for f in summary["failure_reasons"]]
