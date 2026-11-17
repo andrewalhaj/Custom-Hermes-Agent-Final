@@ -50,7 +50,7 @@ class CustomBuildProvider(MemoryProvider):
         """Check the embedding build, recording a failed check with its code (#65 keeps is_available() out),
         then retry the facts queued for the judge, and write the digests a stopped process left, on a thread."""
         self.session_id = session_id
-        self.embedder = embedding.Embedder(embedding.OLLAMA_URL)
+        self.embedder = settings.embedder(settings.plugin_context())   # Ollama, or DeepInfra (#239)
         # Hermes asks providers to write only in a primary session, not a subagent, cron run or flush.
         self.primary = kwargs.get("agent_context", "primary") == "primary"
         machine = _machine()
@@ -69,6 +69,8 @@ class CustomBuildProvider(MemoryProvider):
         with conn:
             try:
                 self.embedder.check(conn, timeout=START_TIMEOUT)
+            except embedding.EmbedRefused as exc:   # before EmbedUnavailable, which it is too (#239)
+                failures.record(conn, "embed.refused", "failed", source=machine, reason=str(exc), session_id=session_id)
             except embedding.EmbedUnavailable as exc:
                 failures.record(conn, "embed.unavailable", "failed", source=machine, reason=str(exc), session_id=session_id)
             except embedding.ModelMismatch as exc:
@@ -191,16 +193,20 @@ def register(ctx) -> None:
         return settings.check_turn(ctx, **kwargs)
 
     # The action query (3.5 point 2). A crash is recorded as unhandled and the turn gets a "recall failed" note,
-    # so the turn and the message query go ahead (section 2's table).
+    # so the turn and the message query go ahead (section 2's table). One embedder for the process, so the
+    # hosted route's reference check runs once, not on every turn (#239).
+    action_embedder = []
+
     @failures.boundary(lambda: settings.machine(ctx), settings.connect,
                        failures.Returns(lambda exc: {"context": recall.failed("unhandled")}))
     def action_query(**kwargs):
         if settings.missing_settings(ctx):   # the turn check blocks this turn
             return None
+        if not action_embedder:
+            action_embedder.append(settings.embedder(ctx))
         text = tool.action_notes(kwargs.get("user_message"), kwargs.get("conversation_history"),
                                  machine=settings.machine(ctx), session_id=kwargs.get("session_id"),
-                                 embedder=embedding.Embedder(embedding.OLLAMA_URL), judge_at=_judge(),
-                                 connect=settings.connect)
+                                 embedder=action_embedder[0], judge_at=_judge(), connect=settings.connect)
         return {"context": text} if text else None
 
     # Before the subcommand: if any fails, Hermes drops the load and the startup check cannot pass.

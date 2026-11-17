@@ -226,6 +226,9 @@ def _searched(query, *, machine, session_id, turn, embedder, judge_at, connect, 
                 return {"results": results,
                         "open": search.newest_digests(conn, key, write_path.load()["recall"]["open_work_digests"])}
             return {"results": results}
+        except embedding.EmbedRefused as exc:   # before EmbedUnavailable, which it is too (#239)
+            failures.record(conn, "embed.refused", "failed", reason=str(exc), **fields)
+            return {"error": "embed.refused"}
         except embedding.EmbedUnavailable as exc:
             failures.record(conn, "embed.unavailable", "failed", reason=str(exc), **fields)
             return {"error": "embed.unavailable"}
@@ -443,6 +446,9 @@ def attempt(conn, fact, *, embedder, judge_at, timeout=TIMEOUT):
         if "dropped" in outcome:   # a later digest of the session is live, or another committed first (#156)
             return _dropped(conn, fact, outcome["dropped"], fields)
         return outcome
+    except embedding.EmbedRefused as exc:   # before EmbedUnavailable, which it is too (#239)
+        failures.record(conn, "embed.refused", "failed", reason=str(exc), **fields)
+        return {"error": "embed.refused"}
     except embedding.EmbedUnavailable as exc:
         failures.record(conn, "embed.unavailable", "failed", reason=str(exc), **fields)
         return {"error": "embed.unavailable"}
