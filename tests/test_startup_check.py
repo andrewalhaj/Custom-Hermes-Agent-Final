@@ -173,6 +173,15 @@ def test_a_missing_judge_model_fails_with_config_missing(tmp_path, db):
     assert rows == []
 
 
+def test_the_hosted_embedding_without_its_key_fails_with_config_missing(tmp_path, db):
+    # #239 review: OPERATIONS section 3 item 1 says the startup check fails without DeepInfra's key.
+    config = safe_config()
+    config["plugins"]["entries"]["custom_build"]["settings"]["embedding"] = "deepinfra"
+    code, output, _rows = run_check(tmp_path, db, config=config)
+    assert code != 0
+    assert "config.missing" in output and "DEEPINFRA_API_KEY" in output, output
+
+
 def test_a_missing_judge_key_fails_with_config_missing(tmp_path, db):
     code, output, rows = run_check(tmp_path, db, judge_key=False)
     assert code != 0

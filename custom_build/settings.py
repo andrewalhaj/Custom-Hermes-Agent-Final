@@ -14,6 +14,9 @@ DATABASE_URL = "CUSTOM_BUILD_DATABASE_URL"   # a secret, in the profile's .env
 JUDGE_MODEL = "judge_model"   # plugins.entries.custom_build.settings.judge_model: the judge, pinned by version
 JUDGE_KEY = "TYPESAFE_API_KEY"   # a secret, in the profile's .env
 AGENT_HOSTS = "agent_hosts"   # plugins.entries.custom_build.settings.agent_hosts on the job host: each agent host's name
+EMBEDDING = "embedding"   # plugins.entries.custom_build.settings.embedding: "local" (unset) or "deepinfra" (#239)
+EMBEDDING_ROUTES = ("local", "deepinfra")
+EMBEDDING_KEY = "DEEPINFRA_API_KEY"   # a secret, in the profile's .env, needed with embedding: deepinfra
 CONNECT_TIMEOUT = 5   # seconds, well under Hermes's 30-second deadline for a hook
 
 
@@ -45,13 +48,35 @@ def missing_store_settings(ctx):
     return [name for name, ok in found if not ok]
 
 
+def missing_embedding_settings(ctx):
+    """The embedding route, when it names none the build has, and the hosted route's key, when it is chosen
+    and not set (#239). Recall checks these too: Hermes runs prefetch before the turn check."""
+    from agent.secret_scope import get_secret
+
+    route = ctx.get_config(EMBEDDING)
+    found = (("plugins.entries.custom_build.settings." + EMBEDDING, route is None or route in EMBEDDING_ROUTES),
+             (EMBEDDING_KEY, route != "deepinfra" or _usable(get_secret(EMBEDDING_KEY))))
+    return [name for name, ok in found if not ok]
+
+
 def missing_settings(ctx):
-    """Every build setting that is missing or invalid: the store's two, then the judge's model and key."""
+    """Every build setting that is missing or invalid: the store's two, the judge's model and key, then the
+    embedding route's."""
     from agent.secret_scope import get_secret
 
     found = (("plugins.entries.custom_build.settings." + JUDGE_MODEL, _usable(ctx.get_config(JUDGE_MODEL))),
              (JUDGE_KEY, _usable(get_secret(JUDGE_KEY))))
-    return missing_store_settings(ctx) + [name for name, ok in found if not ok]
+    return (missing_store_settings(ctx) + [name for name, ok in found if not ok]
+            + missing_embedding_settings(ctx))
+
+
+def embedder(ctx):
+    """The embedder the `embedding` setting names (#239)."""
+    from agent.secret_scope import get_secret
+
+    from .memory import embedding
+
+    return embedding.for_setting(ctx.get_config(EMBEDDING), get_secret(EMBEDDING_KEY))
 
 
 def agent_hosts(ctx):

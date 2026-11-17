@@ -194,3 +194,45 @@ def typesafe():
     yield server
     server.shutdown()
     server.server_close()
+
+
+class FakeDeepInfra(http.server.ThreadingHTTPServer):
+    """A stand-in for DeepInfra's OpenAI-compatible embeddings endpoint (#239). `requests` collects each
+    (Authorization header, body); `status` answers with an HTTP error instead; `vectors` gives a text its own
+    vector, any other gets `other`; `reverse` lists the vectors in reverse, each still carrying its index."""
+
+    def __init__(self):
+        super().__init__(("127.0.0.1", 0), _DeepInfraHandler)
+        self.requests, self.status, self.vectors, self.other, self.reverse = [], 200, {}, [0.01] * 2560, False
+        self.url = f"http://127.0.0.1:{self.server_address[1]}/v1/openai/embeddings"
+
+
+class _DeepInfraHandler(http.server.BaseHTTPRequestHandler):
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        self.server.requests.append((self.headers.get("Authorization"), body))
+        data = [{"object": "embedding", "index": i, "embedding": self.server.vectors.get(text, self.server.other)}
+                for i, text in enumerate(body["input"])]
+        if self.server.reverse:
+            data.reverse()
+        answer = ({"object": "list", "data": data, "model": body["model"]} if self.server.status == 200
+                  else {"detail": "refused"})
+        payload = json.dumps(answer).encode()
+        self.send_response(self.server.status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def log_message(self, *args):
+        pass
+
+
+@pytest.fixture
+def deepinfra():
+    """A FakeDeepInfra serving on a free local port for the length of the test."""
+    server = FakeDeepInfra()
+    threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
+    yield server
+    server.shutdown()
+    server.server_close()

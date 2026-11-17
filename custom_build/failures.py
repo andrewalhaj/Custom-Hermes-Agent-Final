@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 CATALOG = {
     "embed.unavailable": "The embedding service cannot be reached",
+    "embed.refused": "The hosted embedding service refuses the key: revoked, out of credit or not allowed",
     "embed.model_mismatch": "This machine's embedding build differs from the one recorded in the store",
     "db.unreachable": "The memory store cannot be reached",
     "db.auth": "The memory store refuses the role",
@@ -67,6 +68,7 @@ CATALOG = {
 # record is gone. Medium: one answer or write is worse or delayed. Low: degraded, and the answer still came.
 SEVERITY = {
     "embed.unavailable": "medium",
+    "embed.refused": "high",   # every recall and store fails until the maintainer fixes the key (#239)
     "embed.model_mismatch": "high",
     "db.unreachable": "high",
     "db.auth": "high",

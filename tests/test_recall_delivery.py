@@ -39,6 +39,8 @@ provider = plugins.memory.load_memory_provider("custom_build")
 modules = {name.rsplit(".", 1)[-1]: m for name, m in sys.modules.items() if "custom_build" in name}
 modules["embedding"].OLLAMA_URL = sys.argv[1]
 modules["judge"].URL = os.environ["JUDGE_URL"]
+if os.environ.get("HOSTED_URL"):   # the hosted route's fake (#239): nothing leaves the machine
+    modules["embedding"].HOSTED_URL = os.environ["HOSTED_URL"]
 mode = sys.argv[4] if len(sys.argv) > 4 else ""
 def crash(*args, **kwargs):
     raise KeyError("boom")
@@ -104,10 +106,10 @@ def _add(owner, body, vector, build, *, kind="fact", basis="user_stated"):
         (body, uuid.uuid4().hex, kind, "digest" if kind == "digest" else "explicit", basis, PROJECT, str(vector), build))
 
 
-def recall(home, db, ollama_url, query=QUERY, *, store=True, mode=None, cwd=None):
+def recall(home, db, ollama_url, query=QUERY, *, store=True, mode=None, cwd=None, extra_env=None):
     env = {"HERMES_HOME": str(home), "HOME": str(home.parent), "PATH": "/usr/bin:/bin",
            "TYPESAFE_API_KEY": "test-key-not-a-real-one", "OWNER_URL": db["owner"],
-           "JUDGE_URL": os.environ["TEST_JUDGE_URL"]}
+           "JUDGE_URL": os.environ["TEST_JUDGE_URL"], **(extra_env or {})}
     if store:
         env["CUSTOM_BUILD_DATABASE_URL"] = db["agent"]
     result = subprocess.run([sys.executable, "-c", SCENARIO, ollama_url, query, str(home), *([mode] if mode else [])],
@@ -176,6 +178,17 @@ def test_a_recall_past_its_deadline_is_reported_as_recall_timeout(home, db, owne
 
 def test_a_missing_store_setting_is_reported_in_the_turn(home, db, ollama):
     assert "config.missing" in recall(home, db, ollama.url, store=False)["notes"]
+
+
+def test_the_hosted_route_without_its_key_is_config_missing_and_calls_nothing(home, db, ollama, deepinfra):
+    # #239 review: Hermes runs prefetch before the turn check, so prefetch itself must not embed without the key.
+    config_file = home / "config.yaml"
+    config = yaml.safe_load(config_file.read_text(encoding="utf-8"))
+    config["plugins"]["entries"]["custom_build"]["settings"]["embedding"] = "deepinfra"
+    config_file.write_text(yaml.safe_dump(config), encoding="utf-8")
+    seen = recall(home, db, ollama.url, extra_env={"HOSTED_URL": deepinfra.url})
+    assert "config.missing" in seen["notes"]
+    assert deepinfra.requests == [] and _codes(db) == []   # config.missing is logged, as with no store setting
 
 
 def test_a_secret_in_the_message_never_reaches_ollama(home, db, ollama):

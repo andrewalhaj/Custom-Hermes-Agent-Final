@@ -39,11 +39,12 @@ print(json.dumps({"blocks": blocks, "context": context}))
 
 
 def run_turn(tmp_path, db, *, machine_name="host-a", judge_model="jev-1.14.0", database_url=True, judge_key=True,
-             mode="plain"):
+             mode="plain", embedding=None, embedding_key=False):
     """Run one turn's pre_llm_call hooks; return (blocks, Hermes's output, events rows)."""
     home = tmp_path / "home"
     shutil.copytree(PLUGIN, home / "plugins" / "custom_build", ignore=shutil.ignore_patterns("__pycache__"))
-    settings = {name: value for name, value in (("machine_name", machine_name), ("judge_model", judge_model)) if value}
+    settings = {name: value for name, value in (("machine_name", machine_name), ("judge_model", judge_model),
+                                                ("embedding", embedding)) if value}
     entry = {"settings": settings} if settings else {}
     config = {"memory": {"provider": "custom_build"},
               "plugins": {"enabled": ["custom_build"], "entries": {"custom_build": entry}}}
@@ -53,6 +54,8 @@ def run_turn(tmp_path, db, *, machine_name="host-a", judge_model="jev-1.14.0", d
         env["CUSTOM_BUILD_DATABASE_URL"] = db["agent"] if database_url is True else database_url
     if judge_key:
         env["TYPESAFE_API_KEY"] = "test-key-not-a-real-one"
+    if embedding_key:
+        env["DEEPINFRA_API_KEY"] = "test-key-not-a-real-one"
     result = subprocess.run([sys.executable, "-c", SCENARIO, mode], capture_output=True, text=True,
                             env=env, cwd=tmp_path, timeout=120, check=False)
     assert result.returncode == 0, result.stderr[-2000:]
@@ -98,6 +101,24 @@ def test_a_missing_judge_key_blocks_the_turn(tmp_path, db):
     assert len(blocks) == 1, output
     assert "config.missing" in blocks[0] and "TYPESAFE_API_KEY" in blocks[0], blocks
     assert rows == []
+
+
+def test_the_hosted_embedding_without_its_key_blocks_the_turn(tmp_path, db):
+    # #239: with `embedding: deepinfra` every embedding needs DeepInfra's key, from the profile's .env.
+    blocks, output, _rows = run_turn(tmp_path, db, embedding="deepinfra")
+    assert len(blocks) == 1, output
+    assert "config.missing" in blocks[0] and "DEEPINFRA_API_KEY" in blocks[0], blocks
+
+
+def test_the_hosted_embedding_with_its_key_goes_ahead(tmp_path, db):
+    blocks, output, _rows = run_turn(tmp_path, db, embedding="deepinfra", embedding_key=True)
+    assert blocks == [], output
+
+
+def test_an_embedding_setting_that_names_no_route_blocks_the_turn(tmp_path, db):
+    blocks, output, _rows = run_turn(tmp_path, db, embedding="ollama")
+    assert len(blocks) == 1, output
+    assert "plugins.entries.custom_build.settings.embedding" in blocks[0], blocks
 
 
 def test_a_database_url_postgresql_cannot_parse_blocks_the_turn(tmp_path, db):

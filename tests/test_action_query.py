@@ -39,6 +39,10 @@ discover_plugins()
 modules = {name.rsplit(".", 1)[-1]: m for name, m in sys.modules.items() if "custom_build" in name}
 modules["embedding"].OLLAMA_URL = os.environ["OLLAMA_URL"]
 modules["judge"].URL = os.environ["JUDGE_URL"]
+if os.environ.get("HOSTED_URL"):   # the hosted route's fake and its recorded reference (#239)
+    import pathlib
+    modules["embedding"].HOSTED_URL = os.environ["HOSTED_URL"]
+    modules["embedding"].REFERENCE = pathlib.Path(os.environ["REFERENCE"])
 mode = os.environ.get("MODE", "")
 if mode == "crash":
     def crash(*args, **kwargs):
@@ -102,11 +106,11 @@ def _add(owner, body, vector, build, *, kind="fact"):
         (body, uuid.uuid4().hex, kind, "digest" if kind == "digest" else "explicit", PROJECT, str(vector), build))
 
 
-def turn(home, db, ollama, typesafe, *, mode=None, message=MESSAGE, history=HISTORY):
+def turn(home, db, ollama, typesafe, *, mode=None, message=MESSAGE, history=HISTORY, extra_env=None):
     env = {"HERMES_HOME": str(home), "HOME": str(home.parent), "PATH": "/usr/bin:/bin",
            "TYPESAFE_API_KEY": "test-key-not-a-real-one", "CUSTOM_BUILD_DATABASE_URL": db["agent"],
            "OWNER_URL": db["owner"], "OLLAMA_URL": ollama.url, "JUDGE_URL": typesafe.url,
-           "MESSAGE": message, "HISTORY": json.dumps(history), "MODE": mode or ""}
+           "MESSAGE": message, "HISTORY": json.dumps(history), "MODE": mode or "", **(extra_env or {})}
     result = subprocess.run([sys.executable, "-c", SCENARIO], capture_output=True, text=True, env=env,
                             cwd=home.parent / "work", timeout=120, check=False)
     assert result.returncode == 0, result.stderr[-3000:]
@@ -152,6 +156,25 @@ def test_switched_on_it_adds_three_notes_found_by_the_picked_actions_description
     assert lines[0].startswith("Recalled notes for this kind of work") and len(lines) == 4
     assert all("Run the parser tests" in line for line in lines[1:])
     assert _codes(db) == []
+
+
+def test_with_the_hosted_setting_the_action_query_embeds_through_deepinfra(home, db, ollama, typesafe, deepinfra,
+                                                                           tmp_path):
+    # #239 review: the action query builds its own embedder, outside the provider; it must follow the setting.
+    switch_on(home)
+    config_file = home / "config.yaml"
+    config = yaml.safe_load(config_file.read_text(encoding="utf-8"))
+    config["plugins"]["entries"]["custom_build"]["settings"]["embedding"] = "deepinfra"
+    config_file.write_text(yaml.safe_dump(config), encoding="utf-8")
+    reference = tmp_path / "embed_reference.json"
+    reference.write_text(json.dumps({"text": "The reference sentence.", "vector": deepinfra.other, "threshold": 0.999}),
+                         encoding="utf-8")
+    typesafe.answers, typesafe.default, typesafe.choices = {"asks_for_work": 0.9}, 0.5, {"action": "change_code"}
+    turn(home, db, ollama, typesafe, extra_env={"HOSTED_URL": deepinfra.url, "REFERENCE": str(reference),
+                                                "DEEPINFRA_API_KEY": "test-key-not-a-real-one"})
+    assert [body["input"] for _, body in deepinfra.requests] == [["The reference sentence."],
+                                                                 [actions()["change_code"]]]
+    assert ollama.embedded == []
 
 
 def test_a_message_that_asks_for_no_work_skips_the_search_and_records_the_skip(home, db, ollama, typesafe):
