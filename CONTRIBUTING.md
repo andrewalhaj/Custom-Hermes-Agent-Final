@@ -368,6 +368,7 @@ A rule in this file does not block anything. These guards do. Each is proven wit
 | Lint over the whole repository: ruff's default rules plus `BLE001` and `S110` | C1, C2 | `pyproject.toml`, the CI workflow | A pull request that adds `except Exception: pass` anywhere fails |
 | Suppression ban for `BLE001`, `S110`, `E722` | C2 | The CI workflow | A pull request that adds `# noqa: BLE001`, a bare `# noqa`, a file-level `# ruff: noqa`, ruff configuration that turns one of these rules off, an `exclude`, or a ruff configuration file outside the root `pyproject.toml`, fails |
 | Tests in CI | W3 | The CI workflow | A pull request with a failing test fails |
+| Actions pinned to a full commit SHA | 8.2 | The test suite | A workflow step whose `uses:` names a tag or a branch fails the build |
 | Plugin validation: `hermes plugins doctor --ci` and a load test, added with the plugin's first code | ARCHITECTURE.md 5.5 | The CI workflow | A plugin whose `register(ctx)` raises fails doctor; a manifest without `kind: standalone` fails the load test |
 | Failure-catalog test | F1, F6 | The test suite | A handler that emits no code, or an unknown one, fails the build |
 | Secret-leak test | L4, W13 | The test suite | A fake key that reaches a log line, a stored row or an outgoing request fails the build |
