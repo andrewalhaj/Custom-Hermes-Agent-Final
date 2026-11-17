@@ -395,9 +395,15 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.parallel < 1:
         parser.error("--parallel must be 1 or more")
-    ids = [question_id.strip() for question_id in args.ids.split(",") if question_id.strip()] if args.ids else None
-    if ids and (args.questions is not None or args.seed is not None):
-        parser.error("--ids replaces the seeded subset; leave out --questions and --seed")
+    ids = None
+    if args.ids is not None:   # given at all, even empty: never a silent fallback to a paid seeded run
+        ids = [question_id.strip() for question_id in args.ids.split(",") if question_id.strip()]
+        if not ids:
+            parser.error("--ids names no question")
+        if repeated := sorted({question_id for question_id in ids if ids.count(question_id) > 1}):
+            parser.error(f"--ids names {', '.join(repeated)} twice")   # it would be paid for and scored twice
+        if args.questions is not None or args.seed is not None:
+            parser.error("--ids replaces the seeded subset; leave out --questions and --seed")
     if not pinned["sha256"]:
         raise SystemExit(f"{CONFIG.name} records no revision and SHA-256 yet: pin them first (#167)")
     if args.download:
