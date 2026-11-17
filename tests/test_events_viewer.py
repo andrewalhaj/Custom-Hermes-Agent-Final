@@ -4,6 +4,7 @@ Its login joins `memory_viewer` (migration 0009), which may select from memory.e
 `db` fixture gives a throwaway store with such a login.
 """
 
+import datetime
 import threading
 import urllib.error
 import urllib.request
@@ -167,3 +168,17 @@ def test_without_its_connection_string_it_stops_and_names_the_variable(monkeypat
         events_viewer.main([])
     assert stop.value.code == 2
     assert events_viewer.URL in capsys.readouterr().err
+
+
+def test_times_are_eastern_on_a_12_hour_clock():
+    # 20:05:09 UTC in November is 3:05:09 PM EST; 03:30 UTC is still the evening before in New York.
+    def row(at):
+        return {"id": 1, "at": datetime.datetime.fromisoformat(at), "source": "host-a", "project": None,
+                "session_id": None, "turn": None, "code": "job.failed", "result": "failed", "reason": None, "detail": {}}
+
+    filters = events_viewer.filters_of("")
+    body = events_viewer.page([row("2026-11-17T20:05:09+00:00"), row("2026-11-17T03:30:00+00:00")], {}, {}, filters)
+    assert "3:05:09 PM EST" in body
+    assert "10:30:00 PM EST" in body
+    assert "Monday 16 November 2026" in body
+    assert "20:05:09" not in body
