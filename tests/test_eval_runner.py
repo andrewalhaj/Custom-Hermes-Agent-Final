@@ -8,10 +8,12 @@ superuser connection to a throwaway Postgres, as the store tests do.
 """
 
 import hashlib
+import http.server
 import json
 import os
 import pathlib
 import sys
+import threading
 
 import psycopg
 import pytest
@@ -137,3 +139,33 @@ def test_a_subset_is_the_same_for_the_same_seed_and_spread_across_question_types
     first = longmemeval.subset(entries, 6, seed=7)
     assert first == longmemeval.subset(entries, 6, seed=7)
     assert sorted(entry["question_type"] for entry in first) == ["a", "a", "b", "b", "c", "c"]
+
+
+@pytest.fixture
+def data_server():
+    """A local HTTP server standing in for Hugging Face, serving the made-up dataset."""
+    payload = json.dumps(DATASET).encode()
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{server.server_address[1]}/longmemeval_s_cleaned.json", payload
+    server.server_close()
+
+
+def test_the_data_file_is_downloaded_and_kept_only_when_its_hash_matches(tmp_path, data_server):
+    url, payload = data_server
+    kept = longmemeval.fetch(url, tmp_path / "good.json", hashlib.sha256(payload).hexdigest())
+    assert kept.read_bytes() == payload
+    with pytest.raises(longmemeval.EvalError, match="SHA-256"):
+        longmemeval.fetch(url, tmp_path / "bad.json", "0" * 64)
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["good.json"]   # nothing half-written is kept
