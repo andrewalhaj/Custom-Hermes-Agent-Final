@@ -38,6 +38,7 @@ CATALOG = {
     "extract.refused": "The extraction model's provider refused the account: logged out, billing, or forbidden",
     "digest.error": "The digest model failed or answered something other than a digest",
     "digest.refused": "The digest model's provider refused the account: logged out, billing, or forbidden",
+    "digest.dropped": "Not a failure: a session's digest was not stored (the judge did not keep it, or a later or concurrent digest of the session is live); it is tried again at the session's next end",
     "write_gate.would_ask": "Not a failure: in log mode, the write gate saw a call on its list that on would send for approval",
     "write_gate.would_block": "Not a failure: in log mode, the write gate saw a call on its list that on would block outright",
     "verify_gate.would_block": "Not a failure: in log mode, a call would change a listed file or setting the session never read",

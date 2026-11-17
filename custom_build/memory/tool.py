@@ -399,8 +399,11 @@ def attempt(conn, fact, *, embedder, judge_at):
             if existing := store.identical(conn, fact.project, fact.body):
                 return {"already_stored": existing}
             if not _kept(fact, judge_at):
-                return {"dropped": "the judge did not keep it"}
-        return store.store(conn, fact, embedder=embedder, judge=judge_at, timeout=TIMEOUT)
+                return _dropped(conn, fact, "the judge did not keep it", fields)
+        outcome = store.store(conn, fact, embedder=embedder, judge=judge_at, timeout=TIMEOUT)
+        if "dropped" in outcome:   # a later digest of the session is live, or another committed first (#156)
+            return _dropped(conn, fact, outcome["dropped"], fields)
+        return outcome
     except embedding.EmbedUnavailable as exc:
         failures.record(conn, "embed.unavailable", "failed", reason=str(exc), **fields)
         return {"error": "embed.unavailable"}
@@ -419,6 +422,14 @@ def attempt(conn, fact, *, embedder, judge_at):
     except psycopg.Error as exc:
         failures.record(conn, "db.query", "failed", reason=str(exc), **fields)
         return {"error": "db.query"}
+
+
+def _dropped(conn, fact, reason, fields):
+    """{"dropped": reason}; a digest's drop is recorded, so its retries at the session's later ends are seen
+    (#156 item 3). A fact's drop by the gate is the gate's ordinary work and is not."""
+    if fact.kind == "digest":
+        failures.record(conn, "digest.dropped", "ok", reason=reason, **fields)
+    return {"dropped": reason}
 
 
 def _kept(fact, judge_at):
