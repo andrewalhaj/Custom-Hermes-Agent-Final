@@ -8,6 +8,7 @@ gives each test an empty database with every migration applied.
 """
 
 import psycopg
+import pytest
 
 from custom_build.memory import search, store, tool, write_path
 
@@ -56,12 +57,43 @@ def test_a_stored_fact_embeds_its_first_characters_and_keeps_its_whole_text(db):
     assert embedded == body[:LIMITS["store_chars"]]
 
 
-def test_storing_waits_for_the_store_limit_not_the_recall_one(db):
-    # The write path is off the turn's path (#238 option 2); recall keeps its 5 seconds inside Hermes's 8.
-    fact = store.Fact(body="The parser tests run with pytest -k parser.", basis="user_stated", project="p1",
-                      source="host-a", session_id="s1", source_turn=1)
+FACT = "The parser tests run with pytest -k parser."
+
+
+def test_a_store_on_the_turn_or_at_a_session_start_keeps_the_recall_limit(db):
+    # #238 review: store_fact and the mirror run inside the turn, and the queue's retry inside initialize(),
+    # which Hermes does not time out; 30 seconds there could hold a turn or a start while Ollama hangs.
+    fact = store.Fact(body=FACT, basis="user_stated", project="p1", source="host-a", session_id="s1", source_turn=1)
     embedder = Recording()
     with psycopg.connect(db["agent"], autocommit=True) as conn:
         tool.attempt(conn, fact, embedder=embedder, judge_at=None)
+    [(_, timeout)] = embedder.calls
+    assert timeout == tool.TIMEOUT == 5
+
+
+@pytest.fixture
+def judge_at(typesafe):
+    typesafe.answers = {"worth_keeping": 0.9, "supported": 0.9}
+    return store.Judge(url=typesafe.url, key="test-key-not-a-real-one", model="jev-1.14.0")
+
+
+def test_extraction_stores_with_the_store_limit(db, judge_at, monkeypatch):
+    # Off the turn's path, on Hermes's background worker (#238 option 2).
+    monkeypatch.setattr(tool.extraction, "propose", lambda source: [(FACT, "user_stated")])
+    embedder = Recording()
+    tool.extract("Run the parser tests.", [], machine="host-a", session_id="s1", turn=1, embedder=embedder,
+                 judge_at=judge_at, connect=lambda: psycopg.connect(db["agent"], autocommit=True))
+    [(_, timeout)] = embedder.calls
+    assert timeout == LIMITS["store_timeout"]
+
+
+def test_a_digest_stores_with_the_store_limit(db, judge_at, monkeypatch, tmp_path):
+    # At a session's end; a long digest is the case that never finished in 5 seconds (#238).
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "home"))   # the digest is queued before its call (#156)
+    monkeypatch.setattr(tool.digest, "write", lambda transcript: "The session set up the parser tests.")
+    messages = [{"role": role, "content": f"Message {n}"} for n in range(10) for role in ("user", "assistant")]
+    embedder = Recording()
+    tool.write_digest(messages, machine="host-a", session_id="s1", turn=10, embedder=embedder, judge_at=judge_at,
+                      connect=lambda: psycopg.connect(db["agent"], autocommit=True))
     [(_, timeout)] = embedder.calls
     assert timeout == LIMITS["store_timeout"]
