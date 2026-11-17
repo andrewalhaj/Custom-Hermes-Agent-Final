@@ -10,6 +10,7 @@ and events are written from a worker thread, as the write gate's are. `off` regi
 import os
 import pathlib
 import re
+import shlex
 import threading
 import tomllib
 
@@ -50,43 +51,61 @@ def _listed(paths, target, task_id):
 
 
 def _named(config, args, task_id):
-    """The listed files a terminal command names, and whether it writes."""
+    """(rule, path) for each listed file a terminal command names, and whether it writes. For a listed
+    folder the path is each file in it that the command's words name, or the folder when they name none."""
     from tools.file_tools_paths import _resolve_path_for_task
 
     home, paths = _paths(config)
     command = args["command"]
     where = _resolve_path_for_task(args.get("workdir") or ".", task_id or "default")
-    return [name for name, path in paths.items() if _names(command, path, home, where)], bool(config["writes"].search(command))
+    try:
+        words = shlex.split(command)
+    except ValueError:   # an unbalanced quote: read it by its spaces
+        words = command.split()
+    found = []
+    for name, path in paths.items():
+        if _names(command, path, home, where):
+            root = os.path.realpath(path)
+            inside = [resolved for word in words if (resolved := _resolved(word, home, where)).startswith(root + os.sep)]
+            found += [(name, target) for target in inside or [root]]
+    return found, bool(config["writes"].search(command))
+
+
+def _resolved(word, home, where):
+    """The path a command's word names: ~ and $HERMES_HOME filled in, from where the command runs."""
+    word = word.replace("${HERMES_HOME}", str(home)).replace("$HERMES_HOME", str(home))
+    return os.path.realpath(os.path.join(where, os.path.expanduser(word)))
 
 
 def changes(config, tool_name, args, task_id):
-    """(rule, target) for each listed file or setting the call would change. The target is the file's path,
-    or the setting and what is done to it: never a terminal command, whose arguments can carry a credential
-    that no redactor knows (#115)."""
+    """(rule, target, key) for each listed file or setting the call would change. The target is the file's
+    path, or the setting and what is done to it: never a terminal command, whose arguments can carry a
+    credential that no redactor knows (#115). The key is what a read of it is kept under: the file's own
+    path, so reading one file of a listed folder clears only that file (#128), or the setting's name."""
     found = []
     if tool_name in FILE_TOOLS:
         from agent.tool_dispatch_helpers import _extract_file_mutation_targets
 
         _, paths = _paths(config)
         for target in _extract_file_mutation_targets(tool_name, args):
-            found += _listed(paths, target, task_id)
+            found += [(name, resolved, resolved) for name, resolved in _listed(paths, target, task_id)]
     elif tool_name == TERMINAL and isinstance(command := args.get("command"), str):
-        names, writes = _named(config, args, task_id)
-        paths = _paths(config)[1]
-        found += [(name, os.path.realpath(paths[name])) for name in names if writes]
-        found += [(match[2], f"hermes config {match[1]} {match[2]}") for match in HERMES_CONFIG.finditer(command)
+        named, writes = _named(config, args, task_id)
+        found += [(name, target, target) for name, target in named if writes]
+        found += [(match[2], f"hermes config {match[1]} {match[2]}", match[2]) for match in HERMES_CONFIG.finditer(command)
                   if match[1] in ("set", "unset") and match[2] in config["settings"]]
     return found
 
 
 def reads(config, tool_name, args, task_id):
-    """The rule names of the listed files and settings the call reads."""
+    """The keys of the listed files and settings the call reads: a file's path, or a setting's name. A
+    command that names a listed folder and no file in it, such as a listing, reads none of its files."""
     if tool_name == "read_file" and isinstance(path := args.get("path"), str):
-        return [name for name, _ in _listed(_paths(config)[1], path, task_id)]
+        return [resolved for _, resolved in _listed(_paths(config)[1], path, task_id)]
     if tool_name != TERMINAL or not isinstance(command := args.get("command"), str):
         return []
-    names, writes = _named(config, args, task_id)
-    found = [] if writes else names
+    named, writes = _named(config, args, task_id)
+    found = [] if writes else [target for _, target in named if not os.path.isdir(target)]
     for match in HERMES_CONFIG.finditer(command):   # every one in a chained command
         if match[1] == "show":
             found += sorted(config["settings"])
@@ -115,7 +134,7 @@ def before(ctx, config, *, tool_name, args, session_id="", task_id="", **kwargs)
     if not (changed := changes(config, tool_name, args, task_id)):
         return
     read = _read(ctx, session_id)
-    if unread := [(rule, target) for rule, target in changed if rule not in read]:
+    if unread := [(rule, target) for rule, target, key in changed if key not in read]:
         _record(ctx, session_id=session_id, rule=unread[0][0], reason=unread[0][1], tool=tool_name, withhold=False)
 
 
@@ -134,7 +153,8 @@ def reply(ctx, config, *, response_text, session_id="", **kwargs):
         return
     read = _read(ctx, session_id)
     for name, path in named:
-        if name not in read:
+        root = os.path.realpath(path)
+        if not any(key == root or key.startswith(root + os.sep) for key in read):   # nothing of it was read
             _record(ctx, session_id=session_id, rule=name, reason=path.name, tool=None, withhold=True)
 
 
