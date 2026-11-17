@@ -272,6 +272,7 @@ gh api repos/<owner>/<repo>/pulls/<n>/comments      # comments on lines
 - **C7. Data this repository did not create is not ours to change.** In a database that holds tables, functions or data that this repository's migrations did not create, create new objects under new names, and never alter, rename or drop the existing ones. Objects this repository created change only through new forward migrations. Do not connect with a credential that can delete until a maintainer confirms an export exists.
 - **C8. Retrieval changes come with numbers.** A change to chunking, embedding, fusion, reranking, recall delivery or any default in ARCHITECTURE.md section 3.6 reports the eval-set results before and after (ARCHITECTURE.md section 3.8).
 - **C9. Code taken from elsewhere meets these rules before it merges.** Code copied or ported from another project, an earlier version of this build, or a generated draft has every handler narrowed to a named error with a failure code, or removed, in the same pull request.
+- **C10. A migration works with the plugin deployed before it.** A migration is applied to the shared store separately from each host's plugin update, and before it (OPERATIONS.md section 7); reinstalling an older plugin does not undo it. So a migration adds only what an older plugin can ignore (a table, a nullable column, a new function, a grant), and changes or takes away nothing a deployed plugin uses: no required column, no tighter constraint or policy, no replaced function under the same name. Changing or removing something a deployed plugin uses, such as a rename, a new type or a drop, takes three pull requests: add the new shape, move the code to it, then remove the old shape once no host runs a plugin that uses it. A pull request with a migration says why the plugin on `main` before it still works; one that removes something also says that no host runs a plugin that uses it, because a host changes only when a commit is named and can be behind `main` (OPERATIONS.md section 3).
 
 ### 5.2 Why error handling gets its own rules
 
@@ -337,6 +338,7 @@ The reviewer checks what the lint cannot:
 - A `try` that covers more lines than it needs (C1).
 - A handler or fallback with no failure code (F1).
 - "Never raises", "fail open" or "best-effort" with nothing after it (C5).
+- A migration that an older deployed plugin cannot ignore, or that removes something a deployed plugin still uses (C10).
 
 ## 6. Failure rules
 
@@ -368,6 +370,7 @@ A rule in this file does not block anything. These guards do. Each is proven wit
 | Lint over the whole repository: ruff's default rules plus `BLE001` and `S110` | C1, C2 | `pyproject.toml`, the CI workflow | A pull request that adds `except Exception: pass` anywhere fails |
 | Suppression ban for `BLE001`, `S110`, `E722` | C2 | The CI workflow | A pull request that adds `# noqa: BLE001`, a bare `# noqa`, a file-level `# ruff: noqa`, ruff configuration that turns one of these rules off, an `exclude`, or a ruff configuration file outside the root `pyproject.toml`, fails |
 | Tests in CI | W3 | The CI workflow | A pull request with a failing test fails |
+| Actions pinned to a full commit SHA | 8.2 | The test suite | A workflow step whose `uses:` names a tag or a branch fails the build |
 | Plugin validation: `hermes plugins doctor --ci` and a load test, added with the plugin's first code | ARCHITECTURE.md 5.5 | The CI workflow | A plugin whose `register(ctx)` raises fails doctor; a manifest without `kind: standalone` fails the load test |
 | Failure-catalog test | F1, F6 | The test suite | A handler that emits no code, or an unknown one, fails the build |
 | Secret-leak test | L4, W13 | The test suite | A fake key that reaches a log line, a stored row or an outgoing request fails the build |
@@ -418,9 +421,9 @@ jobs:
     env:
       TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
         with: { fetch-depth: 0 }   # the secret scan reads the whole history
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0   # v7.1.0
         with: { python-version: "3.14", cache: pip }
       - name: install Hermes v0.23.1 from its own lock file
         shell: bash
@@ -535,6 +538,7 @@ extend-select = ["BLE001", "S110"]
 - A plugin declares the Python packages it needs in its manifest (`python_dependencies`). Hermes v0.23.1 also accepts a `pyproject.toml` beside the manifest,[24] but a second `pyproject.toml` fails the configuration step above.
 - Validate the plugin with `hermes plugins doctor <path> --ci` from the pull request that adds its first code. In Hermes v0.23.1 it loads the plugin through Hermes's own discovery and registration, and exits non-zero on an error.[24] Doctor loads the plugin directly, as an ordinary plugin only, and skips both the enable gate and the memory-provider loader (Hermes v0.23.1 source, `hermes_cli/plugin_dev.py`). The same pull request therefore adds a test that loads the plugin the way a host does: through ordinary discovery with the plugin enabled, and through the memory-provider loader (ARCHITECTURE.md section 1). Both steps need Hermes installed on the runner, and both are tests in `tests/test_plugin_load.py`, so `pytest` runs them. Hermes is installed from its own lock file: `hermes-requirements.txt` holds the pins exported from the tag's `uv.lock`, installed with `--no-deps`, and Hermes itself is installed editable at the tag's commit, because it refuses to build a wheel and its `pyproject.toml` pins conflict when resolved as an ordinary package. A local environment is set up the same way, on Python 3.14.
 - Pin ruff to one version in the project's dev dependencies, so local runs and CI agree.
+- Pin every action to a full-length commit SHA, with the released version in a comment beside it: a tag can be moved to other code, a SHA cannot.[26] `.github/dependabot.yml` has Dependabot propose each new release as a pull request, so a pin does not go stale. A test fails on a `uses:` that is not a SHA.
 - The job name is what appears as the status check to require.
 - Give any step that pipes a tool into a count or a test `shell: bash`, and never end it with `|| true`. Without `shell: bash` a failed command in the middle of a pipe does not stop the step, so a tool that did not start reads as a count of 0 and the check passes.[21] A check must tell "found nothing" from "the tool failed", as the `noqa` step above does. Prove each step with its failing case before relying on it (C6).
 - The secret scan runs gitleaks, at a pinned version checked against its published checksum, over the whole history (`fetch-depth: 0`), merge commits included. It fails on a finding and on any error gitleaks reports, because gitleaks exits 0 when git itself fails.
@@ -590,3 +594,4 @@ AI coding agents are welcome contributors, under the same rules as everyone else
 - [23] [Context files (Hermes Agent documentation)](https://hermes-agent.nousresearch.com/docs/user-guide/features/context-files)
 - [24] [Build a Hermes plugin (Hermes Agent developer guide)](https://hermes-agent.nousresearch.com/docs/developer-guide/plugins)
 - [25] [About rulesets (GitHub Docs)](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/about-rulesets)
+- [26] [Secure use reference (GitHub Docs)](https://docs.github.com/en/actions/reference/security/secure-use)

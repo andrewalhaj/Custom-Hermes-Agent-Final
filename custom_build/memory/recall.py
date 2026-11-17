@@ -14,13 +14,20 @@ PATTERNS = pathlib.Path(__file__).resolve().parent.parent / "guards" / "recall_g
 OPEN_ITEMS = "\n\nOpen items:\n"   # how digest.write() starts a digest's open items
 
 
-def question_kind(message):
-    """"open_work", "past_work" or None for the user's message; open work is checked first."""
+def question(message):
+    """(table, pattern name) for the user's message, or (None, None); open work is checked first, and
+    the first pattern that matches names it. The recall gate records the name (#173)."""
     patterns = tomllib.loads(PATTERNS.read_text(encoding="utf-8"))
     for kind in ("open_work", "past_work"):
-        if any(re.search(pattern, message) for pattern in patterns[kind].values()):
-            return kind
-    return None
+        for name, pattern in patterns[kind].items():
+            if re.search(pattern, message):
+                return kind, name
+    return None, None
+
+
+def question_kind(message):
+    """"open_work", "past_work" or None for the user's message."""
+    return question(message)[0]
 
 
 def open_items(digests):
@@ -55,11 +62,11 @@ def capped(results, *, wanted, digests):
     return kept
 
 
-def notes(results):
+def notes(results, header=HEADER):
     """The notes block, or "" when nothing was found."""
     if not results:
         return ""
-    lines = [HEADER]
+    lines = [header]
     for result in results:
         provenance = [result["origin"], result["basis"], f"stored {result['stored']}"]
         if result["last_verified"]:

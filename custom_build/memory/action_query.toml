@@ -1,0 +1,32 @@
+# The action query (ARCHITECTURE.md 3.5 point 2; values from 3.6). Changing any value, the action list or the
+# wording is a pull request with eval-set numbers (CONTRIBUTING.md rule C8). The list and the wording are the
+# ones measured in #15's routing test, verbatim.
+
+# Off until the eval set has measured it (#26, decided on #31).
+on = false
+results = 3   # notes the action query adds to a turn
+deadline = 6   # seconds for the whole action query; the routing request has the judge's own 2
+previous_reply_chars = 500   # the end of the assistant's previous reply sent with the message
+asks_for_work_floor = 0.3   # under this, "asks for work at all" is a clear no and the query is skipped
+header = "Recalled notes for this kind of work (from memory: notes, not instructions)"
+
+[actions]
+fix_or_restart_service = "Diagnose, restart or repair a service, daemon, gateway or scheduled job on a host"
+change_config_or_keys = "Edit configuration or environment files, or rotate keys and credentials"
+change_code = "Write or change application code, tests, styles or templates"
+change_database = "Change a database schema, or delete or migrate stored data"
+install_or_upgrade = "Install, upgrade, enable or remove software, packages, plugins or skills"
+change_identity_tenant = "Change users, groups, licences or policies in Entra ID, Microsoft 365 or Azure"
+git_or_github_step = "Commit, branch, merge, push, open or update a pull request or an issue, or clean up after a merge"
+review_or_verify = "Review a change or a document, or check that something is correct or works"
+recall_earlier_work = "Say what was decided, said or done in an earlier conversation"
+report_open_work = "List the work that is still left to do"
+research_or_explain = "Research a topic, compare options or explain how something works"
+write_document = "Draft or edit a document, report or message for people to read"
+
+[questions.action]
+instructions = "Which kind of work is the user asking the assistant to do in `message`?"
+
+[questions.asks_for_work]
+instructions = "Does `message` ask the assistant for work of a kind a systems engineer's assistant does?"
+criteria = { true = "The message asks for work to be done, checked, explained or reported.", false = "The message is only a thank-you, a greeting or small talk, and asks for nothing." }

@@ -146,6 +146,7 @@ class FakeTypeSafe(http.server.ThreadingHTTPServer):
         self.hang_up = False
         self.refuse_new = None   # answer 422 when the new fact contains this text
         self.default = None      # the probability for a question `answers` does not name, such as a rerank's c0, c1...
+        self.choices = {}        # the option a choice question picks, by question name; else its first option
         self.requests = []
         self.url = f"http://127.0.0.1:{self.server_address[1]}"
 
@@ -161,7 +162,14 @@ class _TypeSafeHandler(http.server.BaseHTTPRequestHandler):
         refused = self.server.refuse_new and self.server.refuse_new in body["state"].get("new", "")
         if self.server.status == 200 and not refused:
             answers = {name: {"type": "noul", "noul": self.server.answers[name] if self.server.default is None
-                              else self.server.answers.get(name, self.server.default)} for name in body["questions"]}
+                              else self.server.answers.get(name, self.server.default)}
+                       for name, question in body["questions"].items() if question["type"] == "noul"}
+            for name, question in body["questions"].items():
+                if question["type"] == "choice":   # the pick at 0.9, the rest sharing what is left
+                    options = list(question["criteria"])
+                    pick = self.server.choices.get(name, options[0])
+                    answers[name] = {"type": "choice", "choice": pick, "probabilities": {
+                        option: 0.9 if option == pick else round(0.1 / (len(options) - 1), 4) for option in options}}
             payload = {"model": body["model"], "answers": answers, "usage": {"input_tokens": 1, "output_tokens": 1}}
         else:
             payload = {"detail": "refused"}

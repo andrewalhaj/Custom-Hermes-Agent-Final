@@ -5,7 +5,9 @@ stored fact (CONTRIBUTING.md rule C3); Hermes then reports the call with the sta
 """
 
 import datetime
+import pathlib
 import time
+import tomllib
 
 import psycopg
 from agent.memory_provider import spawn_context_thread
@@ -29,6 +31,7 @@ from . import (
 BASES = ("user_stated", "tool_observed", "assistant_inferred")
 TIMEOUT = 5   # seconds for each answer from Ollama while a fact is stored
 RERANK_MARGIN = 0.3   # seconds kept back from the recall deadline, to deliver the notes after a rerank
+ACTION_QUERY = pathlib.Path(__file__).resolve().parent / "action_query.toml"
 
 SCHEMA = {
     "name": "store_fact",
@@ -111,6 +114,85 @@ def recall_notes(query, *, machine, session_id, turn, embedder, judge_at, connec
         items = recall.open_items(outcome["open"])[:max(limits["results_past_work"] - len(results), 0)]
         return recall.notes(items + results)
     return recall.notes(results)
+
+
+def action_config():
+    """The action query's switch, values, action list and wording (3.5 point 2, 3.6)."""
+    return tomllib.loads(ACTION_QUERY.read_text(encoding="utf-8"))
+
+
+def action_notes(message, history, *, machine, session_id, embedder, judge_at, connect):
+    """The action query's notes for a turn (3.5 point 2): "" when it is switched off, skipped or finds nothing;
+    a failure or a missed deadline is reported in the turn with its code, as prefetch() reports its own."""
+    config = action_config()
+    message = message if isinstance(message, str) else ""
+    if not config["on"] or not message.strip():
+        return ""
+    # Both go to the judge: the build's own redaction, forced, as for every text that leaves the host (L4, 3.7).
+    state = {"message": redact_sensitive_text(message, force=True),
+             "previous_assistant_reply_end": redact_sensitive_text(
+                 _previous_reply_end(history, config["previous_reply_chars"]), force=True)}
+    started, box = time.monotonic(), {}
+
+    @failures.boundary(lambda: machine, connect, failures.Returns(lambda exc: None))
+    def run(session_id):
+        box["outcome"] = _action(state, config, started=started, machine=machine, session_id=session_id,
+                                 embedder=embedder, judge_at=judge_at, connect=connect)
+
+    worker = spawn_context_thread(run, name="custom_build-action-query", kwargs={"session_id": session_id})
+    worker.start()
+    worker.join(config["deadline"])
+    if worker.is_alive():   # as in recall_notes: the turn does not wait, and the record is written off its path
+        record = spawn_context_thread(_with_store, name="custom_build-action-timeout", args=(
+            machine, session_id, connect, lambda conn: failures.record(
+                conn, "recall.timeout", "failed", source=machine, project=project.key(resolve_agent_cwd()),
+                session_id=session_id, reason=f"action query: no answer within {config['deadline']} seconds")))
+        record.start()
+        return recall.failed("recall.timeout")
+    if "outcome" not in box:   # it raised, and the boundary wrapper recorded it
+        return recall.failed("unhandled")
+    outcome = box["outcome"]
+    if "error" in outcome:
+        return recall.failed(outcome["error"])
+    results = recall.capped(outcome["results"], wanted=config["results"],
+                            digests=write_path.load()["recall"]["digests_per_message"])
+    return recall.notes(results, header=config["header"])
+
+
+def _previous_reply_end(history, chars):
+    """The end of the assistant's last reply in the conversation so far, as the routing test sent it (#15)."""
+    for message in reversed(history or []):
+        if isinstance(message, dict) and message.get("role") == "assistant" and isinstance(message.get("content"), str) \
+                and message["content"]:
+            return message["content"][-chars:]
+    return ""
+
+
+def _action(state, config, *, started, machine, session_id, embedder, judge_at, connect):
+    """Route the message, then search the facts store with the picked action's description, as {"results": [...]}
+    or {"error": code}, recorded; a message that asks for no work is recorded as skipped (3.5 point 2)."""
+    fields = {"source": machine, "project": project.key(resolve_agent_cwd()), "session_id": session_id}
+    try:
+        pick, asks = judge.route_answers(state, config["actions"], config["questions"], url=judge_at.url,
+                                         key=judge_at.key, model=judge_at.model, timeout=judge.DEADLINE)
+    except judge.JudgeTimeout as exc:
+        reason = f"action query: {exc}"
+        _with_store(machine, session_id, connect, lambda conn: failures.record(
+            conn, "judge.timeout", "failed", reason=reason, **fields))
+        return {"error": "judge.timeout"}
+    except judge.JudgeError as exc:
+        reason = f"action query: {exc}"
+        _with_store(machine, session_id, connect, lambda conn: failures.record(
+            conn, "judge.error", "failed", reason=reason, **fields))
+        return {"error": "judge.error"}
+    if asks < config["asks_for_work_floor"]:   # a clear no; any pick at all is still used (#26)
+        _with_store(machine, session_id, connect, lambda conn: failures.record(
+            conn, "action.skipped", "ok", reason=f"asks for work at {asks}", detail={"pick": pick}, **fields))
+        return {"results": []}
+    # What is left of the action query's deadline; at least a millisecond, since 0 would lift the store's timeout.
+    left = max(config["deadline"] - (time.monotonic() - started), 0.001)
+    return _searched(config["actions"][pick], machine=machine, session_id=session_id, turn=None, embedder=embedder,
+                     judge_at=judge_at, connect=connect, wanted=config["results"], deadline=left)
 
 
 def _searched(query, *, machine, session_id, turn, embedder, judge_at, connect, wanted, deadline=None,

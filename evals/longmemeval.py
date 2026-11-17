@@ -208,12 +208,15 @@ def one(entry, *, postgres, command, template, judge_model, judge_key):
         notes = replay(command, "ask", question, home, work, env)["notes"]
         with psycopg.connect(owner) as conn:   # after the question too, so recall's own failures are counted
             codes = [row[0] for row in conn.execute("select code from memory.events order by id")]
+            failures = [{"code": code, "reason": reason, "count": count} for code, reason, count in conn.execute(
+                "select code, reason, count(*) from memory.events group by code, reason")]
         bodies = note_bodies(notes)
         return {"question_id": entry["question_id"], "question_type": entry["question_type"],
                 "abstention": entry["question_id"].endswith("_abs"), "notes": len(bodies),
                 # recall reported a failure: never "no notes", so never a correct abstention (3.5)
                 "recall_failed": notes.startswith(FAILED),
                 "first_hit": first_hit(owner, bodies, set(entry["answer_session_ids"])), "codes": codes,
+                "failures": failures,
                 "embedding_build": build[0] if build else None, "stopped": stopped}
 
 
@@ -230,10 +233,13 @@ def report(results, *, sha256, seed, judge_model):
     abstaining = [result for result in results if result["abstention"]]
     commit = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD"], capture_output=True, text=True,
                             check=False).stdout.strip()
-    codes = {}
+    codes, reasons = {}, {}
     for result in results:
         for code in result["codes"]:
             codes[code] = codes.get(code, 0) + 1
+        for failure in result["failures"]:   # each distinct reason across the run: the databases are dropped
+            key = (failure["code"], failure["reason"])
+            reasons[key] = reasons.get(key, 0) + failure["count"]
     return {"questions": len(results), "answerable": _scores(answerable),
             # First cut: an abstention question is answered right when recall brings no notes (3.8).
             "abstention": {"count": len(abstaining),
@@ -241,7 +247,10 @@ def report(results, *, sha256, seed, judge_model):
             "recall_failed": sum(1 for r in results if r["recall_failed"]),
             "by_type": {kind: _scores([r for r in answerable if r["question_type"] == kind])
                         for kind in sorted({r["question_type"] for r in answerable})},
-            "failure_codes": codes, "commit": commit, "data_sha256": sha256, "seed": seed,
+            "failure_codes": codes,
+            "failure_reasons": [{"code": code, "reason": reason, "count": count} for (code, reason), count in
+                                sorted(reasons.items(), key=lambda item: -item[1])],
+            "commit": commit, "data_sha256": sha256, "seed": seed,
             "judge_model": judge_model,
             "embedding_build": next((r["embedding_build"] for r in results if r["embedding_build"]), None),
             "per_question": results}
@@ -257,6 +266,9 @@ def markdown(summary):
     abstention = summary["abstention"]
     lines += ["", f"Abstention: {abstention['correct']} of {abstention['count']} with no notes.",
               f"Recall failed on {summary['recall_failed']} questions (counted as misses)."]
+    if summary["failure_reasons"]:
+        lines += ["", "Failures recorded:", ""]
+        lines += [f"- `{f['code']}` x{f['count']}: {f['reason']}" for f in summary["failure_reasons"]]
     if summary.get("stopped"):
         lines += ["", f"**Stopped early: `{summary['stopped']}`.**"]
     return "\n".join(lines) + "\n"

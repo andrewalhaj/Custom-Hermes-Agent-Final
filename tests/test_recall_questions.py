@@ -113,6 +113,18 @@ def test_an_ordinary_message_is_neither(message):
     assert recall.question_kind(message) is None
 
 
+@pytest.mark.parametrize(("message", "named"), [
+    ("Did we already fix the gateway?", ("past_work", "did_we")),
+    ("What is left to do?", ("open_work", "left")),
+    ("What's left from what we did yesterday?", ("open_work", "left")),   # both tables match: open work is checked first
+    ("Thanks, that worked.", (None, None)),
+])
+def test_a_question_is_named_by_its_table_and_first_matching_pattern(message, named):
+    # The recall gate records the name, so a week's counts show which patterns fire (#163, #173).
+    assert recall.question(message) == named
+    assert recall.question_kind(message) == named[0]
+
+
 @pytest.mark.parametrize("message", ["what " * 50000, "did we " * 30000, "remember " * 30000, "- " * 100000])
 def test_a_long_message_is_matched_in_linear_time(message):
     # A pasted log reaches prefetch whole, and the recall gate will match every message the same way.

@@ -51,6 +51,7 @@ VISIBLE = [
     "scripts/deploy.py",
     "tests/test_new.py",
     ".github/workflows/new.yml",
+    ".github/dependabot.yml",
     "migrations/0002_next.sql",
     "custom_build/memory/new_module.py",
     "custom_build/memory/write_path.toml",

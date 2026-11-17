@@ -247,6 +247,50 @@ def fake_call_llm(**kwargs):
     assert report["stopped"] and _events(report, code) == 1
 
 
+# The first real pilot (#171): the provider refused the caller's settings on every call, recorded as an
+# extract.error with no limit in its reason; the run went on through every question and reported recall 0.
+ERRORING = WRAPPER.replace('''def fake_call_llm(**kwargs):''', '''def fake_call_llm(**kwargs):
+    raise ValueError("OAuth provider refuses conflicting native auth/backend overrides: ANTHROPIC_BASE_URL")''')
+
+
+def test_an_extraction_that_errors_on_every_call_stops_the_run_after_five_calls(tmp_path, ollama, typesafe):
+    data = tmp_path / "long.json"
+    data.write_text(json.dumps(_chatty(10)), encoding="utf-8")
+    report = run(tmp_path, data, ollama, typesafe, questions=1, replay_command=[sys.executable, "-c", ERRORING],
+                 sha256=hashlib.sha256(data.read_bytes()).hexdigest())
+    assert report["stopped"] == "extract.error" and _events(report, "extract.error") == 5
+
+
+def test_four_failures_in_the_first_five_calls_do_not_stop_the_run(tmp_path, ollama, typesafe):
+    # Guards the rule's edge (#171 review): only when all of a question's first five calls fail is the failure
+    # systematic; four failures and an answer is not.
+    typesafe.default = 0.9
+    data = tmp_path / "long.json"
+    data.write_text(json.dumps(_chatty(10)), encoding="utf-8")
+    flaky = WRAPPER.replace('''def fake_call_llm(**kwargs):''', '''calls = []
+
+def fake_call_llm(**kwargs):
+    calls.append(1)
+    if len(calls) <= 4:
+        raise ValueError("a failure that passes")
+    return answered(**kwargs)
+
+def answered(**kwargs):''')
+    report = run(tmp_path, data, ollama, typesafe, questions=1, replay_command=[sys.executable, "-c", flaky],
+                 sha256=hashlib.sha256(data.read_bytes()).hexdigest())
+    assert not report.get("stopped") and _events(report, "extract.error") == 4
+
+
+def test_the_report_lists_each_failure_reason_with_its_count(tmp_path, dataset, ollama, typesafe):
+    # A reason was found only by replaying a turn by hand: the databases are dropped after each question.
+    report = run(tmp_path, dataset, ollama, typesafe, replay_command=[sys.executable, "-c", ERRORING])
+    # The questions have 2, 1 and 2 turns, under five each: none stops, so the count adds across all three.
+    assert not report.get("stopped")
+    reason ="ValueError: OAuth provider refuses conflicting native auth/backend overrides: ANTHROPIC_BASE_URL"
+    assert report["failure_reasons"] == [{"code": "extract.error", "reason": reason, "count": 5}]
+    assert reason in (tmp_path / "report" / "report.md").read_text(encoding="utf-8")
+
+
 def test_a_failed_recall_is_counted_as_a_failure_never_as_a_correct_abstention(tmp_path, dataset, ollama, typesafe):
     typesafe.default = 0.9
     report = run(tmp_path, dataset, ollama, typesafe, test_env={"EVAL_TEST_ASK_FAILS": "1"})
