@@ -104,6 +104,8 @@ REASON_LIMIT = 500
 # Set per transaction, because Supabase's pooler drops a timeout given at connect (supavisor#1272).
 RECORD_TIMEOUT = "3s"
 CRASH_RECORD_WAIT = 8   # seconds the boundary wrapper waits for a crash's record: the connect and record bounds together
+CRASH_WORKERS = 3   # crash records left waiting on a store that does not answer, at most
+_crash_workers = threading.BoundedSemaphore(CRASH_WORKERS)
 # Postgres's and Supabase's pooler's texts for a refused login; psycopg gives no SQL state on connect.
 # shortcut: matches English server messages only, extend if a server runs another lc_messages.
 REFUSED_LOGIN = ("password authentication failed", "no pg_hba.conf entry", "pg_hba.conf rejects",
@@ -275,7 +277,8 @@ def boundary(source, connect, on_crash):
     insert the store refuses, the record is logged with events.write_failed, and `on_crash(exc)` is
     still returned. The record is written on a worker and waited for at most CRASH_RECORD_WAIT seconds, so a
     store that connects and then never answers cannot hold the hook; past the wait the loss is logged the
-    same way (#117). The other rows of section 2's table arrive with their entry points.
+    same way, though the row may still be written if the store answers later. At most CRASH_WORKERS such
+    workers are left waiting; a crash beyond them is logged as lost and not sent (#117). The other rows of section 2's table arrive with their entry points.
     """
     def wrap(guard):
         @functools.wraps(guard)
@@ -286,34 +289,51 @@ def boundary(source, connect, on_crash):
                 logger.exception("guard %s crashed", guard.__qualname__)
                 reason = _crash_reason(exc)
                 unhandled = on_crash is PROVIDER or isinstance(on_crash, Returns)
+                try:
+                    machine = source()   # a local read, on the hook's own thread
+                except Exception:   # the turn's block must not depend on naming the machine (rule F5)
+                    logger.exception("no machine name for a crash's record")
+                    machine = "unknown"
+                lost = {"code": "unhandled" if unhandled else "guard.crash", "source": machine, "project": None,
+                        "session_id": kwargs.get("session_id") or None, "turn": None, "result": "failed"}
 
                 def write():
-                    machine, conn = "unknown", None
                     try:
-                        machine = source()
-                        conn = connect()
-                    except psycopg.OperationalError as lost:
-                        _record_lost_connection(lost, machine)
-                    except Exception:   # the turn's block must not depend on reaching the store (rule F5)
-                        logger.exception("no connection to record guard.crash")
-                    with conn or contextlib.nullcontext():   # closes the connection opened for this record
-                        if unhandled:
-                            record(conn, "unhandled", "failed", source=machine, reason=reason,
-                                   session_id=kwargs.get("session_id"))
-                        else:
-                            record(conn, "guard.crash", "failed", source=machine, reason=reason,
-                                   session_id=kwargs.get("session_id") or None)   # Hermes passes "" for no session
+                        conn = None
+                        try:
+                            conn = connect()
+                        except psycopg.OperationalError as failed:
+                            _record_lost_connection(failed, machine)
+                        with conn or contextlib.nullcontext():   # closes the connection opened for this record
+                            if unhandled:
+                                record(conn, "unhandled", "failed", source=machine, reason=reason,
+                                       session_id=kwargs.get("session_id"))
+                            else:
+                                record(conn, "guard.crash", "failed", source=machine, reason=reason,
+                                       session_id=kwargs.get("session_id") or None)   # Hermes passes "" for no session
+                    except Exception as broken:   # nothing waits on this thread: log it, or it is lost (rule F5)
+                        logger.exception("the crash's record raised")
+                        _log_lost_write(lost, f"the record raised {type(broken).__name__}; the crash was: {reason}")
+                    finally:
+                        _crash_workers.release()
 
                 # On a worker, waited for only so long: a store that connects and then never answers is not
-                # bounded by any timeout of the connection's, and must not hold the hook (#117).
-                worker = threading.Thread(target=contextvars.copy_context().run, args=(write,),
-                                          name="custom_build.crash", daemon=True)
-                worker.start()
-                worker.join(CRASH_RECORD_WAIT)
-                if worker.is_alive():
-                    _log_lost_write({"code": "unhandled" if unhandled else "guard.crash", "result": "failed",
-                                     "reason": reason[:REASON_LIMIT], "session_id": kwargs.get("session_id") or None},
-                                    f"no answer from the store within {CRASH_RECORD_WAIT} seconds")
+                # bounded by any timeout of the connection's, and must not hold the hook (#117). Only a few
+                # may be left waiting, each holding a thread and a connection.
+                if _crash_workers.acquire(blocking=False):
+                    worker = threading.Thread(target=contextvars.copy_context().run, args=(write,),
+                                              name="custom_build.crash", daemon=True)
+                    try:
+                        worker.start()
+                    except RuntimeError:   # no thread to be had: the hook still answers
+                        _crash_workers.release()
+                        _log_lost_write(lost, f"no thread for the record; the crash was: {reason}")
+                    else:
+                        worker.join(CRASH_RECORD_WAIT)
+                        if worker.is_alive():   # it may still be recorded, if the store answers later
+                            _log_lost_write(lost, f"not recorded within {CRASH_RECORD_WAIT} seconds; the crash was: {reason}")
+                else:
+                    _log_lost_write(lost, f"{CRASH_WORKERS} records are already waiting on the store; the crash was: {reason}")
                 if on_crash is PROVIDER:
                     raise
                 return on_crash.value(exc) if isinstance(on_crash, Returns) else on_crash(exc)
