@@ -6,6 +6,8 @@ that reads their answers, are in `write_path.toml`.
 
 import http.client
 import json
+import re
+import urllib.error
 import urllib.request
 
 from . import write_path
@@ -16,6 +18,11 @@ DEADLINE = 2   # seconds for one judge request (ARCHITECTURE.md 3.6)
 
 class JudgeError(Exception):
     """`judge.error`: the judge could not be reached, answered with an HTTP error, or answered malformed."""
+
+
+class JudgeRefused(JudgeError):
+    """`judge.error`, for a request the judge answers with HTTP 400. The same request gets the same answer, so
+    the caller does not try it again (#251)."""
 
 
 class JudgeTimeout(Exception):
@@ -87,12 +94,26 @@ def _request(state, questions, *, url, key, model, timeout):
         raise JudgeTimeout(f"no answer within {timeout} seconds") from exc
     # urllib's URLError and HTTPError, and a dropped connection, are OSError; an answer cut off while it is
     # read is http.client's IncompleteRead (HTTPException).
+    except urllib.error.HTTPError as exc:
+        if exc.code == 400:   # the request itself is refused, such as one over the judge's context
+            raise JudgeRefused(f"HTTPError: {exc}{_cause(exc)}") from exc
+        raise JudgeError(f"HTTPError: {exc}"[:200]) from exc
     except (OSError, http.client.HTTPException) as exc:
         raise JudgeError(f"{type(exc).__name__}: {exc}"[:200]) from exc
     try:
         return json.loads(raw)["answers"]
     except (ValueError, KeyError, TypeError) as exc:   # not JSON, or without answers
         raise JudgeError(f"malformed answer: {type(exc).__name__}: {exc}"[:200]) from exc
+
+
+def _cause(error):
+    """": <error type>" from a refusal's body when it is a plain code name, such as max_tokens_exceeded, else
+    nothing: the body is the judge's text and could repeat the request's, so no other part of it is kept."""
+    try:
+        cause = json.loads(error.read())["detail"]["error_type"]
+    except (OSError, http.client.HTTPException, ValueError, KeyError, TypeError):
+        return ""
+    return f": {cause}" if isinstance(cause, str) and re.fullmatch(r"[a-z_]{1,60}", cause) else ""
 
 
 def supersedes(answers):

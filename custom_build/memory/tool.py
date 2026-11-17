@@ -422,8 +422,13 @@ def _with_store(machine, session_id, connect, work):
 
 
 def _save(conn, fact, *, embedder, judge_at, timeout=TIMEOUT):
-    """attempt(), with a fact the judge could not decide on queued for retry (store.gate_error)."""
+    """attempt(), with a fact the judge could not decide on queued for retry, or dropped when the judge
+    refused the request (store.gate_error)."""
     outcome = attempt(conn, fact, embedder=embedder, judge_at=judge_at, timeout=timeout)
+    if outcome.get("refused"):   # the same request would be refused again, so it is not queued (#251)
+        failures.record(conn, "store.gate_error", "failed", source=fact.source, session_id=fact.session_id,
+                        reason="the judge refused the request; the fact is dropped")
+        return {"error": "store.gate_error", "queued": False}
     if outcome.get("error") in ("judge.error", "judge.timeout"):
         queue.add(fact)
         failures.record(conn, "store.gate_error", "failed", source=fact.source, session_id=fact.session_id,
@@ -460,6 +465,9 @@ def attempt(conn, fact, *, embedder, judge_at, timeout=TIMEOUT):
     except judge.JudgeTimeout as exc:
         failures.record(conn, "judge.timeout", "failed", reason=str(exc), **fields)
         return {"error": "judge.timeout"}
+    except judge.JudgeRefused as exc:   # before JudgeError, which it is too
+        failures.record(conn, "judge.error", "failed", reason=str(exc), **fields)
+        return {"error": "judge.error", "refused": True}
     except judge.JudgeError as exc:
         failures.record(conn, "judge.error", "failed", reason=str(exc), **fields)
         return {"error": "judge.error"}
@@ -490,9 +498,16 @@ def _kept(fact, judge_at):
 
 def retry_queued(conn, *, embedder, judge_at):
     """Store each queued fact the judge can now decide on; one stored, or found already stored, is recorded
-    as degraded. The first judge failure ends the pass, so a judge still down costs one request a start."""
+    as degraded. The first judge failure ends the pass, so a judge still down costs one request a start; a
+    request the judge refuses is not such a failure, and its fact leaves the queue."""
     for row_id, fact, attempts in queue.waiting():
         outcome = attempt(conn, fact, embedder=embedder, judge_at=judge_at)
+        if outcome.get("refused"):   # no later pass can store it, and the judge is up: on to the next (#251)
+            queue.done(row_id)
+            failures.record(conn, "store.gate_error", "failed", source=fact.source, project=fact.project,
+                            session_id=fact.session_id, turn=fact.source_turn,
+                            reason="dropped on retry: the judge refused the request", detail={"attempts": attempts + 1})
+            continue
         if "error" in outcome:
             queue.again(row_id)   # still waiting; its failure is recorded under its own code
             if outcome["error"] in ("judge.error", "judge.timeout"):
