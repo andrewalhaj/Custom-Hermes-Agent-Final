@@ -430,8 +430,8 @@ def _save(conn, fact, *, embedder, judge_at, timeout=TIMEOUT):
 def attempt(conn, fact, *, embedder, judge_at, timeout=TIMEOUT):
     """store.store(), with each failure it expects recorded under its code and returned as {"error": code}.
     `timeout` bounds the embedding: recall's 5 seconds by default, for a store inside the turn (store_fact, the
-    mirror) or a session's start (the queue's retry); extraction and digests, off the turn, pass the store's
-    longer limit (#238)."""
+    mirror) or a session's start (the queue's retry); extraction and digests pass the store's longer limit,
+    which a digest at a compression, written inline, can hold the turn for (#238)."""
     fields = {"source": fact.source, "project": fact.project, "session_id": fact.session_id, "turn": fact.source_turn}
     try:
         if fact.gate is not None or fact.kind == "digest":   # gated: unless the same text is already live
