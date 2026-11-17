@@ -300,6 +300,31 @@ def test_the_report_lists_each_failure_reason_with_its_count(tmp_path, dataset, 
     assert reason in (tmp_path / "report" / "report.md").read_text(encoding="utf-8")
 
 
+def test_a_miss_the_score_floor_cut_is_counted_as_cut_by_the_floor(tmp_path, dataset, ollama, typesafe):
+    # #234: the gate keeps each fact, but the judge scores every candidate under the floor (0.30), so recall
+    # brings nothing; the evidence was stored and found, then cut.
+    typesafe.answers, typesafe.default = {"worth_keeping": 0.9, "supported": 0.9}, 0.1
+    report = run(tmp_path, dataset, ollama, typesafe)
+    assert report["answerable"]["recall_at_5"] == 0.0
+    assert report["misses"] == {"cut_by_floor": 2}
+    first = report["per_question"][0]
+    assert (first["evidence_stored"], first["pool_hit"], first["pool_hit_score"]) == (1, 1, 0.1)
+    assert "Misses: 2 cut by the floor" in (tmp_path / "report" / "report.md").read_text(encoding="utf-8")
+
+
+def test_a_miss_whose_evidence_was_never_stored_is_counted_as_not_stored(tmp_path, dataset, ollama, typesafe):
+    typesafe.default = 0.9
+    extracting_nothing = WRAPPER.replace('if ("vim" in user or "Porto" in user)', 'if False')
+    report = run(tmp_path, dataset, ollama, typesafe, replay_command=[sys.executable, "-c", extracting_nothing])
+    assert report["misses"] == {"not_stored": 2}
+    assert report["per_question"][0]["evidence_stored"] == 0
+
+
+def test_a_run_with_no_miss_counts_none(tmp_path, dataset, ollama, typesafe):
+    typesafe.default = 0.9
+    assert run(tmp_path, dataset, ollama, typesafe)["misses"] == {}
+
+
 def test_a_failed_recall_is_counted_as_a_failure_never_as_a_correct_abstention(tmp_path, dataset, ollama, typesafe):
     typesafe.default = 0.9
     report = run(tmp_path, dataset, ollama, typesafe, test_env={"EVAL_TEST_ASK_FAILS": "1"})
