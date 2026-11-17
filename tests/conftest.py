@@ -149,6 +149,7 @@ class FakeTypeSafe(http.server.ThreadingHTTPServer):
         self.refuse_new = None   # answer 422 when the new fact contains this text
         self.default = None      # the probability for a question `answers` does not name, such as a rerank's c0, c1...
         self.choices = {}        # the option a choice question picks, by question name; else its first option
+        self.detail = "refused"   # an error answer's `detail`; TypeSafe's own is {"error_type": ...} (#251)
         self.requests = []
         self.url = f"http://127.0.0.1:{self.server_address[1]}"
 
@@ -174,7 +175,7 @@ class _TypeSafeHandler(http.server.BaseHTTPRequestHandler):
                         option: 0.9 if option == pick else round(0.1 / (len(options) - 1), 4) for option in options}}
             payload = {"model": body["model"], "answers": answers, "usage": {"input_tokens": 1, "output_tokens": 1}}
         else:
-            payload = {"detail": "refused"}
+            payload = {"detail": self.server.detail}
         data = self.server.raw if self.server.raw is not None else json.dumps(payload).encode()
         self.send_response(422 if refused else self.server.status)
         self.send_header("Content-Type", "application/json")
