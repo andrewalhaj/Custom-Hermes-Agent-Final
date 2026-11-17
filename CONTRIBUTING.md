@@ -272,7 +272,7 @@ gh api repos/<owner>/<repo>/pulls/<n>/comments      # comments on lines
 - **C7. Data this repository did not create is not ours to change.** In a database that holds tables, functions or data that this repository's migrations did not create, create new objects under new names, and never alter, rename or drop the existing ones. Objects this repository created change only through new forward migrations. Do not connect with a credential that can delete until a maintainer confirms an export exists.
 - **C8. Retrieval changes come with numbers.** A change to chunking, embedding, fusion, reranking, recall delivery or any default in ARCHITECTURE.md section 3.6 reports the eval-set results before and after (ARCHITECTURE.md section 3.8).
 - **C9. Code taken from elsewhere meets these rules before it merges.** Code copied or ported from another project, an earlier version of this build, or a generated draft has every handler narrowed to a named error with a failure code, or removed, in the same pull request.
-- **C10. A migration works with the plugin deployed before it.** A migration is applied to the shared store separately from each host's plugin update, and before it (OPERATIONS.md section 7); reinstalling an older plugin does not undo it. So a migration adds (a table, a column, a function, a grant) and takes away nothing a deployed plugin uses. Renaming, retyping or dropping something a deployed plugin uses takes three pull requests: add the new shape, move the code to it, then remove the old shape once no host runs a plugin that uses it. A pull request with a migration says why the plugin on `main` before it still works.
+- **C10. A migration works with the plugin deployed before it.** A migration is applied to the shared store separately from each host's plugin update, and before it (OPERATIONS.md section 7); reinstalling an older plugin does not undo it. So a migration adds only what an older plugin can ignore (a table, a nullable column, a new function, a grant), and changes or takes away nothing a deployed plugin uses: no required column, no tighter constraint or policy, no replaced function under the same name. Renaming, retyping or dropping something a deployed plugin uses takes three pull requests: add the new shape, move the code to it, then remove the old shape once no host runs a plugin that uses it. A pull request with a migration says why the plugin on `main` before it still works; one that removes something also says that no host runs a plugin that uses it, because a host changes only when a commit is named and can be behind `main` (OPERATIONS.md section 3).
 
 ### 5.2 Why error handling gets its own rules
 
@@ -338,6 +338,7 @@ The reviewer checks what the lint cannot:
 - A `try` that covers more lines than it needs (C1).
 - A handler or fallback with no failure code (F1).
 - "Never raises", "fail open" or "best-effort" with nothing after it (C5).
+- A migration that an older deployed plugin cannot ignore, or that removes something a deployed plugin still uses (C10).
 
 ## 6. Failure rules
 
