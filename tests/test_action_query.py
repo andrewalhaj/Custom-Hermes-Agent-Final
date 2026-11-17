@@ -44,6 +44,10 @@ if mode == "crash":
     def crash(*args, **kwargs):
         raise KeyError("boom")
     modules["search"].candidates = crash
+if mode == "crash-hook":   # in the hook itself, outside the action query's thread
+    def crash(*args, **kwargs):
+        raise KeyError("boom")
+    modules["tool"].action_notes = crash
 holder = None
 if mode == "stall":   # every read of facts now waits on this lock
     import psycopg
@@ -54,7 +58,9 @@ results = invoke_hook("pre_llm_call", session_id="s1", task_id="t1", turn_id="u1
                       is_first_turn=False, model="m", platform="cli", parent_session_id="", sender_id="")
 if holder is not None:
     holder.rollback()
-context = [r["context"] for r in results if isinstance(r, dict) and r.get("context")]
+    import time
+    time.sleep(2)   # the timeout's record is written off the turn's path; let it land before the process ends
+context =[r["context"] for r in results if isinstance(r, dict) and r.get("context")]
 print(json.dumps({"context": context, "results": results}), flush=True)
 """
 
@@ -89,11 +95,11 @@ def actions():
     return tomllib.loads(CONFIG.read_text(encoding="utf-8"))["actions"]
 
 
-def _add(owner, body, vector, build):
+def _add(owner, body, vector, build, *, kind="fact"):
     owner.execute(
         "insert into memory.facts (body, body_hash, kind, origin, basis, project, source, embedding, embedding_model)"
-        " values (%s, %s, 'fact', 'explicit', 'user_stated', %s, 'host-a', %s, %s)",
-        (body, uuid.uuid4().hex, PROJECT, str(vector), build))
+        " values (%s, %s, %s, %s, 'user_stated', %s, 'host-a', %s, %s)",
+        (body, uuid.uuid4().hex, kind, "digest" if kind == "digest" else "explicit", PROJECT, str(vector), build))
 
 
 def turn(home, db, ollama, typesafe, *, mode=None, message=MESSAGE, history=HISTORY):
@@ -173,15 +179,45 @@ def test_a_search_past_the_action_querys_deadline_is_recall_timeout(home, db, ol
     typesafe.answers, typesafe.default = {"asks_for_work": 0.9}, 0.5
     seen = turn(home, db, ollama, typesafe, mode="stall")
     assert seen["context"] == [FAILED.format("recall.timeout")]
+    assert "recall.timeout" in _codes(db)   # written off the turn's path (#174 review)
 
 
-def test_a_crash_is_recorded_as_unhandled_and_the_turn_goes_ahead(home, db, ollama, typesafe):
+@pytest.mark.parametrize("answers", [
+    {"action": {"type": "choice", "choice": ["change_code"]}, "asks_for_work": {"type": "noul", "noul": 0.9}},
+    {"action": {"type": "choice", "choice": "change_code"}, "asks_for_work": {"type": "noul", "noul": None}},
+], ids=["pick-not-text", "probability-not-a-number"])
+def test_a_malformed_routing_answer_is_a_judge_error(home, db, ollama, typesafe, answers):
+    # #174 review: an answer of the wrong type was recorded as unhandled, not as the judge's error.
+    switch_on(home)
+    typesafe.default = 0.5   # so the fake builds its answer, which `raw` then replaces; else it drops the connection
+    typesafe.raw = json.dumps({"model": "jev-1.14.0", "answers": answers}).encode()
+    seen = turn(home, db, ollama, typesafe)
+    assert seen["context"] == [FAILED.format("judge.error")]
+    assert _codes(db) == ["judge.error"]
+
+
+@pytest.mark.parametrize("mode", ["crash", "crash-hook"])
+def test_a_crash_is_recorded_as_unhandled_and_the_turn_goes_ahead(home, db, ollama, typesafe, mode):
+    # In the action query's thread, or in the hook itself (#174 review): each boundary wrapper's own path.
     switch_on(home)
     typesafe.answers, typesafe.default = {"asks_for_work": 0.9}, 0.5
-    seen = turn(home, db, ollama, typesafe, mode="crash")
+    seen = turn(home, db, ollama, typesafe, mode=mode)
     assert seen["context"] == [FAILED.format("unhandled")]
     assert "unhandled" in _codes(db)
     assert not any(isinstance(r, dict) and r.get("action") == "block" for r in seen["results"])
+
+
+def test_at_most_one_digest_is_among_the_notes(home, db, ollama, typesafe):
+    switch_on(home)
+    typesafe.answers, typesafe.default, typesafe.choices = {"asks_for_work": 0.9}, 0.5, {"action": "change_code"}
+    ollama.vectors = {actions()["change_code"]: BASE}
+    with psycopg.connect(db["owner"], autocommit=True) as owner:
+        for n in range(3):
+            _add(owner, f"A digest of a parser session, number {n}.", BASE, ollama.build, kind="digest")
+        _add(owner, "Run the parser tests with pytest -k parser.", BASE, ollama.build)
+    [context] = turn(home, db, ollama, typesafe)["context"]
+    notes = context.splitlines()[1:]
+    assert len(notes) == 2 and sum("A digest of a parser session" in note for note in notes) == 1
 
 
 def test_a_secret_in_the_message_or_the_previous_reply_never_reaches_the_judge(home, db, ollama, typesafe):
