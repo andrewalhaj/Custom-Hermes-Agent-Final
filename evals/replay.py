@@ -49,25 +49,37 @@ STOP = ("select code from memory.events where code in ('extract.refused', 'diges
         " order by id limit 1")
 
 
-def _stopped():
+# A failure that repeats: when every one of a question's first extractions failed, whatever the reason, the
+# rest would fail the same way and the run would measure nothing (#171).
+FIRST_CALLS = 5
+
+
+def _stopped(synced):
+    """The code to stop at, after `synced` turns of this question."""
     with psycopg.connect(os.environ["CUSTOM_BUILD_DATABASE_URL"]) as conn:
-        row = conn.execute(STOP).fetchone()
-    return row[0] if row else None
+        if row := conn.execute(STOP).fetchone():
+            return row[0]
+        if synced == FIRST_CALLS and conn.execute(
+                "select count(*) from memory.events where code = 'extract.error'").fetchone()[0] >= FIRST_CALLS:
+            return "extract.error"
+    return None
 
 
 def ingest(provider, home, entry):
     """Replay the history, sessions in date order; the code to stop at, as soon as one is recorded, or None."""
     sessions = sorted(zip(entry["haystack_dates"], entry["haystack_session_ids"], entry["haystack_sessions"],
                           strict=True), key=lambda item: datetime.datetime.strptime(item[0], DATE_FORMAT))
+    synced = 0
     for _, session_id, session in sessions:
         provider.initialize(session_id=session_id, hermes_home=home, platform="cli", agent_context="primary")
         for number, (user, reply, messages) in enumerate(turns(session), start=1):
             provider.on_turn_start(number, user)
             provider.sync_turn(user, reply, session_id=session_id, messages=messages)
-            if stopped := _stopped():
+            synced += 1
+            if stopped := _stopped(synced):
                 return stopped
         provider.on_session_end([{"role": message["role"], "content": message["content"]} for message in session])
-        if stopped := _stopped():
+        if stopped := _stopped(synced):
             return stopped
     return None
 
