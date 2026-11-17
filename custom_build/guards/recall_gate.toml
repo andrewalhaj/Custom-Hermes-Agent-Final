@@ -4,30 +4,40 @@
 # track builds it, and counts a match in either table as a question about past work, so the search and the
 # gate always agree.
 # Each is a Python regular expression, matched case-insensitively against the user's message. They are
-# narrow on purpose: an open-work match replaces the similarity search, and the gate will require searches
-# on every past-work match, so a pattern that fires on an ordinary message costs a turn its recall or adds
-# work. Open work is checked first. A change here is a pull request, with tests/test_recall_questions.py
-# updated, and eval-set numbers once the eval set exists (CONTRIBUTING.md rule C8).
+# precise on purpose, and miss some phrasings: an open-work match replaces the similarity search, and the
+# gate will require searches on every past-work match, so a pattern that fires on an ordinary message costs
+# a turn its recall or adds work, while a miss costs only the widening. Open work is checked first. A change
+# here is a pull request, with tests/test_recall_questions.py updated, and eval-set numbers once the eval
+# set exists (CONTRIBUTING.md rule C8).
 
-# Past work: we or I in the past, asked about. Not "you": that is this session, which needs no memory.
+# Past work: "we" or "I" asking about deciding, discussing, trying or fixing before. Not "you": that is
+# this session, which needs no memory. Not a generic verb such as "do", "set", "use" or "see": "what did I
+# do wrong?" asks about the code in front of the agent.
 [past_work]
-what_did = '''(?i)\bwhat\s+did\s+(?:we|i)\s+(?:decide|say|do|agree|choose|pick|find|change|conclude|settle)\b'''
-did_we = '''(?i)\b(?:did|have|had)\s+we\s+(?:already\s+|ever\s+)?(?:decide|do|done|fix|fixed|try|tried|set|discuss|discussed|talk|talked|say|said|agree|agreed|change|changed|install|installed|pin|pinned|use|used|build|built|see|seen)\b'''
+what_did = '''(?i)\bwhat\s+did\s+(?:we|i)\s+(?:decide|say|agree|choose|pick|find|change|conclude|settle|land)\b'''
+did_we = '''(?i)\b(?:did|have|had)\s+we\s+(?:already\s+|ever\s+)?(?:decide|decided|discuss|discussed|talk|talked|agree|agreed|settle|settled|try|tried|fix|fixed|change|changed|pin|pinned)\b'''
+seen_before = '''(?i)\b(?:have|did)\s+we\s+(?:seen|hit|had|run\s+into)\b[^.?!\n]{0,60}?\b(?:before|previously)\b'''
+negated = '''(?i)\b(?:didn['’]?t|haven['’]?t|weren['’]?t|wasn['’]?t)\s+we\b'''
 working_on = '''(?i)\bwhat\s+(?:were|was)\s+(?:we|i)\s+(?:working\s+on|doing)\b'''
-where_were_we = '''(?i)\bwhere\s+(?:were\s+we|did\s+we\s+(?:leave|stop))\b|\bwe\s+(?:left|leave)\s+off\b'''
+where_were_we = '''(?i)\bwhere\s+were\s+we\s*[?.!？。”"’]*\s*$|\bwhere\s+did\s+we\s+(?:leave|stop)\s+off\b|\bwhere\s+we\s+left\s+off\b|\bwe\s+(?:left|leave)\s+off\s*[?.!？。”"’,]'''
 remind_me = '''(?i)\bremind\s+me\s+(?:what|how|why|where|when|which)\s+(?:we|i)\b'''
-remember = '''(?i)\b(?:do|can|did)\s+you\s+(?:still\s+)?(?:remember|recall)\b|^\W*remember\b(?!\s+to\b)[^\n]*\?\s*$'''
-last_time = '''(?i)\b(?:we|i)\b[^.?!\n]{0,60}\b(?:last\s+time|last\s+session|previous\s+session|earlier|before|yesterday|previously)\s*\?'''
+remember = '''(?i)\b(?:do|can|did)\s+you\s+(?:still\s+)?(?:remember|recall)\s+(?:when|(?:what|how|why|where|which|that)\s+(?:we|i)\b|the\s+[\w -]{1,30}?\s+(?:we|i)\b)|^\W*remember\s+(?:when|(?:what|how|why|where|that)\s+(?:we|i)\b|the\s+[\w -]{1,30}?\s+(?:we|i)\b)'''
+last_time = '''(?i)\b(?:we|i)\b[^.?!\n]{0,60}\b(?:last\s+time|last\s+session|previous\s+session|earlier|before|yesterday|previously)\b[^.?!\n]{0,15}\?'''
 
-# Open work: the whole message is the question, with at most a short lead-in and a short "on/for/from ..."
-# tail, so "what is pending in kubectl ..." or "explain what next() does" do not count.
+# Open work: the whole message is the question, after at most a short lead-in ("great, thanks."), with at
+# most a short "on/from/before ..." tail, so "what is open on port 5432?" or "explain what next() does" do not
+# count. Each ends in at most closing punctuation, straight or curly quotes, or a full-width mark.
 [open_work]
-left = '''(?i)^\W*(?:(?:so|ok|okay|and|then|alright)\W+)?what(?:['’]?s|\s+is|\s+are)?\s+(?:still\s+)?(?:left|remaining|outstanding|open)(?:\s+to\s+(?:do|be\s+done))?(?:\s+(?:on|for|from|in|before)\s+[\w .'’-]{1,40})?\s*[?.!]*\s*$'''
-else_left = '''(?i)^\W*what\s+else\s+(?:is|are)\s+(?:still\s+)?(?:left|remaining|open)(?:\s+to\s+do)?\s*[?.!]*\s*$'''
-still_to_do = '''(?i)^\W*(?:(?:so|ok|okay|and|then|alright)\W+)?what(?:['’]?s|\s+is|\s+are)?\s+(?:still\s+)?(?:left\s+)?to\s+(?:do|be\s+done)(?:\s+(?:on|for|from|in|before)\s+[\w .'’-]{1,40})?\s*[?.!]*\s*$'''
-remains = '''(?i)^\W*what\s+(?:else\s+)?(?:still\s+)?remains(?:\s+to\s+(?:do|be\s+done))?\s*[?.!]*\s*$'''
-next = '''(?i)^\W*(?:(?:so|ok|okay|and|then|alright)\W+)?what(?:['’]?s|s|\s+is)?\s+(?:up\s+)?next\s*[?.!]*\s*$'''
-anything_left = '''(?i)^\W*(?:is\s+there\s+)?anything\s+(?:else\s+)?(?:left|remaining|open)(?:\s+to\s+do)?\s*[?.!]*\s*$'''
-still_need = '''(?i)^\W*what\s+do\s+(?:we|i)\s+still\s+(?:need|have)\s+to\s+do\b[^\n]{0,60}$'''
-open_items = '''(?i)^\W*(?:(?:any|are\s+there(?:\s+any)?|list|show(?:\s+me)?)\s+)?(?:the\s+)?open\s+items(?:\s+(?:on|for|from|in)\s+[\w .'’-]{1,40})?\s*[?.!]*\s*$'''
-todo_list = '''(?i)^\W*what(?:['’]?s|\s+is)\s+on\s+(?:the|our|my)\s+to-?do\s+list\s*[?.!]*\s*$'''
+left = '''(?i)^\W*(?:(?:so|ok|okay|and|then|alright|great|thanks|cool|nice|perfect)\W+){0,3}what(?:['’]?s|\s+is|\s+are)?\s+(?:still\s+)?(?:left|remaining|outstanding)(?:\s+to\s+(?:do|be\s+done))?(?:\s+(?:on|from|before)\s+[\w .'’-]{1,30}|\s+for\s+(?:us|me|today|now))?\s*[?.!？。”"’]*\s*$'''
+else_left = '''(?i)^\W*(?:(?:so|ok|okay|and|then|alright|great|thanks|cool|nice|perfect)\W+){0,3}what\s+else\s+(?:is|are)\s+(?:still\s+)?(?:left|remaining)(?:\s+to\s+do)?\s*[?.!？。”"’]*\s*$'''
+still_to_do = '''(?i)^\W*(?:(?:so|ok|okay|and|then|alright|great|thanks|cool|nice|perfect)\W+){0,3}what(?:['’]?s|\s+is|\s+are)?\s+(?:still\s+)?(?:left\s+)?to\s+(?:do|be\s+done)(?:\s+(?:on|from|before)\s+[\w .'’-]{1,30})?\s*[?.!？。”"’]*\s*$'''
+remains = '''(?i)^\W*(?:(?:so|ok|okay|and|then|alright|great|thanks|cool|nice|perfect)\W+){0,3}what\s+(?:else\s+)?(?:still\s+)?remains(?:\s+to\s+(?:do|be\s+done))?\s*[?.!？。”"’]*\s*$'''
+next = '''(?i)^\W*(?:(?:so|ok|okay|and|then|alright|great|thanks|cool|nice|perfect)\W+){0,3}what(?:['’]?s|s|\s+is|\s+are)?\s+(?:the\s+|our\s+)?(?:up\s+)?next(?:\s+steps?)?\s*[?.!？。”"’]*\s*$'''
+next_steps = '''(?i)^\W*(?:(?:so|ok|okay|and|then|alright|great|thanks|cool|nice|perfect)\W+){0,3}next\s+steps?\s*[?.!？。”"’]*\s*$'''
+pending = '''(?i)^\W*(?:(?:so|ok|okay|and|then|alright|great|thanks|cool|nice|perfect)\W+){0,3}what(?:['’]?s|\s+is|\s+are)\s+(?:still\s+)?pending\s*[?.!？。”"’]*\s*$'''
+remaining_tasks = '''(?i)^\W*(?:(?:so|ok|okay|and|then|alright|great|thanks|cool|nice|perfect)\W+){0,3}what\s+are\s+the\s+remaining\s+(?:tasks|items|steps)\s*[?.!？。”"’]*\s*$'''
+still_needs = '''(?i)^\W*(?:(?:so|ok|okay|and|then|alright|great|thanks|cool|nice|perfect)\W+){0,3}what\s+still\s+needs\s+(?:doing|to\s+be\s+done)\s*[?.!？。”"’]*\s*$'''
+anything_left = '''(?i)^\W*(?:(?:so|ok|okay|and|then|alright|great|thanks|cool|nice|perfect)\W+){0,3}(?:is\s+there\s+)?anything\s+(?:else\s+)?(?:left|remaining)(?:\s+to\s+do)?\s*[?.!？。”"’]*\s*$'''
+still_need = '''(?i)^\W*(?:(?:so|ok|okay|and|then|alright|great|thanks|cool|nice|perfect)\W+){0,3}what\s+do\s+(?:we|i)\s+still\s+(?:need|have)\s+to\s+do\s*[?.!？。”"’]*\s*$'''
+open_items = '''(?i)^\W*(?:(?:so|ok|okay|and|then|alright|great|thanks|cool|nice|perfect)\W+){0,3}(?:(?:any|are\s+there(?:\s+any)?)\s+)?(?:the\s+)?open\s+items(?:\s+(?:on|from)\s+[\w .'’-]{1,30})?\s*[?.!？。”"’]*\s*$'''
+todo_list = '''(?i)^\W*(?:(?:so|ok|okay|and|then|alright|great|thanks|cool|nice|perfect)\W+){0,3}what(?:['’]?s|\s+is)\s+on\s+(?:the|our|my)\s+to-?do\s+list\s*[?.!？。”"’]*\s*$'''
