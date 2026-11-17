@@ -60,7 +60,8 @@ def store(conn, fact, *, embedder, judge, timeout):
     # By time of writing, not turn: a resumed session counts its turns again from its compressed history.
     if live and fact.written_at and live[1] > datetime.datetime.fromisoformat(fact.written_at):
         return {"dropped": "a later digest of the session is live"}
-    [vector] = embedder.embed(conn, [fact.body], timeout=timeout)
+    # Its first characters only, so a long text finishes on a CPU-only host; the whole body is stored (#238).
+    [vector] = embedder.embed(conn, [fact.body[:write_path.load()["embed"]["store_chars"]]], timeout=timeout)
     if fact.kind == "digest":
         # A digest is never compared with facts; it replaces only its session's earlier digest (#155, #156).
         old = live[0] if live else None

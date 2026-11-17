@@ -29,7 +29,7 @@ from . import (
 )
 
 BASES = ("user_stated", "tool_observed", "assistant_inferred")
-TIMEOUT = 5   # seconds for each answer from Ollama while a fact is stored
+TIMEOUT = 5   # seconds for each answer from Ollama in recall; storing has its own, write_path's store_timeout (#238)
 RERANK_MARGIN = 0.3   # seconds kept back from the recall deadline, to deliver the notes after a rerank
 ACTION_QUERY = pathlib.Path(__file__).resolve().parent / "action_query.toml"
 
@@ -436,7 +436,8 @@ def attempt(conn, fact, *, embedder, judge_at):
                 return {"already_stored": existing}
             if not _kept(fact, judge_at):
                 return _dropped(conn, fact, "the judge did not keep it", fields)
-        outcome = store.store(conn, fact, embedder=embedder, judge=judge_at, timeout=TIMEOUT)
+        outcome = store.store(conn, fact, embedder=embedder, judge=judge_at,
+                              timeout=write_path.load()["embed"]["store_timeout"])   # off the turn's path (#238)
         if "dropped" in outcome:   # a later digest of the session is live, or another committed first (#156)
             return _dropped(conn, fact, outcome["dropped"], fields)
         return outcome

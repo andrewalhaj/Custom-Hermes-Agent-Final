@@ -42,7 +42,9 @@ def newest_digests(conn, project, count):
 def candidates(conn, embedder, query, project, *, wanted, timeout):
     """The whole fused candidate pool for `wanted` results (3.6), best first, for delivery's slot rules."""
     limits = write_path.load()["recall"]
-    [vector] = embedder.embed(conn, [query], timeout=timeout)
+    # Only the query's first characters are embedded, so it finishes inside recall's limit on a CPU-only host;
+    # the word search below still reads the whole message (#238).
+    [vector] = embedder.embed(conn, [query[:write_path.load()["embed"]["recall_chars"]]], timeout=timeout)
     pool = max(limits["pool_factor"] * wanted, limits["pool_min"])
     rows = conn.execute(
         "select body, kind, origin, basis, created_at, last_verified_at, by_meaning, by_words"
