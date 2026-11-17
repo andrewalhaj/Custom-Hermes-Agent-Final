@@ -145,7 +145,10 @@ def hermes_home(tmp, template, judge_model):
     config = yaml.safe_load(config_file.read_text(encoding="utf-8")) if config_file.exists() else {}
     config = config or {}
     config.setdefault("memory", {})["provider"] = "custom_build"
-    entries = config.setdefault("plugins", {}).setdefault("entries", {})
+    plugins = config.setdefault("plugins", {})
+    # Enabled as an agent host enables it: only then does it register its own route for extraction (#148)
+    plugins["enabled"] = sorted({*(plugins.get("enabled") or ()), "custom_build"})
+    entries = plugins.setdefault("entries", {})
     entries.setdefault("custom_build", {})["settings"] = {"machine_name": "eval", "judge_model": judge_model}
     config_file.write_text(yaml.safe_dump(config), encoding="utf-8")
     work = tmp / "work"
@@ -191,7 +194,10 @@ def one(entry, *, postgres, command, template, judge_model, judge_key):
         home, work = hermes_home(tmp, template, judge_model)
         question = tmp / "question.json"
         question.write_text(json.dumps(entry), encoding="utf-8")
-        env = {**os.environ, "HERMES_HOME": str(home), "PYTHONPATH": str(ROOT), "CUSTOM_BUILD_DATABASE_URL": agent,
+        # Not the caller's Claude or Anthropic settings (a Claude Code shell's base URL, account and organisation):
+        # the subscription provider refuses them, and its own setting picks the eval's login (#170).
+        inherited = {name: value for name, value in os.environ.items() if not name.startswith(("ANTHROPIC", "CLAUDE"))}
+        env = {**inherited, "HERMES_HOME": str(home), "PYTHONPATH": str(ROOT), "CUSTOM_BUILD_DATABASE_URL": agent,
                "TYPESAFE_API_KEY": judge_key or os.environ.get("TYPESAFE_API_KEY", "")}
         stopped = replay(command, "ingest", question, home, work, env)["stopped"]
         with psycopg.connect(owner, autocommit=True) as conn:   # each row dated by its session (for recency)

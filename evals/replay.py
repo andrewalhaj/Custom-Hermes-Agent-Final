@@ -17,12 +17,15 @@ import sys
 
 import plugins.memory
 import psycopg
+from hermes_cli.plugins import discover_plugins
 
 DATE_FORMAT = "%Y/%m/%d (%a) %H:%M"   # LongMemEval's haystack_dates
 
 
 def _modules():
-    """The plugin's modules as the provider load imported them, by their last name (for a test's fakes)."""
+    """The plugin's modules as the provider load imported them, by their last name (for a test's fakes). The
+    plugin is in memory twice, from discovery and from the provider load; the later load wins the name, so
+    this relies on main() discovering plugins before it loads the provider."""
     return {name.rsplit(".", 1)[-1]: module for name, module in sys.modules.items() if "custom_build" in name}
 
 
@@ -80,6 +83,7 @@ def main(argv, patch=None):
     """`patch(modules)` runs after the provider loads; a test points the plugin at its fakes with it."""
     mode, question, home = argv
     entry = json.loads(pathlib.Path(question).read_text(encoding="utf-8"))
+    discover_plugins()   # as Hermes starts: the plugin registers its extraction and digest routes
     provider = plugins.memory.load_memory_provider("custom_build")
     if patch:
         patch(_modules())
