@@ -155,9 +155,9 @@ def test_the_replay_never_inherits_the_callers_claude_or_anthropic_settings(
 def test_without_yes_the_runner_only_estimates_what_a_run_would_call(tmp_path, dataset, ollama, typesafe):
     report = run(tmp_path, dataset, ollama, typesafe, yes=False)
     # 5 user turns, each an extraction call; 5 sessions, each ending in a digest when long enough (none is);
-    # the judge at least once per question, for the rerank (#167 review).
+    # the judge at least twice per question: the rerank (#167 review), and the scores before the floor (#234).
     assert report == {"estimate": {"questions": 3, "user_turns": 5, "sessions": 5, "haiku_calls_at_least": 5,
-                                   "judge_calls_at_least": 3}}
+                                   "judge_calls_at_least": 6}}
     assert typesafe.requests == [] and ollama.embedded == []
 
 
@@ -323,6 +323,35 @@ def test_a_miss_whose_evidence_was_never_stored_is_counted_as_not_stored(tmp_pat
 def test_a_run_with_no_miss_counts_none(tmp_path, dataset, ollama, typesafe):
     typesafe.default = 0.9
     assert run(tmp_path, dataset, ollama, typesafe)["misses"] == {}
+
+
+def _missed(**fields):
+    """An answerable question's result that missed, with `fields` changed."""
+    return {"first_hit": None, "codes": [], "evidence_rows": 1, "evidence_stored": 1, "pool": True, "pool_hit": 1,
+            "pool_best_score": 0.1, **fields}
+
+
+@pytest.mark.parametrize("fields, cause", [
+    ({"evidence_rows": 0, "evidence_stored": 0}, "not_stored"),
+    ({"evidence_stored": 0}, "replaced"),   # stored, then superseded or retired (#234 review)
+    ({"pool": False, "pool_hit": None, "pool_best_score": None}, "unknown"),   # the second fetch failed
+    ({"pool_hit": None, "pool_best_score": None}, "not_in_pool"),
+    ({"codes": ["rerank.fallback"]}, "fused_order"),   # recall's judge failed: no floor ran (#234 review)
+    ({"pool_best_score": None}, "unscored"),   # the second judge request failed (#234 review)
+    ({"pool_best_score": 0.1}, "cut_by_floor"),
+    ({"pool_best_score": 0.7}, "above_floor"),
+    ({"first_hit": 7}, "below_rank_5"),   # a past-work question's hit at 6 to 8 still misses recall@5
+])
+def test_each_miss_is_put_down_to_one_cause(fields, cause):
+    assert longmemeval._miss(_missed(**fields), 0.3) == cause
+
+
+def test_the_best_evidence_score_decides_not_the_first_candidates():
+    # #234 review: recall sorts by score, so an evidence candidate further down with a higher score is the one
+    # that counts; the first evidence candidate's 0.1 must not make it "cut by the floor".
+    assert longmemeval._best_score([{"score": 0.1}, {"score": 0.9}, {"score": 0.7}], [1, 3]) == 0.7
+    assert longmemeval._best_score([{"score": None}, {"score": 0.4}], [1, 2]) == 0.4
+    assert longmemeval._best_score([{"score": None}], [1]) is None
 
 
 def test_a_failed_recall_is_counted_as_a_failure_never_as_a_correct_abstention(tmp_path, dataset, ollama, typesafe):
