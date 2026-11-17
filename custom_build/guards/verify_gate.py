@@ -60,29 +60,32 @@ def _named(config, args, task_id):
 
 
 def changes(config, tool_name, args, task_id):
-    """(rule, target) for each listed file or setting the call would change. The target is the file's path,
-    or the setting and what is done to it: never a terminal command, whose arguments can carry a credential
-    that no redactor knows (#115)."""
+    """(rule, target, file) for each listed file or setting the call would change. The target is the file's
+    path, or the setting and what is done to it: never a terminal command, whose arguments can carry a
+    credential that no redactor knows (#115). `file` is the path a file tool will write, else None: a
+    command's words do not say reliably which file of a listed folder it touches."""
     found = []
     if tool_name in FILE_TOOLS:
         from agent.tool_dispatch_helpers import _extract_file_mutation_targets
 
         _, paths = _paths(config)
         for target in _extract_file_mutation_targets(tool_name, args):
-            found += _listed(paths, target, task_id)
+            found += [(name, resolved, resolved) for name, resolved in _listed(paths, target, task_id)]
     elif tool_name == TERMINAL and isinstance(command := args.get("command"), str):
         names, writes = _named(config, args, task_id)
         paths = _paths(config)[1]
-        found += [(name, os.path.realpath(paths[name])) for name in names if writes]
-        found += [(match[2], f"hermes config {match[1]} {match[2]}") for match in HERMES_CONFIG.finditer(command)
+        found += [(name, os.path.realpath(paths[name]), None) for name in names if writes]
+        found += [(match[2], f"hermes config {match[1]} {match[2]}", None) for match in HERMES_CONFIG.finditer(command)
                   if match[1] in ("set", "unset") and match[2] in config["settings"]]
     return found
 
 
 def reads(config, tool_name, args, task_id):
-    """The rule names of the listed files and settings the call reads."""
+    """What the call reads, as the keys its reads are kept under: the path `read_file` reads, so reading one
+    file of a listed folder clears only that file (#128); the rule's name for a command that names a listed
+    file or folder, which reads all of it; and a setting's name."""
     if tool_name == "read_file" and isinstance(path := args.get("path"), str):
-        return [name for name, _ in _listed(_paths(config)[1], path, task_id)]
+        return [resolved for _, resolved in _listed(_paths(config)[1], path, task_id)]
     if tool_name != TERMINAL or not isinstance(command := args.get("command"), str):
         return []
     names, writes = _named(config, args, task_id)
@@ -97,6 +100,17 @@ def reads(config, tool_name, args, task_id):
 
 def _read(ctx, session_id):
     return set(ctx.state.get("reads", {}).get(session_id, []))
+
+
+def _was_read(read, rule, file, root):
+    """Whether a change is covered by the session's reads. A command's read of the rule covers every change
+    to it. Otherwise a file tool's change needs that file read, and a command's change needs any file of
+    the rule read."""
+    if rule in read:
+        return True
+    if file is not None:
+        return file in read
+    return root is not None and any(key == root or key.startswith(root + os.sep) for key in read)
 
 
 def _remember(ctx, session_id, names):
@@ -115,7 +129,8 @@ def before(ctx, config, *, tool_name, args, session_id="", task_id="", **kwargs)
     if not (changed := changes(config, tool_name, args, task_id)):
         return
     read = _read(ctx, session_id)
-    if unread := [(rule, target) for rule, target in changed if rule not in read]:
+    roots = {name: os.path.realpath(path) for name, path in _paths(config)[1].items()}
+    if unread := [(rule, target) for rule, target, file in changed if not _was_read(read, rule, file, roots.get(rule))]:
         _record(ctx, session_id=session_id, rule=unread[0][0], reason=unread[0][1], tool=tool_name, withhold=False)
 
 
@@ -134,7 +149,7 @@ def reply(ctx, config, *, response_text, session_id="", **kwargs):
         return
     read = _read(ctx, session_id)
     for name, path in named:
-        if name not in read:
+        if not _was_read(read, name, None, os.path.realpath(path)):
             _record(ctx, session_id=session_id, rule=name, reason=path.name, tool=None, withhold=True)
 
 

@@ -18,8 +18,10 @@ mode = "log"
 # command: a Python regular expression, searched for in a terminal command.
 #
 # A command is matched by the text it contains, not by what it does, so the list over-matches: a
-# command that only reads a path matches, as does one that names a longer name (.env.example), or
-# names a Hermes home and, anywhere else, an entry's name. The week of log-mode events shows how often.
+# command that only reads a path matches. A listed name counts only as whole path components (#128):
+# .env.example and .envrc do not name .env. An entry's name counts right after a spelling of the Hermes
+# home or a shell variable, or where a relative path starts in a command that also names the home.
+# The week of log-mode events shows how often.
 #
 # Not on the list: tools that run code of their own, such as execute_code, and a script that writes
 # a file through its own code (5.6). The skill tool, skill_manage, names no path; skills.write_approval
