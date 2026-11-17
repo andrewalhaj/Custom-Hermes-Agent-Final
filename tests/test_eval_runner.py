@@ -469,7 +469,7 @@ def test_ctrl_c_while_questions_run_keeps_the_ones_already_measured(tmp_path, da
         return {"question_id": entry["question_id"], "question_type": entry["question_type"], "abstention": False,
                 "notes": 0, "recall_failed": False, "first_hit": None, "codes": [], "failures": [],
                 "evidence_rows": 0, "evidence_stored": 0, "pool": True, "pool_hit": None, "pool_best_score": None,
-                "embedding_build": None, "stopped": None}
+                "fact_pairs": {"without_judge": 0, "ask_judge_from": 0}, "embedding_build": None, "stopped": None}
 
     def interrupted(futures, **kwargs):
         futures[0].result()   # the first question is measured, then Ctrl-C
