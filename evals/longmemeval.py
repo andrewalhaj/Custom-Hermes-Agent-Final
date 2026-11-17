@@ -145,7 +145,10 @@ def hermes_home(tmp, template, judge_model):
     config = yaml.safe_load(config_file.read_text(encoding="utf-8")) if config_file.exists() else {}
     config = config or {}
     config.setdefault("memory", {})["provider"] = "custom_build"
-    entries = config.setdefault("plugins", {}).setdefault("entries", {})
+    plugins = config.setdefault("plugins", {})
+    # Enabled as an agent host enables it: only then does it register its own route for extraction (#148)
+    plugins["enabled"] = sorted({*(plugins.get("enabled") or ()), "custom_build"})
+    entries = plugins.setdefault("entries", {})
     entries.setdefault("custom_build", {})["settings"] = {"machine_name": "eval", "judge_model": judge_model}
     config_file.write_text(yaml.safe_dump(config), encoding="utf-8")
     work = tmp / "work"

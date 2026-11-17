@@ -17,6 +17,7 @@ import sys
 
 import plugins.memory
 import psycopg
+from hermes_cli.plugins import discover_plugins
 
 DATE_FORMAT = "%Y/%m/%d (%a) %H:%M"   # LongMemEval's haystack_dates
 
@@ -80,6 +81,7 @@ def main(argv, patch=None):
     """`patch(modules)` runs after the provider loads; a test points the plugin at its fakes with it."""
     mode, question, home = argv
     entry = json.loads(pathlib.Path(question).read_text(encoding="utf-8"))
+    discover_plugins()   # as Hermes starts: the plugin registers its extraction and digest routes
     provider = plugins.memory.load_memory_provider("custom_build")
     if patch:
         patch(_modules())
