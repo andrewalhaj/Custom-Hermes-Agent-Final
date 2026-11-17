@@ -478,7 +478,11 @@ def run(*, data, sha256, questions, seed, yes, postgres, out, replay_command=Non
     kept run's `out`, asks its questions of those stores again, with no extraction (#242)."""
     kept_names = None
     if ask_kept:
-        kept_names = json.loads((pathlib.Path(ask_kept) / "kept.json").read_text(encoding="utf-8"))["databases"]
+        if pathlib.Path(out).resolve() == pathlib.Path(ask_kept).resolve():
+            raise EvalError("--ask-kept needs its own --out: it would overwrite the kept run's report")
+        if not (manifest := pathlib.Path(ask_kept) / "kept.json").exists():
+            raise EvalError(f"{ask_kept} has no kept.json")
+        kept_names = json.loads(manifest.read_text(encoding="utf-8"))["databases"]
         ids = list(kept_names)
     entries = chosen(load(data, sha256), ids) if ids else subset(load(data, sha256), questions, seed=seed)
     if not yes:
@@ -487,7 +491,7 @@ def run(*, data, sha256, questions, seed, yes, postgres, out, replay_command=Non
                                  "judge_calls_at_least": 2 * len(entries)}}
         return {"estimate": estimate(entries)}
     command = replay_command or [sys.executable, "-m", "evals.replay"]
-    results, stopped = [], None
+    results, stopped, made = [], None, False
     kept = {} if keep else None
     halt = threading.Event()   # once set, no question starts: a stop or a crash in any of them
 
@@ -511,6 +515,7 @@ def run(*, data, sha256, questions, seed, yes, postgres, out, replay_command=Non
     try:
         login = kept_login(postgres) if ask_kept else roles(postgres, keep=keep)
         with login as password:   # the run's login, which question() hands to each one()
+            made = True   # the roles are this run's: a refused run must not overwrite a kept run's list
             pool = concurrent.futures.ThreadPoolExecutor(max_workers=parallel)
             futures = [pool.submit(question, entry) for entry in entries]
             error = None
@@ -539,7 +544,7 @@ def run(*, data, sha256, questions, seed, yes, postgres, out, replay_command=Non
             summary["stopped"] = stopped
         out = pathlib.Path(out)
         out.mkdir(parents=True, exist_ok=True)
-        if kept is not None:   # every store made, a crashed question's too, so drop_kept() leaves none behind
+        if kept is not None and made:   # every store made, a crashed question's too, so drop_kept() leaves none
             (out / "kept.json").write_text(json.dumps({"databases": kept}, indent=2), encoding="utf-8")
         (out / "report.json").write_text(json.dumps(summary, indent=2, default=str), encoding="utf-8")
         (out / "report.md").write_text(markdown(summary), encoding="utf-8")
@@ -549,7 +554,7 @@ def run(*, data, sha256, questions, seed, yes, postgres, out, replay_command=Non
 def main(argv=None):
     pinned = tomllib.loads(CONFIG.read_text(encoding="utf-8"))
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--data", required=True, help="the S file; written there first with --download")
+    parser.add_argument("--data", help="the S file; written there first with --download (not needed with --drop-kept)")
     parser.add_argument("--download", action="store_true", help="download the pinned S file to --data first")
     parser.add_argument("--questions", type=int, help="how many to draw (default 20)")
     parser.add_argument("--seed", type=int, help="the draw's seed (default 1)")
@@ -569,11 +574,16 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.parallel < 1:
         parser.error("--parallel must be 1 or more")
+    if args.ask_kept and (args.ids is not None or args.questions is not None or args.seed is not None or args.keep):
+        parser.error("--ask-kept asks the kept run's questions; leave out --ids, --questions, --seed and --keep")
+    for option, folder in (("--ask-kept", args.ask_kept), ("--drop-kept", args.drop_kept)):
+        if folder and not (pathlib.Path(folder) / "kept.json").exists():
+            parser.error(f"{option}: {folder} has no kept.json")
     if args.drop_kept:
         drop_kept(args.postgres, args.drop_kept)
         return 0
-    if args.ask_kept and (args.ids is not None or args.questions is not None or args.seed is not None or args.keep):
-        parser.error("--ask-kept asks the kept run's questions; leave out --ids, --questions, --seed and --keep")
+    if not args.data:
+        parser.error("the following arguments are required: --data")
     ids = None
     if args.ids is not None:   # given at all, even empty: never a silent fallback to a paid seeded run
         ids = [question_id.strip() for question_id in args.ids.split(",") if question_id.strip()]
