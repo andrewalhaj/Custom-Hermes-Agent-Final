@@ -48,9 +48,9 @@ HIDDEN = [
 VISIBLE = [
     "evals/new_runner.py",
     "evals/longmemeval.toml",
+    "scripts/deploy.py",
     "tests/test_new.py",
     ".github/workflows/new.yml",
-    "scripts/deploy.py",
     "migrations/0002_next.sql",
     "custom_build/memory/new_module.py",
     "custom_build/memory/write_path.toml",

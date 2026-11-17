@@ -22,10 +22,6 @@
 !/evals/*.py
 !/evals/*.toml
 
-# The operator's deploy script (OPERATIONS.md section 8); never its settings.
-/scripts/*
-!/scripts/*.py
-
 /.github/*
 !/.github/workflows/
 /.github/workflows/*
@@ -55,3 +51,7 @@
 /custom_build/guards/*
 !/custom_build/guards/*.py
 !/custom_build/guards/*.toml
+
+# The operator's deploy script (OPERATIONS.md section 8); never its settings.
+/scripts/*
+!/scripts/*.py
