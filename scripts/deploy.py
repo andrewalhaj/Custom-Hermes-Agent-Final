@@ -8,8 +8,8 @@ issue #181). The steps run in order and the first one that fails stops the deplo
 3. apply the pending migrations, in file-name order, after the operator types `yes`;
 4. install the commit on the host and run the startup check, then restart the gateway and smoke-test it;
 5. on a failure in step 4, install the previous commit again, check, restart and smoke-test, unless the install
-   failed and left the previous commit in place. Migrations stay applied: each one works with the plugin
-   deployed before it (CONTRIBUTING.md rule C10).
+   failed with a known result and left the previous commit in place. Migrations stay applied: each one works
+   with the plugin deployed before it (CONTRIBUTING.md rule C10).
 
 Deployment values come from the environment, never from this repository (OPERATIONS.md section 1). The script
 runs outside Hermes with the operator reading its output, so it records no failure code: every refusal and
@@ -39,8 +39,8 @@ class DeployError(Exception):
     """A refusal or a failed step. Its text starts with the step's name."""
 
 
-class TimedOut(DeployError):
-    """A command that was stopped waiting. What it did on the host is unknown."""
+class Unknown(DeployError):
+    """A command that timed out or lost its connection. What it did on the host is unknown."""
 
 
 def settings(env):
@@ -136,8 +136,11 @@ def installed_commit(cfg, run):
 
 
 def install(commit, cfg, run):
-    must(hermes(cfg, run, "plugins", "install", f"{cfg['DEPLOY_REPO']}#custom_build", "--force", "--ref", commit,
-                "--yes-deps", timeout=INSTALL_TIMEOUT), "install")
+    done = hermes(cfg, run, "plugins", "install", f"{cfg['DEPLOY_REPO']}#custom_build", "--force", "--ref", commit,
+                  "--yes-deps", timeout=INSTALL_TIMEOUT)
+    if done.returncode == 255:   # ssh's own exit code: the connection failed, and the install may still finish
+        raise Unknown(f"install: the ssh connection failed: {done.stderr.strip()[-500:]}")
+    must(done, "install")
 
 
 def start(cfg, run):
@@ -181,8 +184,8 @@ def deploy(commit, env, run, http, ask, out):
         install(commit, cfg, run)
     except DeployError as exc:
         out(f"deploy failed at {exc}")
-        # Hermes replaces the plugin only once an install succeeds. One that timed out may still finish.
-        if not isinstance(exc, TimedOut) and still_on(previous, cfg, run):
+        # Hermes replaces the plugin only once an install succeeds. One whose result is unknown may still finish.
+        if not isinstance(exc, Unknown) and still_on(previous, cfg, run):
             out(f"the host still runs {previous} and nothing was restarted. {kept}")
             return 1
         return roll_back(previous, cfg, run, out, kept)
@@ -197,10 +200,10 @@ def deploy(commit, env, run, http, ask, out):
 
 def run(argv, timeout=120):
     try:   # no terminal: a command that asks a question gets no answer and fails, instead of waiting unseen
-        return subprocess.run(argv, capture_output=True, text=True, timeout=timeout, check=False,
+        return subprocess.run(argv, capture_output=True, text=True, errors="replace", timeout=timeout, check=False,
                               stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired as exc:
-        raise TimedOut(f"{argv[0]}: timed out after {timeout} seconds") from exc
+        raise Unknown(f"{argv[0]}: timed out after {timeout} seconds") from exc
     except OSError as exc:   # no such program, or one this account may not execute
         raise DeployError(f"{argv[0]}: could not be started: {exc}") from exc
 
