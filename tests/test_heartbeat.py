@@ -22,12 +22,12 @@ HERMES = "import sys; from hermes_cli.main import main; sys.argv = ['hermes', *s
 
 
 def make_home(tmp_path, db, *, machine_name="host-a", database_url="agent", failures_edit=None, hosted=None,
-              hosted_key=True):
+              hosted_key=True, route="deepinfra"):
     """A Hermes home with the plugin installed and enabled, the way an agent host has it.
 
     `database_url` names a login from the `db` fixture, or is a connection string as given. `hosted`, a fake
-    DeepInfra, sets `embedding: deepinfra` with the plugin's copy pointed at the fake and holding a reference
-    recorded against it (#239); `hosted_key` puts DeepInfra's key in the .env.
+    DeepInfra, points the plugin's copy at the fake with a reference recorded against it, and sets `embedding`
+    to `route` when it is given (#239); `hosted_key` puts DeepInfra's key in the .env.
     """
     home = tmp_path / "home"
     plugin = home / "plugins" / "custom_build"
@@ -37,7 +37,8 @@ def make_home(tmp_path, db, *, machine_name="host-a", database_url="agent", fail
         module.write_text(failures_edit(module.read_text(encoding="utf-8")), encoding="utf-8")
     settings = {"machine_name": machine_name} if machine_name else {}
     if hosted:
-        settings["embedding"] = "deepinfra"
+        if route:
+            settings["embedding"] = route
         module = plugin / "memory" / "embedding.py"
         text = module.read_text(encoding="utf-8")
         assert 'HOSTED_URL = "https://api.deepinfra.com/v1/openai/embeddings"' in text
@@ -102,9 +103,19 @@ def test_a_refused_or_unavailable_service_is_recorded_after_the_heartbeat(tmp_pa
     assert [row[:2] for row in rows(db)] == [("host.heartbeat", "ok"), (code, "failed")]
 
 
+def test_a_garbled_vector_is_recorded_after_the_heartbeat_not_a_crash(tmp_path, db, deepinfra):
+    # #239 review: a null in the answer crashed the check, and the heartbeat row was never written.
+    home = make_home(tmp_path, db, hosted=deepinfra)
+    deepinfra.other = [None] * 2560
+    result = hermes(tmp_path, home, "custom-build", "heartbeat")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert [row[:2] for row in rows(db)] == [("host.heartbeat", "ok"), ("embed.unavailable", "failed")]
+
+
 def test_on_the_local_route_the_heartbeat_calls_no_embedding_service(tmp_path, db, deepinfra):
-    result = hermes(tmp_path, make_home(tmp_path, db), "custom-build", "heartbeat")
-    assert result.returncode == 0
+    # The copy points at the fake, so a call the local route should not make would reach it (#239 review).
+    result = hermes(tmp_path, make_home(tmp_path, db, hosted=deepinfra, route=None), "custom-build", "heartbeat")
+    assert result.returncode == 0, result.stdout + result.stderr
     assert rows(db) == [("host.heartbeat", "ok", None, "host-a", {})] and deepinfra.requests == []
 
 
