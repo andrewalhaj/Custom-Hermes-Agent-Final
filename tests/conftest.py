@@ -21,7 +21,7 @@ import pytest
 from psycopg import sql
 
 MIGRATIONS = sorted((pathlib.Path(__file__).resolve().parent.parent / "migrations").glob("*.sql"))
-GROUP_ROLES = ("memory_agent", "memory_maintenance")
+GROUP_ROLES = ("memory_agent", "memory_maintenance", "memory_viewer")
 
 
 def _drop_roles(admin, names):
@@ -31,7 +31,7 @@ def _drop_roles(admin, names):
 
 @pytest.fixture
 def db():
-    """Connection strings for the database's owner, an agent login and a maintenance login."""
+    """Connection strings for the database's owner, an agent login, a maintenance login and a viewer login."""
     url = os.environ.get("TEST_DATABASE_URL")
     if not url:
         pytest.fail("TEST_DATABASE_URL is not set: these tests need a Postgres 17 superuser connection")
@@ -40,7 +40,7 @@ def db():
     name = f"t_{uuid.uuid4().hex[:12]}"
     # A machine's login is named as the machine (OPERATIONS.md section 3), and may write events only under
     # that name (#149). The tests' machine is host-a.
-    agent, maint = "host-a", f"{name}_maint"
+    agent, maint, viewer = "host-a", f"{name}_maint", f"{name}_viewer"
     password = uuid.uuid4().hex   # a throwaway login's password, so servers that require one (CI's) accept it
     info = psycopg.conninfo.conninfo_to_dict(url)
 
@@ -53,14 +53,15 @@ def db():
             with psycopg.connect(dsn(), autocommit=True) as owner:
                 for migration in MIGRATIONS:
                     owner.execute(migration.read_text(encoding="utf-8"))
-                for login, group in ((agent, "memory_agent"), (maint, "memory_maintenance")):
+                for login, group in ((agent, "memory_agent"), (maint, "memory_maintenance"),
+                                     (viewer, "memory_viewer")):
                     owner.execute(sql.SQL("create role {} login password {} in role {}").format(
                         sql.Identifier(login), sql.Literal(password), sql.Identifier(group)))
             yield {"owner": dsn(), "agent": dsn(user=agent, password=password),
-                   "maint": dsn(user=maint, password=password)}
+                   "maint": dsn(user=maint, password=password), "viewer": dsn(user=viewer, password=password)}
         finally:
             admin.execute(sql.SQL("drop database if exists {} with (force)").format(sql.Identifier(name)))
-            _drop_roles(admin, (agent, maint, *GROUP_ROLES))
+            _drop_roles(admin, (agent, maint, viewer, *GROUP_ROLES))
 
 
 class FakeOllama(http.server.ThreadingHTTPServer):

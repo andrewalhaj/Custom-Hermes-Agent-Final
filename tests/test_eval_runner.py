@@ -187,7 +187,7 @@ def test_the_run_leaves_no_database_or_role_behind(tmp_path, dataset, ollama, ty
     run(tmp_path, dataset, ollama, typesafe)
     with psycopg.connect(os.environ["TEST_DATABASE_URL"]) as admin:
         assert admin.execute("select count(*) from pg_database where datname like 'eval_%'").fetchone() == (0,)
-        assert admin.execute("select count(*) from pg_roles where rolname in ('memory_agent', 'memory_maintenance')"
+        assert admin.execute("select count(*) from pg_roles where rolname in ('memory_agent', 'memory_maintenance', 'memory_viewer')"
                              " or rolname = 'eval' or rolname like 'eval_%'").fetchone() == (0,)
 
 
@@ -450,7 +450,7 @@ def test_a_parallel_run_leaves_no_database_or_role_behind(tmp_path, dataset, oll
     run(tmp_path, dataset, ollama, typesafe, parallel=3)
     with psycopg.connect(os.environ["TEST_DATABASE_URL"]) as admin:
         assert admin.execute("select count(*) from pg_database where datname like 'eval_%'").fetchone() == (0,)
-        assert admin.execute("select count(*) from pg_roles where rolname in ('memory_agent', 'memory_maintenance')"
+        assert admin.execute("select count(*) from pg_roles where rolname in ('memory_agent', 'memory_maintenance', 'memory_viewer')"
                              " or rolname = 'eval' or rolname like 'eval_%'").fetchone() == (0,)
 
 
@@ -501,6 +501,15 @@ def test_a_first_migration_without_the_role_statements_the_runner_removes_fails_
         run(tmp_path, dataset, ollama, typesafe)
 
 
+def test_a_role_statement_whose_migration_is_gone_fails_the_run_by_its_number(
+        tmp_path, dataset, ollama, typesafe, monkeypatch):
+    # 0009's role is made once per run too (#255); without the file the run stops and names it.
+    monkeypatch.setattr(longmemeval, "MIGRATIONS",
+                        [path for path in longmemeval.MIGRATIONS if not path.name.startswith("0009")])
+    with pytest.raises(longmemeval.EvalError, match="0009"):
+        run(tmp_path, dataset, ollama, typesafe)
+
+
 NO_EXTRACTION = WRAPPER.replace('''def fake_call_llm(**kwargs):''', '''def fake_call_llm(**kwargs):
     raise RuntimeError("an ask-only pass called a model")''')
 
@@ -508,7 +517,7 @@ NO_EXTRACTION = WRAPPER.replace('''def fake_call_llm(**kwargs):''', '''def fake_
 def _nothing_left():
     with psycopg.connect(os.environ["TEST_DATABASE_URL"]) as admin:
         return (admin.execute("select count(*) from pg_database where datname like 'eval_%'").fetchone()[0],
-                admin.execute("select count(*) from pg_roles where rolname in ('memory_agent', 'memory_maintenance')"
+                admin.execute("select count(*) from pg_roles where rolname in ('memory_agent', 'memory_maintenance', 'memory_viewer')"
                               " or rolname = 'eval'").fetchone()[0]) == (0, 0)
 
 

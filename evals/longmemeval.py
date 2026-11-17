@@ -40,10 +40,11 @@ from psycopg import sql
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 PLUGIN = ROOT / "custom_build"
 MIGRATIONS = sorted((ROOT / "migrations").glob("*.sql"))
-GROUP_ROLES = ("memory_agent", "memory_maintenance")
+GROUP_ROLES = ("memory_agent", "memory_maintenance", "memory_viewer")
 MACHINE = "eval"   # the eval host's machine name, and so its login's name
-# 0001's role statements, run once per run by roles() and left out of each question's 0001 (#219)
-ROLE_STATEMENTS = ("create role memory_agent nologin;", "create role memory_maintenance nologin;")
+# Each migration's role statements, run once per run by roles() and left out of each question's migrations (#219)
+ROLE_STATEMENTS = {"0001": ("create role memory_agent nologin;", "create role memory_maintenance nologin;"),
+                   "0009": ("create role memory_viewer nologin;",)}
 SETUP = threading.Lock()   # one question's database is set up at a time
 CONFIG = pathlib.Path(__file__).with_suffix(".toml")   # the pinned revision and hash of the data file
 PROJECT_ORIGIN = "https://eval.invalid/longmemeval.git"   # every replay's project
@@ -127,8 +128,9 @@ def roles(postgres, *, keep=False):
             raise EvalError(f"this Postgres already has {', '.join(found)}: point the runner at a throwaway "
                             "server; it never drops a role it did not create")
         try:
-            for statement in ROLE_STATEMENTS:
-                admin.execute(statement)
+            for statements in ROLE_STATEMENTS.values():
+                for statement in statements:
+                    admin.execute(statement)
             admin.execute(sql.SQL("create role {} login password {} in role memory_agent").format(
                 sql.Identifier(MACHINE), sql.Literal(password)))
             yield password
@@ -166,13 +168,14 @@ def drop_kept(postgres, directory):
 
 
 def _migrations():
-    """Every migration's text, 0001 without the role statements `roles()` has already run (#219)."""
-    texts = [migration.read_text(encoding="utf-8") for migration in MIGRATIONS]
-    if not all(statement in texts[0] for statement in ROLE_STATEMENTS):
-        raise EvalError(f"{MIGRATIONS[0].name} no longer has {ROLE_STATEMENTS}: update the eval runner's roles()")
-    for statement in ROLE_STATEMENTS:
-        texts[0] = texts[0].replace(statement, "", 1)
-    return texts
+    """Every migration's text, without the role statements `roles()` has already run (#219)."""
+    texts = {migration.name[:4]: migration.read_text(encoding="utf-8") for migration in MIGRATIONS}
+    for number, statements in ROLE_STATEMENTS.items():
+        if not all(statement in texts.get(number, "") for statement in statements):
+            raise EvalError(f"migration {number} no longer has {statements}: update the eval runner's roles()")
+        for statement in statements:
+            texts[number] = texts[number].replace(statement, "", 1)
+    return list(texts.values())
 
 
 def _urls(postgres, name, password):
