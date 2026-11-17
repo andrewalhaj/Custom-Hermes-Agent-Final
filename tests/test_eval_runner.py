@@ -223,10 +223,11 @@ def test_a_failed_recall_is_counted_as_a_failure_never_as_a_correct_abstention(t
 
 def test_a_crashed_replay_keeps_the_report_of_what_was_measured(tmp_path, dataset, ollama, typesafe):
     typesafe.default = 0.9
+    second = longmemeval.subset(json.loads(json.dumps(DATASET)), 3, seed=1)[1]["question_id"]
     with pytest.raises(longmemeval.EvalError):
-        run(tmp_path, dataset, ollama, typesafe, questions=3, test_env={"EVAL_TEST_CRASH_ON": "q3"})
+        run(tmp_path, dataset, ollama, typesafe, questions=3, test_env={"EVAL_TEST_CRASH_ON": second})
     written = json.loads((tmp_path / "report" / "report.json").read_text(encoding="utf-8"))
-    assert written["stopped"].startswith("crashed") and written["questions"] >= 1
+    assert written["stopped"].startswith("crashed") and written["questions"] == 1   # the first, already paid for
 
 
 def test_a_postgres_that_already_has_the_memory_roles_is_refused_and_left_alone(tmp_path, dataset, ollama, typesafe):
