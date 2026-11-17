@@ -65,7 +65,7 @@ def test_store_re_embeds_every_fact_live_or_retired_with_the_hosted_build(deepin
     with psycopg.connect(db["owner"]) as conn:
         rows = conn.execute("select embedding_model, embedding::text from memory.facts").fetchall()
     assert {model for model, _ in rows} == {embedding.HOSTED_BUILD}
-    assert all(vector.startswith("[0.01,") for _, vector in rows)
+    assert all(vector.startswith("[0.01") for _, vector in rows)   # the hosted 0.01s, not the local 0.5s (halfvec)
     # The store now passes the hosted route's own check.
     with psycopg.connect(db["agent"]) as conn:
         hosted = embedding.HostedEmbedder(KEY, url=deepinfra.url, reference=reference)

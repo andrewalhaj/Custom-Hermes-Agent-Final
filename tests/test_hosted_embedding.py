@@ -88,9 +88,9 @@ class Timed(embedding.HostedEmbedder):
         super().__init__(*args, **kwargs)
         self.timeouts = []
 
-    def _vectors(self, texts, *, timeout):
+    def vectors(self, texts, *, timeout):
         self.timeouts.append(timeout)
-        return super()._vectors(texts, timeout=timeout)
+        return super().vectors(texts, timeout=timeout)
 
 
 def test_recall_gives_each_hosted_request_two_seconds(deepinfra, reference, db):
