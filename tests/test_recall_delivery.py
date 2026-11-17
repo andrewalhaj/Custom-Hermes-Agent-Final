@@ -324,3 +324,34 @@ def test_a_secret_in_the_message_never_reaches_the_judge(home, db, owner, ollama
     ollama.other = BASE
     recall(home, db, ollama.url, f"why does {FAKE_KEY} fail")
     assert typesafe.requests and all(FAKE_KEY not in json.dumps(r["body"]) for r in typesafe.requests)
+
+
+
+def test_a_pool_the_judge_finds_no_help_in_adds_nothing_and_is_not_a_failure(home, db, owner, ollama, typesafe):
+    _add(owner, "Host fact 0.", BASE, ollama.build)
+    ollama.vectors = {QUERY: BASE}
+    typesafe.default = 0.1   # every note under the floor
+    assert recall(home, db, ollama.url)["notes"] == ""
+    assert _codes(db) == []
+
+
+def test_a_note_at_the_floor_is_kept(home, db, owner, ollama, typesafe):
+    _add(owner, "Host fact 0.", BASE, ollama.build)
+    ollama.vectors = {QUERY: BASE}
+    typesafe.default = 0.30   # 3.6: under 0.30 is no; 0.30 stays
+    assert "Host fact 0." in recall(home, db, ollama.url)["notes"]
+
+
+def test_a_slow_search_leaves_the_rerank_only_the_time_left(home, db, owner, ollama, typesafe):
+    # #165 review: the judge's 2 seconds are cut to what is left of the recall deadline, so a slow search
+    # falls back to its fused order instead of losing the turn's notes to recall.timeout.
+    config = home / "plugins" / "custom_build" / "memory" / "write_path.toml"
+    config.write_text(config.read_text(encoding="utf-8").replace("deadline = 6", "deadline = 1.5"), encoding="utf-8")
+    _add(owner, "Host fact 0.", BASE, ollama.build)
+    ollama.vectors = {QUERY: BASE}
+    ollama.delay = 0.8
+    typesafe.delay = 2
+    outcome = recall(home, db, ollama.url, mode="linger")
+    assert "Host fact 0." in outcome["notes"] and "recall.timeout" not in outcome["notes"]
+    with psycopg.connect(db["owner"]) as conn:
+        assert conn.execute("select code, result from memory.events").fetchall() == [("rerank.fallback", "degraded")]
