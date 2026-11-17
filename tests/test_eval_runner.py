@@ -186,6 +186,41 @@ def test_the_run_leaves_no_database_or_role_behind(tmp_path, dataset, ollama, ty
                              " or rolname = 'eval' or rolname like 'eval_%'").fetchone() == (0,)
 
 
+def test_chosen_ids_run_exactly_those_questions_in_that_order(tmp_path, dataset, ollama, typesafe):
+    # #236: the seeded subset held no abstention question; --ids runs exactly the questions asked for.
+    typesafe.default = 0.9
+    report = run(tmp_path, dataset, ollama, typesafe, ids=["q3", "q2_abs"])
+    assert [r["question_id"] for r in report["per_question"]] == ["q3", "q2_abs"]
+    assert report["ids"] == ["q3", "q2_abs"] and report["abstention"] == {"count": 1, "correct": 1}
+    assert report["seed"] is None   # #236 review: a chosen run records no draw
+    assert "questions chosen by id: q3, q2_abs." in (tmp_path / "report" / "report.md").read_text(encoding="utf-8")
+
+
+def test_an_unknown_id_stops_the_run_before_anything_is_called(tmp_path, dataset, ollama, typesafe):
+    with pytest.raises(longmemeval.EvalError, match="q9"):
+        run(tmp_path, dataset, ollama, typesafe, ids=["q1", "q9"])
+    assert typesafe.requests == [] and ollama.embedded == []
+
+
+def test_ids_with_a_count_or_a_seed_are_refused(dataset, capsys):
+    for extra in (["--questions", "3"], ["--seed", "2"]):
+        with pytest.raises(SystemExit):
+            longmemeval.main(["--data", str(dataset), "--ids", "q1", *extra])
+        # its own refusal, not argparse's "unrecognized arguments" (which an unknown --ids would also raise)
+        assert "--ids replaces the seeded subset" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("given, refusal", [
+    ("", "--ids names no question"),   # #236 review: an empty list fell back to a paid seeded run
+    (" , ", "--ids names no question"),
+    ("q1,q2,q1", "--ids names q1 twice"),   # a duplicate would be paid for and scored twice
+])
+def test_an_empty_or_repeating_ids_list_is_refused(dataset, capsys, given, refusal):
+    with pytest.raises(SystemExit):
+        longmemeval.main(["--data", str(dataset), "--ids", given])
+    assert refusal in capsys.readouterr().err
+
+
 def test_a_subset_is_the_same_for_the_same_seed_and_spread_across_question_types():
     entries = [{"question_id": f"q{n}", "question_type": ["a", "b", "c"][n % 3]} for n in range(30)]
     first = longmemeval.subset(entries, 6, seed=7)

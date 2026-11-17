@@ -12,6 +12,7 @@ the judge for every proposed fact and every rerank: a run prints its estimate an
 what it measured. It runs on a maintainer's machine against a throwaway Postgres, never the shared store.
 
 Usage: python -m evals.longmemeval --data longmemeval_s_cleaned.json --questions 20 --postgres URL --out DIR
+       (or --ids q1,q2 in place of --questions and --seed, to run exactly those questions)
 """
 
 import argparse
@@ -315,7 +316,7 @@ def _scores(results):
             "mrr": round(sum(1 / hit for hit in hits if hit) / count, 4) if count else None}
 
 
-def report(results, *, sha256, seed, judge_model):
+def report(results, *, sha256, seed, judge_model, ids=None):
     answerable = [result for result in results if not result["abstention"]]
     abstaining = [result for result in results if result["abstention"]]
     commit = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD"], capture_output=True, text=True,
@@ -342,7 +343,7 @@ def report(results, *, sha256, seed, judge_model):
             "failure_codes": codes,
             "failure_reasons": [{"code": code, "reason": reason, "count": count} for (code, reason), count in
                                 sorted(reasons.items(), key=lambda item: -item[1])],
-            "commit": commit, "data_sha256": sha256, "seed": seed,
+            "commit": commit, "data_sha256": sha256, "seed": seed, "ids": ids,   # ids: chosen, not drawn (#236)
             "judge_model": judge_model,
             "embedding_build": next((r["embedding_build"] for r in results if r["embedding_build"]), None),
             "per_question": results}
@@ -351,7 +352,9 @@ def report(results, *, sha256, seed, judge_model):
 def markdown(summary):
     lines = [f"# LongMemEval-S, {summary['questions']} questions", "",
              (f"Commit `{summary['commit']}`, embedding `{summary['embedding_build']}`, judge "
-              f"`{summary['judge_model']}`, seed {summary['seed']}."), "",
+              f"`{summary['judge_model']}`, "
+              + (f"questions chosen by id: {', '.join(summary['ids'])}." if summary.get("ids")
+                 else f"seed {summary['seed']}.")), "",
              "| Questions | Count | Recall@5 | MRR |", "|---|---|---|---|"]
     rows = [("All answerable", summary["answerable"]), *summary["by_type"].items()]
     lines += [f"| {name} | {s['count']} | {s['recall_at_5']} | {s['mrr']} |" for name, s in rows]
@@ -369,11 +372,20 @@ def markdown(summary):
     return "\n".join(lines) + "\n"
 
 
+def chosen(entries, ids):
+    """The questions with these ids, in this order (#236); an id not in the data file is an EvalError, before
+    anything is called."""
+    by_id = {entry["question_id"]: entry for entry in entries}
+    if missing := [question_id for question_id in ids if question_id not in by_id]:
+        raise EvalError(f"not in the data file: {', '.join(missing)}")
+    return [by_id[question_id] for question_id in ids]
+
+
 def run(*, data, sha256, questions, seed, yes, postgres, out, replay_command=None, template=None,
-        judge_model="jev-1.14.0", judge_key=None, parallel=1):
-    """Estimate, or with `yes` run, the eval over a seeded subset, up to `parallel` questions at once (#219);
-    returns (and writes) the report, its questions in the subset's order."""
-    entries = subset(load(data, sha256), questions, seed=seed)
+        judge_model="jev-1.14.0", judge_key=None, parallel=1, ids=None):
+    """Estimate, or with `yes` run, the eval over a seeded subset, or over the questions `ids` names (#236), up
+    to `parallel` questions at once (#219); returns (and writes) the report, its questions in that order."""
+    entries = chosen(load(data, sha256), ids) if ids else subset(load(data, sha256), questions, seed=seed)
     if not yes:
         return {"estimate": estimate(entries)}
     command = replay_command or [sys.executable, "-m", "evals.replay"]
@@ -417,7 +429,7 @@ def run(*, data, sha256, questions, seed, yes, postgres, out, replay_command=Non
         stopped = f"crashed: {type(exc).__name__}: {exc}"[:500]
         raise
     finally:
-        summary = report(results, sha256=sha256, seed=seed, judge_model=judge_model)
+        summary = report(results, sha256=sha256, seed=None if ids else seed, judge_model=judge_model, ids=ids)
         if stopped:
             summary["stopped"] = stopped
         out = pathlib.Path(out)
@@ -432,8 +444,9 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--data", required=True, help="the S file; written there first with --download")
     parser.add_argument("--download", action="store_true", help="download the pinned S file to --data first")
-    parser.add_argument("--questions", type=int, default=20)
-    parser.add_argument("--seed", type=int, default=1)
+    parser.add_argument("--questions", type=int, help="how many to draw (default 20)")
+    parser.add_argument("--seed", type=int, help="the draw's seed (default 1)")
+    parser.add_argument("--ids", help="comma-separated question ids to run, in place of the seeded subset (#236)")
     parser.add_argument("--yes", action="store_true", help="run, not only estimate")
     parser.add_argument("--postgres", default=os.environ.get("EVAL_DATABASE_URL"),
                         help="a superuser URL on a throwaway Postgres; never the shared store")
@@ -444,12 +457,22 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.parallel < 1:
         parser.error("--parallel must be 1 or more")
+    ids = None
+    if args.ids is not None:   # given at all, even empty: never a silent fallback to a paid seeded run
+        ids = [question_id.strip() for question_id in args.ids.split(",") if question_id.strip()]
+        if not ids:
+            parser.error("--ids names no question")
+        if repeated := sorted({question_id for question_id in ids if ids.count(question_id) > 1}):
+            parser.error(f"--ids names {', '.join(repeated)} twice")   # it would be paid for and scored twice
+        if args.questions is not None or args.seed is not None:
+            parser.error("--ids replaces the seeded subset; leave out --questions and --seed")
     if not pinned["sha256"]:
         raise SystemExit(f"{CONFIG.name} records no revision and SHA-256 yet: pin them first (#167)")
     if args.download:
         fetch(pinned["url"].format(revision=pinned["revision"]), args.data, pinned["sha256"])
-    summary = run(data=args.data, sha256=pinned["sha256"], questions=args.questions, seed=args.seed, yes=args.yes,
-                  postgres=args.postgres, out=args.out, template=args.template, parallel=args.parallel)
+    summary = run(data=args.data, sha256=pinned["sha256"], questions=20 if args.questions is None else args.questions,
+                  seed=1 if args.seed is None else args.seed, yes=args.yes, postgres=args.postgres, out=args.out,
+                  template=args.template, parallel=args.parallel, ids=ids)
     print(json.dumps(summary if "estimate" in summary else {k: v for k, v in summary.items() if k != "per_question"},
                      indent=2))
     return 3 if summary.get("stopped") else 0
