@@ -8,6 +8,7 @@ local process and a local HTTP server.
 
 import http.server
 import json
+import shlex
 import subprocess
 import sys
 import threading
@@ -235,10 +236,12 @@ def test_a_deploy_installs_checks_restarts_and_smoke_tests_in_that_order(deploy)
     fake = Fake()
     assert fake.go(deploy) == 0
     assert fake.steps() == HAPPY
-    install = next(" ".join(argv) for argv in fake.calls if "plugins install" in " ".join(argv))
-    assert install.startswith("ssh agent@agent-host ")
-    assert f"owner/repo#custom_build --force --ref {NEW} --yes-deps" in install
-    assert "HERMES_HOME=/home/agent/.hermes" in install
+    install = next(argv for argv in fake.calls if "plugins install" in " ".join(argv))
+    assert install[:2] == ["ssh", "agent@agent-host"]
+    # One string for the host's shell, quoted so that `#` and spaces reach Hermes as written.
+    assert shlex.split(install[2]) == [
+        "env", "HERMES_HOME=/home/agent/.hermes", "/opt/hermes/bin/hermes", "plugins", "install",
+        "owner/repo#custom_build", "--force", "--ref", NEW, "--yes-deps"]
 
 
 def test_the_summary_names_both_commits_and_the_migrations_applied(deploy):
