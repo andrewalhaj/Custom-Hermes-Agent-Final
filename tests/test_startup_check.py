@@ -239,3 +239,37 @@ def test_a_managed_multiplex_flag_fails_with_config_unsafe(tmp_path, db):
     assert code != 0, output
     assert [(c, r, s) for c, r, _, s in rows] == [("config.unsafe", "failed", "host-a")], output
     assert "gateway.multiplex_profiles" in rows[0][2]
+
+
+# The store's level (#185): a plugin installed ahead of its migrations must not start the gateway.
+
+def _set_level(db, statement):
+    with psycopg.connect(db["owner"]) as conn:
+        conn.execute(statement)
+
+
+def test_a_store_behind_the_plugin_fails_with_db_behind(tmp_path, db):
+    _set_level(db, "update memory.schema_level set level = level - 1")
+    code, output, rows = run_check(tmp_path, db)
+    assert code != 0, output
+    assert [(c, r, s) for c, r, _, s in rows] == [("db.behind", "failed", "host-a")], output
+    assert "db.behind" in output and "OPERATIONS.md section 7" in output
+    from custom_build import startup_check
+    assert str(startup_check.STORE_LEVEL) in rows[0][2] and str(startup_check.STORE_LEVEL - 1) in rows[0][2]
+
+
+def test_a_store_from_before_the_level_marker_fails_with_db_behind(tmp_path, db):
+    _set_level(db, "alter table memory.schema_level rename to schema_level_gone")   # as a store at 0005 looks
+    code, output, rows = run_check(tmp_path, db)
+    assert code != 0, output
+    assert [(c, r, s) for c, r, _, s in rows] == [("db.behind", "failed", "host-a")], output
+    assert "schema_level" in rows[0][2]
+
+
+def test_a_store_ahead_of_the_plugin_passes(tmp_path, db):
+    # Each migration works with the plugin deployed before it (CONTRIBUTING.md rule C10).
+    _set_level(db, "update memory.schema_level set level = level + 1")
+    code, output, rows = run_check(tmp_path, db)
+    assert code == 0, output
+    assert rows == []
+

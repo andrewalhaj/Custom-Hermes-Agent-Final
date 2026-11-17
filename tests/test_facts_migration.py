@@ -96,12 +96,12 @@ def test_creates_exactly_these_checks(db):
     ]
 
 
-def test_memory_holds_exactly_the_events_and_facts_tables(db):
+def test_memory_holds_exactly_these_tables(db):
     with psycopg.connect(db["owner"]) as conn:
         tables = conn.execute(
             "select table_name from information_schema.tables where table_schema = 'memory' order by table_name"
         ).fetchall()
-    assert tables == [("events",), ("facts",)]
+    assert tables == [("events",), ("facts",), ("schema_level",)]
 
 
 def test_grants_exactly_what_code_uses(db):
