@@ -5,6 +5,7 @@ Its login joins `memory_viewer` (migration 0009), which may select from memory.e
 """
 
 import datetime
+import re
 import threading
 import urllib.error
 import urllib.request
@@ -177,8 +178,52 @@ def test_times_are_eastern_on_a_12_hour_clock():
                 "session_id": None, "turn": None, "code": "job.failed", "result": "failed", "reason": None, "detail": {}}
 
     filters = events_viewer.filters_of("")
-    body = events_viewer.page([row("2026-11-17T20:05:09+00:00"), row("2026-11-17T03:30:00+00:00")], {}, {}, filters)
+    body = events_viewer.page([row("2026-11-17T20:05:09+00:00"), row("2026-11-17T03:30:00+00:00")], {}, {}, {}, filters)
     assert "3:05:09 PM EST" in body
     assert "10:30:00 PM EST" in body
-    assert "Monday 16 November 2026" in body
+    assert "Monday, November 16, 2026" in body
     assert "20:05:09" not in body
+
+
+# The page behaves as a filtered list usually does (#255): nothing about it should surprise its reader.
+
+def test_each_filters_counts_follow_the_other_filters(db):
+    # A count beside a filter is how many rows choosing it would list, so it obeys every filter but its own.
+    _add(db, "job.failed", source="host-a")
+    _add(db, "job.failed", source="host-a")
+    _add(db, "job.failed", source="host-b")
+    _add(db, "job.succeeded", source="host-a", result="ok")
+    with psycopg.connect(db["viewer"]) as conn:
+        by_code, by_source, by_result = events_viewer.counts(conn, events_viewer.filters_of("source=host-b"))
+        assert by_code == {"job.failed": 1}
+        assert by_source == {"host-a": 3, "host-b": 1}
+        assert by_result == {"failed": 1}
+        by_code, by_source, by_result = events_viewer.counts(conn, events_viewer.filters_of("code=job.failed"))
+        assert by_code == {"job.failed": 3, "job.succeeded": 1}
+        assert by_source == {"host-a": 2, "host-b": 1}
+        assert by_result == {"failed": 3}
+
+
+def test_clearing_the_filters_keeps_the_time_window(db, page):
+    _add(db, "job.failed")
+    _, body = page("/?hours=168&code=job.failed")
+    assert '<a class="clear" href="/?hours=168">' in body
+    assert '<a class="clear"' not in page("/?hours=168")[1]
+
+
+def test_a_chosen_code_with_no_rows_is_still_listed_as_chosen(page):
+    _, body = page("/?code=db.auth")
+    assert re.search(r'<a class="code"[^>]*aria-current="true"[^>]*>db\.auth', body)
+
+
+def test_a_rows_code_and_machine_filter_by_themselves(db, page):
+    _add(db, "job.failed", source="host-a")
+    _, body = page()
+    row = body[body.index("<tbody>"):]
+    assert 'href="/?code=job.failed"' in row
+    assert 'href="/?source=host-a"' in row
+
+
+def test_the_page_says_when_it_was_read(page):
+    # It does not refresh itself, so it says how old it is.
+    assert re.search(r"As of \d{1,2}:\d\d:\d\d [AP]M E[SD]T", page()[1])
