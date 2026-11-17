@@ -245,8 +245,9 @@ def _digest(owner, body, build, *, days_ago, project=PROJECT, superseded=False):
         owner.execute("update memory.facts set superseded_by = id where id = %s", (row,))
 
 
-def test_a_question_about_open_work_returns_the_newest_digests_open_items(home, db, owner, ollama):
-    _add(owner, "Host fact nearest by meaning.", BASE, ollama.build)   # not a similarity search: never returned
+def test_a_question_about_open_work_adds_the_newest_digests_open_items_to_the_search(home, db, owner, ollama):
+    # Decided on #158 (option A): the normal search always runs, and open items are added first.
+    _add(owner, "Host fact nearest by meaning.", BASE, ollama.build)
     _digest(owner, "Oldest.\n\nOpen items:\n- Item from four days ago.", ollama.build, days_ago=4)
     _digest(owner, "Third.\n\nOpen items:\n- Item from three days ago.", ollama.build, days_ago=3)
     _digest(owner, "Second.\n\nOpen items:\n- Item A from two days ago.\n- Item B from two days ago.",
@@ -255,14 +256,28 @@ def test_a_question_about_open_work_returns_the_newest_digests_open_items(home, 
     _digest(owner, "Replaced.\n\nOpen items:\n- A replaced digest's item.", ollama.build, days_ago=0, superseded=True)
     _digest(owner, "Other project.\n\nOpen items:\n- Another project's item.", ollama.build, days_ago=0,
             project="github.com/Other/Repo")
-    notes = _notes(recall(home, db, ollama.url, OPEN)["notes"])
-    assert ollama.embedded == []   # not a similarity search: nothing is embedded (#158 review)
-    assert [note.split("] ", 1)[1] for note in notes] == [
-        "Item A from two days ago.", "Item B from two days ago.", "Item from three days ago."]
-    assert notes[0].startswith("- [digest, assistant_inferred, stored ")
+    ollama.vectors = {OPEN: BASE}
+    bodies = [note.split("] ", 1)[1] for note in _notes(recall(home, db, ollama.url, OPEN)["notes"])]
+    assert ollama.embedded   # the search ran
+    assert bodies[:3] == ["Item A from two days ago.", "Item B from two days ago.", "Item from three days ago."]
+    assert "Host fact nearest by meaning." in bodies[3:]   # a misfired pattern costs the turn nothing
 
 
-def test_a_question_about_open_work_with_nothing_open_adds_nothing(home, db, owner, ollama):
+def test_open_items_and_the_search_share_the_eight_results(home, db, owner, ollama):
+    for n in range(6):
+        _add(owner, f"Host fact {n}.", _at(0.99 - n / 100), ollama.build)
+    items = "\n".join(f"- Open item {n}." for n in range(10))
+    _digest(owner, f"A long session.\n\nOpen items:\n{items}", ollama.build, days_ago=1)
+    ollama.vectors = {OPEN: BASE}
+    bodies = [note.split("] ", 1)[1] for note in _notes(recall(home, db, ollama.url, OPEN)["notes"])]
+    assert len(bodies) == 8   # the search keeps its 5; open items fill the rest
+    assert bodies[:3] == ["Open item 0.", "Open item 1.", "Open item 2."]
+    assert bodies[3:] == [f"Host fact {n}." for n in range(5)]
+
+
+def test_a_question_about_open_work_with_nothing_open_gets_the_search_alone(home, db, owner, ollama):
+    _add(owner, "Host fact 0.", BASE, ollama.build)
     _digest(owner, "A session with nothing left open.", ollama.build, days_ago=1)
     ollama.vectors = {OPEN: BASE}
-    assert recall(home, db, ollama.url, OPEN)["notes"] == ""
+    bodies = [note.split("] ", 1)[1] for note in _notes(recall(home, db, ollama.url, OPEN)["notes"])]
+    assert bodies[0] == "Host fact 0." and all("Open item" not in body for body in bodies)
