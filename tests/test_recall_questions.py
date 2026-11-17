@@ -22,6 +22,13 @@ from custom_build.memory import recall
     "Remind me what we did on the backup.",
     "Have we seen this error before",
     "What did we conclude about the judge?",
+    # review round 2: more plain phrasings
+    "Did we settle on a name for the repo?",
+    "What did we land on for the deadline?",
+    "Didn't we fix this already?",
+    "We tried this before, right?",
+    "Weren't we going to move the cron to launchd?",
+    "Do you remember what we decided about the cache?",
 ])
 def test_a_question_about_past_work_is_recognised(message):
     assert recall.question_kind(message) == "past_work"
@@ -40,6 +47,15 @@ def test_a_question_about_past_work_is_recognised(message):
     "anything left to do?",
     "What do we still need to do?",
     "What's on the todo list?",
+    # review round 2: more plain phrasings, and endings with a closing quote or a full-width mark
+    "Great, thanks. What's left to do?",
+    "What are the next steps?",
+    "Next steps?",
+    "What's pending?",
+    "What are the remaining tasks?",
+    "What still needs doing?",
+    "What's left to do?\u201d",
+    "What is left to do\uff1f",
 ])
 def test_a_question_about_open_work_is_recognised(message):
     assert recall.question_kind(message) == "open_work"
@@ -72,6 +88,26 @@ def test_a_question_about_open_work_is_recognised(message):
     "Can you check if the job ran last week",
     "Traceback: ValueError: was it set previously?",
     "git log --since yesterday? or before?",
+    # review round 2: near variants that still misfired as open work, where a miss costs the turn its recall
+    "What is open on port 5432?",
+    "What's open on port 8080?",
+    "What is open in the editor",
+    "what is open in vscode",
+    "What is remaining in the queue?",
+    "list open items in the GitHub milestone",
+    "What is left for the reader in this chapter?",
+    # ...and as past work
+    "What did I do wrong?",
+    "what did i do wrong here?\n```\nTypeError: x\n```",
+    "What did we do wrong in this function?",
+    "Where were we supposed to put the config file per the docs?",
+    "We left off the trailing slash, is that why it 404s?",
+    "where did we stop the container?",
+    "Error: did we set DATABASE_URL? not found in env",
+    "Have we seen a spike in latency?",
+    "Did we use too much memory in that run?",
+    "Do you remember how to use awk?",
+    "Can you recall the API from the docs?",
 ])
 def test_an_ordinary_message_is_neither(message):
     assert recall.question_kind(message) is None
