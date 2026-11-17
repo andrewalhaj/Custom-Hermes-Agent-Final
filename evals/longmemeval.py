@@ -206,9 +206,10 @@ def database(postgres, password, *, kept=None, question_id=None):
                 admin.execute(sql.SQL("drop database if exists {} with (force)").format(sql.Identifier(name)))
 
 
-def hermes_home(tmp, template, judge_model):
+def hermes_home(tmp, template, judge_model, embedding="local"):
     """A Hermes home with the plugin and its settings, on top of `template` (which holds, for a real run, the
-    Claude subscription provider plugin and its login), and a repository whose origin is the eval's project."""
+    Claude subscription provider plugin and its login), and a repository whose origin is the eval's project.
+    `embedding` is the plugin's embedding route (#239)."""
     home = tmp / "home"
     if template:
         shutil.copytree(template, home)
@@ -222,7 +223,8 @@ def hermes_home(tmp, template, judge_model):
     # Enabled as an agent host enables it: only then does it register its own route for extraction (#148)
     plugins["enabled"] = sorted({*(plugins.get("enabled") or ()), "custom_build"})
     entries = plugins.setdefault("entries", {})
-    entries.setdefault("custom_build", {})["settings"] = {"machine_name": MACHINE, "judge_model": judge_model}
+    entries.setdefault("custom_build", {})["settings"] = {"machine_name": MACHINE, "judge_model": judge_model,
+                                                          **({"embedding": embedding} if embedding != "local" else {})}
     config_file.write_text(yaml.safe_dump(config), encoding="utf-8")
     work = tmp / "work"
     subprocess.run(["git", "init", "-q", str(work)], check=True)
@@ -261,11 +263,12 @@ def first_hit(owner, bodies, evidence):
 
 
 @contextlib.contextmanager
-def _question(entry, agent, template, judge_model, judge_key):
-    """A fresh Hermes home for one question: (question file, home, work tree, the replay's environment)."""
+def _question(entry, agent, template, judge_model, judge_key, embedding="local"):
+    """A fresh Hermes home for one question: (question file, home, work tree, the replay's environment). On the
+    hosted route, the replay inherits DEEPINFRA_API_KEY from the runner's environment (#239)."""
     with tempfile.TemporaryDirectory() as directory:
         tmp = pathlib.Path(directory)
-        home, work = hermes_home(tmp, template, judge_model)
+        home, work = hermes_home(tmp, template, judge_model, embedding)
         question = tmp / "question.json"
         question.write_text(json.dumps(entry), encoding="utf-8")
         # Not the caller's Claude or Anthropic settings (a Claude Code shell's base URL, account and organisation):
@@ -276,10 +279,10 @@ def _question(entry, agent, template, judge_model, judge_key):
                                      "TYPESAFE_API_KEY": judge_key or os.environ.get("TYPESAFE_API_KEY", "")}
 
 
-def one(entry, *, postgres, password, command, template, judge_model, judge_key, kept=None):
+def one(entry, *, postgres, password, command, template, judge_model, judge_key, kept=None, embedding="local"):
     """Replay and ask one question; its scores, the build it ran on, and the failure codes it recorded."""
     with (database(postgres, password, kept=kept, question_id=entry["question_id"]) as (owner, agent),
-          _question(entry, agent, template, judge_model, judge_key) as (question, home, work, env)):
+          _question(entry, agent, template, judge_model, judge_key, embedding) as (question, home, work, env)):
         stopped = replay(command, "ingest", question, home, work, env)["stopped"]
         with psycopg.connect(owner, autocommit=True) as conn:   # each row dated by its session (for recency)
             for session_id, date in zip(entry["haystack_session_ids"], entry["haystack_dates"], strict=True):
@@ -288,14 +291,50 @@ def one(entry, *, postgres, password, command, template, judge_model, judge_key,
         return _asked(entry, owner, command, question, home, work, env, since=0, stopped=stopped)
 
 
-def again(entry, *, name, postgres, password, command, template, judge_model, judge_key):
+def again(entry, *, name, postgres, password, command, template, judge_model, judge_key, embedding="local",
+          backups=None):
     """Ask one question of its kept store again, from a fresh Hermes home and with no ingest, so no extraction
-    and no digest (#242); its scores count only the events of this ask."""
+    and no digest (#242); its scores count only the events of this ask. On the hosted route, a store that
+    holds another build is first re-embedded through scripts/reembed, its old vectors backed up in `backups`
+    (#239); what it re-embedded is kept in the result's `reembedded`, None when nothing needed it."""
     owner, agent = _urls(postgres, name, password)
     with psycopg.connect(owner) as conn:
         since = conn.execute("select coalesce(max(id), 0) from memory.events").fetchone()[0]
-    with _question(entry, agent, template, judge_model, judge_key) as (question, home, work, env):
-        return _asked(entry, owner, command, question, home, work, env, since=since, stopped=None)
+    reembedded = _reembed(entry, owner, backups) if embedding == "deepinfra" else None
+    with _question(entry, agent, template, judge_model, judge_key, embedding) as (question, home, work, env):
+        return {**_asked(entry, owner, command, question, home, work, env, since=since, stopped=None),
+                "reembedded": reembedded}
+
+
+def _check_reference():
+    """An EvalError unless the hosted route's recorded reference checks, before any question starts: without
+    it every replay would extract on Haiku and then fail every store (#239 review)."""
+    from custom_build.memory import embedding
+
+    try:
+        embedding.HostedEmbedder(os.environ.get("DEEPINFRA_API_KEY")).check_reference(timeout=30)
+    except (embedding.EmbedUnavailable, embedding.ModelMismatch) as exc:
+        raise EvalError(f"the hosted route's reference does not check: {exc}") from exc
+
+
+def _reembed(entry, owner, backups):
+    """Move a kept store to the hosted build, unless no fact holds another; an EvalError when it cannot."""
+    # Imported here: the plugin loads Hermes, which writes into its home, and a local run needs neither (#239 review).
+    from custom_build.memory import embedding
+    from scripts import reembed
+
+    with psycopg.connect(owner) as conn:
+        if not conn.execute("select count(*) from memory.facts where embedding_model <> %s",
+                            (embedding.HOSTED_BUILD,)).fetchone()[0]:
+            return None
+    pathlib.Path(backups).mkdir(parents=True, exist_ok=True)
+    try:
+        return reembed.store(owner, os.environ["DEEPINFRA_API_KEY"],
+                             backup=pathlib.Path(backups) / f"backup-{entry['question_id']}.json")
+    except psycopg.Error as exc:   # its message can hold the connection string
+        raise EvalError(f"re-embedding {entry['question_id']}: {type(exc).__name__} from the store") from exc
+    except (reembed.ReembedError, embedding.EmbedUnavailable, embedding.ModelMismatch) as exc:
+        raise EvalError(f"re-embedding {entry['question_id']}: {exc}") from exc
 
 
 def _asked(entry, owner, command, question, home, work, env, *, since, stopped):
@@ -392,7 +431,7 @@ def _scores(results, rank="first_hit"):
             "mrr": round(sum(1 / hit for hit in hits if hit) / count, 4) if count else None}
 
 
-def report(results, *, sha256, seed, judge_model, ids=None, asked_again=None):
+def report(results, *, sha256, seed, judge_model, ids=None, asked_again=None, embedding="local"):
     answerable = [result for result in results if not result["abstention"]]
     abstaining = [result for result in results if result["abstention"]]
     commit = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD"], capture_output=True, text=True,
@@ -414,6 +453,7 @@ def report(results, *, sha256, seed, judge_model, ids=None, asked_again=None):
             "supersede_pairs": {limit: sum(r["fact_pairs"][limit] for r in results)
                                 for limit in ("without_judge", "ask_judge_from")},
             "asked_again": asked_again,   # the kept run whose stores were asked again (#242), or None
+            "embedding": embedding,       # the route every replay embedded through (#239)
             # Answerable misses by cause (#234); a recall that failed is counted under recall_failed instead.
             "misses": {cause: missed.count(cause) for cause in MISSES if cause in missed},
             # First cut: an abstention question is answered right when recall brings no notes (3.8).
@@ -471,11 +511,14 @@ def chosen(entries, ids):
 
 
 def run(*, data, sha256, questions, seed, yes, postgres, out, replay_command=None, template=None,
-        judge_model="jev-1.14.0", judge_key=None, parallel=1, ids=None, keep=False, ask_kept=None):
+        judge_model="jev-1.14.0", judge_key=None, parallel=1, ids=None, keep=False, ask_kept=None,
+        embedding="local"):
     """Estimate, or with `yes` run, the eval over a seeded subset, or over the questions `ids` names (#236), up
     to `parallel` questions at once (#219); returns (and writes) the report, its questions in that order.
     With `keep`, each question's store and the run's roles are left, listed in `out`/kept.json; `ask_kept`, a
-    kept run's `out`, asks its questions of those stores again, with no extraction (#242)."""
+    kept run's `out`, asks its questions of those stores again, with no extraction (#242). `embedding` is the
+    route every replay embeds through; asking kept stores on the hosted route re-embeds them first, backing
+    their old vectors up in `out` (#239)."""
     kept_names = None
     if ask_kept:
         if pathlib.Path(out).resolve() == pathlib.Path(ask_kept).resolve():
@@ -490,6 +533,8 @@ def run(*, data, sha256, questions, seed, yes, postgres, out, replay_command=Non
             return {"estimate": {"questions": len(entries), "haiku_calls_at_least": 0,
                                  "judge_calls_at_least": 2 * len(entries)}}
         return {"estimate": estimate(entries)}
+    if embedding == "deepinfra":
+        _check_reference()
     command = replay_command or [sys.executable, "-m", "evals.replay"]
     results, stopped, made = [], None, False
     kept = {} if keep else None
@@ -501,10 +546,11 @@ def run(*, data, sha256, questions, seed, yes, postgres, out, replay_command=Non
         try:
             if ask_kept:
                 result = again(entry, name=kept_names[entry["question_id"]], postgres=postgres, password=password,
-                               command=command, template=template, judge_model=judge_model, judge_key=judge_key)
+                               command=command, template=template, judge_model=judge_model, judge_key=judge_key,
+                               embedding=embedding, backups=out)
             else:
                 result = one(entry, postgres=postgres, password=password, command=command, template=template,
-                             judge_model=judge_model, judge_key=judge_key, kept=kept)
+                             judge_model=judge_model, judge_key=judge_key, kept=kept, embedding=embedding)
         except BaseException:
             halt.set()
             raise
@@ -539,7 +585,7 @@ def run(*, data, sha256, questions, seed, yes, postgres, out, replay_command=Non
         raise
     finally:
         summary = report(results, sha256=sha256, seed=None if ids else seed, judge_model=judge_model, ids=ids,
-                         asked_again=str(ask_kept) if ask_kept else None)
+                         asked_again=str(ask_kept) if ask_kept else None, embedding=embedding)
         if stopped:
             summary["stopped"] = stopped
         out = pathlib.Path(out)
@@ -571,6 +617,9 @@ def main(argv=None):
     parser.add_argument("--ask-kept", metavar="DIR",
                         help="ask a kept run's questions of its stores again: no extraction, no digest (#242)")
     parser.add_argument("--drop-kept", metavar="DIR", help="drop a kept run's stores and roles, then stop (#242)")
+    parser.add_argument("--embedding", choices=("local", "deepinfra"), default="local",
+                        help="the route every replay embeds through; deepinfra needs DEEPINFRA_API_KEY, and with "
+                             "--ask-kept re-embeds each kept store first (#239)")
     args = parser.parse_args(argv)
     if args.parallel < 1:
         parser.error("--parallel must be 1 or more")
@@ -582,6 +631,8 @@ def main(argv=None):
     if args.drop_kept:
         drop_kept(args.postgres, args.drop_kept)
         return 0
+    if args.embedding == "deepinfra" and not os.environ.get("DEEPINFRA_API_KEY", "").strip():
+        parser.error("--embedding deepinfra needs DEEPINFRA_API_KEY in the environment, never an argument")
     if not args.data:
         parser.error("the following arguments are required: --data")
     ids = None
@@ -599,7 +650,8 @@ def main(argv=None):
         fetch(pinned["url"].format(revision=pinned["revision"]), args.data, pinned["sha256"])
     summary = run(data=args.data, sha256=pinned["sha256"], questions=20 if args.questions is None else args.questions,
                   seed=1 if args.seed is None else args.seed, yes=args.yes, postgres=args.postgres, out=args.out,
-                  template=args.template, parallel=args.parallel, ids=ids, keep=args.keep, ask_kept=args.ask_kept)
+                  template=args.template, parallel=args.parallel, ids=ids, keep=args.keep, ask_kept=args.ask_kept,
+                  embedding=args.embedding)
     print(json.dumps(summary if "estimate" in summary else {k: v for k, v in summary.items() if k != "per_question"},
                      indent=2))
     return 3 if summary.get("stopped") else 0

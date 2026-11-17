@@ -140,6 +140,17 @@ def test_store_never_writes_over_a_backup(deepinfra, reference, db, tmp_path):
     assert backup.read_text(encoding="utf-8") == "{}"
 
 
+def test_a_store_that_fails_leaves_no_backup_behind(deepinfra, reference, db, tmp_path):
+    # #239 review: the store rolled back, but its backup stayed, and a second try was refused for it.
+    with psycopg.connect(db["owner"], autocommit=True) as owner:
+        _add(owner, "The parser tests run with pytest.")
+    deepinfra.fail_on = "The parser tests run with pytest."
+    backup = tmp_path / "backup.json"
+    with pytest.raises(embedding.EmbedUnavailable):
+        reembed.store(db["owner"], KEY, backup=backup, url=deepinfra.url, path=reference)
+    assert not backup.exists()
+
+
 def test_the_command_needs_deepinfras_key(capsys, monkeypatch):
     monkeypatch.delenv("DEEPINFRA_API_KEY", raising=False)
     with pytest.raises(SystemExit):

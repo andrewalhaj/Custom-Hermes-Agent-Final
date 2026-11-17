@@ -78,6 +78,10 @@ if os.environ.get("EVAL_TEST_ENV_OUT"):   # the Claude and Anthropic settings th
 def patch(modules):
     modules["embedding"].OLLAMA_URL = os.environ["EVAL_TEST_OLLAMA_URL"]
     modules["judge"].URL = os.environ["EVAL_TEST_JUDGE_URL"]
+    if os.environ.get("EVAL_TEST_HOSTED_URL"):   # the hosted route's fake and its reference (#239)
+        import pathlib
+        modules["embedding"].HOSTED_URL = os.environ["EVAL_TEST_HOSTED_URL"]
+        modules["embedding"].REFERENCE = pathlib.Path(os.environ["EVAL_TEST_REFERENCE"])
     if sys.argv[1] == "ask" and os.environ.get("EVAL_TEST_ASK_FAILS"):
         modules["embedding"].OLLAMA_URL = "http://127.0.0.1:9"   # nothing listens: recall fails
     if json.load(open(sys.argv[2]))["question_id"] == os.environ.get("EVAL_TEST_CRASH_ON"):
@@ -104,7 +108,8 @@ def dataset(tmp_path):
 
 def run(tmp_path, dataset, ollama, typesafe, **options):
     os.environ["EVAL_TEST_OLLAMA_URL"], os.environ["EVAL_TEST_JUDGE_URL"] = ollama.url, typesafe.url
-    for name in ("EVAL_TEST_ASK_FAILS", "EVAL_TEST_CRASH_ON", "EVAL_TEST_ROUTES", "EVAL_TEST_ENV_OUT", "EVAL_TEST_TIMES"):
+    for name in ("EVAL_TEST_ASK_FAILS", "EVAL_TEST_CRASH_ON", "EVAL_TEST_ROUTES", "EVAL_TEST_ENV_OUT", "EVAL_TEST_TIMES",
+                 "EVAL_TEST_HOSTED_URL", "EVAL_TEST_REFERENCE"):
         os.environ.pop(name, None)
     os.environ.update(options.pop("test_env", {}))
     defaults = {"data": dataset, "sha256": hashlib.sha256(dataset.read_bytes()).hexdigest(), "questions": 3,
@@ -628,6 +633,106 @@ def test_asking_a_kept_run_again_takes_no_other_choice_of_questions(dataset, cap
     with pytest.raises(SystemExit):
         longmemeval.main(["--data", str(dataset), "--ask-kept", "kept", *given])
     assert "--ask-kept asks the kept run's questions" in capsys.readouterr().err
+
+
+@pytest.fixture
+def hosted(tmp_path, deepinfra, monkeypatch):
+    """The hosted route pointed at the fake, here and in each replay, with a reference recorded against it."""
+    reference = tmp_path / "embed_reference.json"
+    reference.write_text(json.dumps({"text": "The reference sentence.", "vector": deepinfra.other, "threshold": 0.999}),
+                         encoding="utf-8")
+    from custom_build.memory import embedding
+    monkeypatch.setattr(embedding, "HOSTED_URL", deepinfra.url)
+    monkeypatch.setattr(embedding, "REFERENCE", reference)
+    monkeypatch.setenv("DEEPINFRA_API_KEY", "test-key-not-a-real-one")
+    return {"EVAL_TEST_HOSTED_URL": deepinfra.url, "EVAL_TEST_REFERENCE": str(reference)}
+
+
+def test_a_kept_run_asked_on_the_hosted_route_re_embeds_each_store_then_asks_through_it(
+        tmp_path, dataset, ollama, typesafe, deepinfra, hosted):
+    # #239's comparison: the same facts asked with local vectors, then re-embedded and asked with hosted ones.
+    typesafe.default = 0.9
+    kept = tmp_path / "kept"
+    try:
+        local = run(tmp_path, dataset, ollama, typesafe, keep=True, out=kept)
+        embedded_locally = len(ollama.embedded)
+        again = run(tmp_path, dataset, ollama, typesafe, ask_kept=kept, out=tmp_path / "hosted", embedding="deepinfra",
+                    test_env=hosted)
+        names = json.loads((kept / "kept.json").read_text(encoding="utf-8"))["databases"]
+        builds = set()
+        for name in names.values():
+            owner = psycopg.conninfo.make_conninfo(os.environ["TEST_DATABASE_URL"], dbname=name)
+            with psycopg.connect(owner) as conn:
+                builds |= {row[0] for row in conn.execute("select embedding_model from memory.facts")}
+    finally:
+        longmemeval.drop_kept(os.environ["TEST_DATABASE_URL"], kept)
+    assert builds == {"deepinfra:Qwen/Qwen3-Embedding-4B"}
+    assert len(ollama.embedded) == embedded_locally   # the hosted pass never reached Ollama
+    sent = [text for _, body in deepinfra.requests for text in body["input"]]
+    assert "Which editor does the user use?" in sent and "I edit all my code in vim, every day." in sent
+    assert again["embedding"] == "deepinfra" and local["embedding"] == "local"
+    assert again["answerable"] == local["answerable"]   # the fakes give both routes the same vectors
+    # q2_abs stored no fact (its session is small talk), so there was nothing to move or back up.
+    assert sorted(path.name for path in (tmp_path / "hosted").glob("backup-*.json")) == ["backup-q1.json",
+                                                                                          "backup-q3.json"]
+
+
+def test_a_run_on_the_hosted_route_embeds_through_it_from_the_start(tmp_path, dataset, ollama, typesafe, deepinfra,
+                                                                     hosted):
+    typesafe.default = 0.9
+    report = run(tmp_path, dataset, ollama, typesafe, embedding="deepinfra", test_env=hosted)
+    assert ollama.embedded == [] and deepinfra.requests
+    assert report["embedding_build"] == "deepinfra:Qwen/Qwen3-Embedding-4B"
+    assert report["answerable"] == {"count": 2, "recall_at_5": 1.0, "mrr": 1.0}
+
+
+def test_a_hosted_run_without_a_reference_stops_before_any_question(tmp_path, dataset, ollama, typesafe, deepinfra,
+                                                                    hosted, monkeypatch):
+    # #239 review: it extracted every turn on Haiku, then failed every store as embed.model_mismatch.
+    from custom_build.memory import embedding
+    monkeypatch.setattr(embedding, "REFERENCE", tmp_path / "missing.json")
+    with pytest.raises(longmemeval.EvalError, match="reference"):
+        run(tmp_path, dataset, ollama, typesafe, embedding="deepinfra", test_env=hosted)
+    assert ollama.embedded == [] and typesafe.requests == [] and _nothing_left()
+
+
+def test_a_second_hosted_pass_and_a_kept_backup_are_handled(tmp_path, dataset, ollama, typesafe, deepinfra, hosted):
+    # #239 review: stores already moved need no move or backup; a re-embed that fails is an EvalError.
+    typesafe.default = 0.9
+    kept = tmp_path / "kept"
+    try:
+        run(tmp_path, dataset, ollama, typesafe, keep=True, ids=["q1"], out=kept)
+        (tmp_path / "taken").mkdir()
+        (tmp_path / "taken" / "backup-q1.json").write_text("[]", encoding="utf-8")
+        with pytest.raises(longmemeval.EvalError, match="already exists"):
+            run(tmp_path, dataset, ollama, typesafe, ask_kept=kept, out=tmp_path / "taken", embedding="deepinfra",
+                test_env=hosted)
+        first = run(tmp_path, dataset, ollama, typesafe, ask_kept=kept, out=tmp_path / "first", embedding="deepinfra",
+                    test_env=hosted)
+        second = run(tmp_path, dataset, ollama, typesafe, ask_kept=kept, out=tmp_path / "second",
+                     embedding="deepinfra", test_env=hosted)
+    finally:
+        longmemeval.drop_kept(os.environ["TEST_DATABASE_URL"], kept)
+    assert first["per_question"][0]["reembedded"] == {"facts": 1, "redacted": []}
+    assert second["per_question"][0]["reembedded"] is None and not list((tmp_path / "second").glob("backup-*"))
+
+
+def test_importing_the_runner_writes_nothing_to_the_hermes_home(tmp_path):
+    # #239 review: a top-level import of the plugin loaded Hermes, which made folders in $HERMES_HOME.
+    home = tmp_path / "home"
+    home.mkdir()
+    import subprocess
+    result = subprocess.run([sys.executable, "-c", "import evals.longmemeval"], cwd=ROOT, capture_output=True,
+                            text=True, env={**os.environ, "HERMES_HOME": str(home)}, check=False)
+    assert result.returncode == 0, result.stderr
+    assert list(home.iterdir()) == []
+
+
+def test_the_hosted_route_needs_deepinfras_key(dataset, capsys, monkeypatch):
+    monkeypatch.delenv("DEEPINFRA_API_KEY", raising=False)
+    with pytest.raises(SystemExit):
+        longmemeval.main(["--data", str(dataset), "--embedding", "deepinfra"])
+    assert "DEEPINFRA_API_KEY" in capsys.readouterr().err
 
 
 def test_a_turn_with_no_reply_is_not_synced_as_hermes_never_does():
