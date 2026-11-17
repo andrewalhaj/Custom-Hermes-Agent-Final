@@ -339,13 +339,22 @@ def test_dependencies_are_audited_once_everything_is_installed():
     assert commands.index('pip install -e ".[dev]"') < commands.index("pip-audit")
 
 
+def unpinned_actions(directory):
+    """Each `uses:` in the directory's workflow files, on a step or on a whole job, that is not a full commit SHA."""
+    found = []
+    for path in sorted(directory.glob("*.yml")):
+        for job in yaml.safe_load(path.read_text())["jobs"].values():
+            for used in [job.get("uses"), *(step.get("uses") for step in job.get("steps", []))]:
+                if used and not re.fullmatch(r"[\w.-]+/[\w./-]+@[0-9a-f]{40}", used):
+                    found.append(f"{path.name}: {used}")
+    return found
+
+
 def test_every_action_is_pinned_to_a_full_commit_sha():
     # GitHub's secure-use reference: a tag can be moved to other code, a full-length commit SHA cannot (#176).
-    jobs = yaml.safe_load(WORKFLOW.read_text())["jobs"]
-    used = [step["uses"] for job in jobs.values() for step in job["steps"] if "uses" in step]
-    assert used
-    for action in used:
-        assert re.fullmatch(r"[\w.-]+/[\w./-]+@[0-9a-f]{40}", action), action
+    steps = yaml.safe_load(WORKFLOW.read_text())["jobs"]["tests"]["steps"]
+    assert any("uses" in step for step in steps)    # there is something to check
+    assert unpinned_actions(WORKFLOW.parent) == []
 
 
 def test_dependabot_keeps_the_pinned_actions_current():
