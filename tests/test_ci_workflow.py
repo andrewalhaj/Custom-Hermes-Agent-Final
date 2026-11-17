@@ -86,6 +86,12 @@ LINE_FORMS = [f"# {NOQA} : {{rule}}", "# ruff: ignore[{rule}]"]
 FILE_FORMS = ["# ruff: disable[{rule}]", "# ruff: file-ignore[{rule}]", f"# ruff : {NOQA}", f"# flake8 : {NOQA}"]
 UNSUPPRESSED_CASES = [("clean", {"pyproject.toml": CONFIG, "a.py": CODE}, None),
                       ("another rule suppressed", {"pyproject.toml": CONFIG, "a.py": f"import os  # {NOQA}: F401\n"}, None)]
+UNSUPPRESSED_CASES += [
+    ("a nested file", {"pyproject.toml": CONFIG, "a.py": CODE,
+                       "pkg/sub/b.py": "# ruff: file-ignore[BLE001]\n" + BROAD["BLE001"].format(line="")}, ": BLE001 "),
+    ("ruff cannot read its configuration", {"pyproject.toml": "[tool.ruff.lint]\nselect = 1\n", "a.py": CODE},
+     "ruff exited 2"),
+]
 for rule, body in BROAD.items():
     UNSUPPRESSED_CASES += [(f"{rule} under {form}", {"pyproject.toml": CONFIG, "a.py": body.format(
         line="  " + form.format(rule=rule))}, f": {rule} ") for form in LINE_FORMS]
