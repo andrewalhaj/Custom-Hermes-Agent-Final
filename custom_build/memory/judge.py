@@ -60,8 +60,10 @@ def route_answers(state, actions, wording, *, url, key, model, timeout):
         pick, asks = answers["action"]["choice"], answers["asks_for_work"]["noul"]
     except (KeyError, TypeError) as exc:
         raise JudgeError(f"malformed answer: {type(exc).__name__}: {exc}"[:200]) from exc
-    if pick not in actions:
+    if not isinstance(pick, str) or pick not in actions:
         raise JudgeError(f"malformed answer: picked {pick!r}, which is not on the action list"[:200])
+    if isinstance(asks, bool) or not isinstance(asks, int | float):
+        raise JudgeError(f"malformed answer: 'asks for work' is {asks!r}, not a probability"[:200])
     return pick, asks
 
 
