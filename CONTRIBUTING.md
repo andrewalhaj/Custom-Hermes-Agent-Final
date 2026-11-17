@@ -418,9 +418,9 @@ jobs:
     env:
       TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
         with: { fetch-depth: 0 }   # the secret scan reads the whole history
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0   # v7.1.0
         with: { python-version: "3.14", cache: pip }
       - name: install Hermes v0.23.1 from its own lock file
         shell: bash
