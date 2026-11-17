@@ -17,6 +17,8 @@ import sys
 
 import plugins.memory
 import psycopg
+from agent.redact import redact_sensitive_text
+from agent.runtime_cwd import resolve_agent_cwd
 from hermes_cli.plugins import discover_plugins
 
 DATE_FORMAT = "%Y/%m/%d (%a) %H:%M"   # LongMemEval's haystack_dates
@@ -91,6 +93,35 @@ def ask(provider, home, entry):
     return provider.prefetch(entry["question"], session_id=session_id)
 
 
+def pool(provider, entry):
+    """The candidates recall searched for the question, each with the judge's score and no floor applied (#234),
+    as [{"body", "score"}], or None when it could not be fetched; a score is None when the judge could not
+    answer. One more judge call, no model call.
+    The query, project and number wanted are recall's own (tool.recall_notes)."""
+    modules = _modules()
+    settings, judge = modules["settings"], modules["judge"]
+    query = redact_sensitive_text(entry["question"], force=True)
+    limits = modules["write_path"].load()["recall"]
+    wanted = limits["results_past_work"] if modules["recall"].question_kind(query) == "past_work" else limits["results"]
+    embedding = modules["embedding"]
+    try:
+        with settings.connect() as conn:
+            found = modules["search"].candidates(conn, provider.embedder, query,
+                                                 modules["project"].key(resolve_agent_cwd()), wanted=wanted, timeout=5)
+    except (embedding.EmbedUnavailable, embedding.ModelMismatch, psycopg.Error):
+        return None   # the search's own failures: the pool is unknown, which is not the same as empty (#234 review)
+    if not found:
+        return []
+    try:
+        scores = judge.relevance_answers(query, [candidate["body"] for candidate in found], url=judge.URL,
+                                         key=os.environ["TYPESAFE_API_KEY"],
+                                         model=settings.plugin_context().get_config(settings.JUDGE_MODEL),
+                                         timeout=judge.DEADLINE)
+    except (judge.JudgeError, judge.JudgeTimeout):
+        scores = [None] * len(found)
+    return [{"body": candidate["body"], "score": score} for candidate, score in zip(found, scores, strict=True)]
+
+
 def main(argv, patch=None):
     """`patch(modules)` runs after the provider loads; a test points the plugin at its fakes with it."""
     mode, question, home = argv
@@ -102,7 +133,8 @@ def main(argv, patch=None):
     if mode == "ingest":
         print(json.dumps({"ingested": entry["question_id"], "stopped": ingest(provider, home, entry)}))
     else:
-        print(json.dumps({"notes": ask(provider, home, entry)}))
+        notes = ask(provider, home, entry)   # first, as Hermes asks it
+        print(json.dumps({"notes": notes, "pool": pool(provider, entry)}))
 
 
 if __name__ == "__main__":
