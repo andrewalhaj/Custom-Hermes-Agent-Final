@@ -6,6 +6,7 @@
 !/.gitignore
 !/.github/
 !/ARCHITECTURE.md
+!/README.md
 !/CONTRIBUTING.md
 !/OPERATIONS.md
 !/pyproject.toml
@@ -16,6 +17,7 @@
 !/.githooks/
 !/evals/
 !/scripts/
+!/docs/
 
 # The eval runner's code and pinned data reference; never its data file or reports (ARCHITECTURE.md 3.8).
 /evals/*
@@ -57,3 +59,9 @@
 # The operator's deploy script (OPERATIONS.md section 8); never its settings.
 /scripts/*
 !/scripts/*.py
+
+# The README's architecture diagrams, and nothing else under docs/.
+/docs/*
+!/docs/architecture/
+/docs/architecture/*
+!/docs/architecture/*.png

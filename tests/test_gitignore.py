@@ -44,6 +44,9 @@ HIDDEN = [
     "eval-report/report.json",
     "scripts/.env",
     "scripts/notes.md",
+    "docs/.env",
+    "docs/architecture/.env",
+    "docs/architecture/notes.md",
 ]
 VISIBLE = [
     "evals/new_runner.py",
@@ -64,6 +67,8 @@ VISIBLE = [
     "custom_build/guards/write_gate.py",
     "custom_build/guards/write_gate.toml",
     "custom_build/guards/verify_gate.toml",
+    "README.md",
+    "docs/architecture/01-architecture.png",
 ]
 
 
