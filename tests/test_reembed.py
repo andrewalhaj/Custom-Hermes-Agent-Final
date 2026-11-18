@@ -244,3 +244,18 @@ def test_local_writes_nothing_when_the_ollama_answers_too_few_or_the_wrong_size_
     assert not backup.exists()
     with psycopg.connect(db["owner"]) as conn:
         assert conn.execute("select embedding_model from memory.facts").fetchall() == [(embedding.HOSTED_BUILD,)]
+
+
+def test_local_drops_a_trailing_slash_from_the_ollama_url(ollama, db, tmp_path):
+    with psycopg.connect(db["owner"], autocommit=True) as owner:
+        _add_hosted(owner, "The parser tests run with pytest.")
+    outcome = reembed.local(db["owner"], ollama_url=ollama.url + "/", backup=tmp_path / "backup.json")
+    assert outcome["build"] == ollama.build
+
+
+@pytest.mark.parametrize("value", ["100.64.0.2:11434", "ftp://host:11434", "http://"])
+def test_local_refuses_an_ollama_url_that_is_not_an_http_address(db, tmp_path, value):
+    backup = tmp_path / "backup.json"
+    with pytest.raises(reembed.ReembedError, match="http"):
+        reembed.local(db["owner"], ollama_url=value, backup=backup)
+    assert not backup.exists()

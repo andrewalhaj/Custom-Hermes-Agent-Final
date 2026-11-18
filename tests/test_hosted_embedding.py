@@ -73,6 +73,15 @@ def test_the_provider_builds_its_embedder_from_the_ollama_url_setting():
     assert settings.embedder(_Settings()).url == embedding.OLLAMA_URL
 
 
+@pytest.mark.parametrize("value", ["http://[::1", "http://[bad]:1"])
+def test_an_ollama_url_urllib_cannot_split_is_config_missing_not_a_crash(value):
+    # #261 review round 2: urlsplit raises ValueError on a bracket typo.
+    from custom_build import settings
+
+    assert settings.missing_embedding_settings(_Settings(ollama_url=value)) == [
+        "plugins.entries.custom_build.settings.ollama_url"]
+
+
 @pytest.mark.parametrize("value", [11434, True, ["http://100.64.0.2:11434"]])
 def test_an_ollama_url_that_is_not_text_does_not_crash_the_provider(value):
     # #261 review: the provider builds its embedder before the turn check reports config.missing.
