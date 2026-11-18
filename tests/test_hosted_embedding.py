@@ -44,6 +44,63 @@ def test_the_setting_picks_the_route_and_local_is_the_default():
     assert isinstance(embedding.for_setting("deepinfra", KEY), embedding.HostedEmbedder)
 
 
+def test_the_local_route_uses_the_ollama_the_setting_names_and_this_machines_by_default():
+    # #261: the model can run on another machine on the tailnet; unset, it is this machine's, as before.
+    assert embedding.for_setting(None, None).url == embedding.OLLAMA_URL == "http://127.0.0.1:11434"
+    assert embedding.for_setting("local", None, "http://100.64.0.2:11434").url == "http://100.64.0.2:11434"
+    assert embedding.for_setting(None, None, "http://100.64.0.2:11434").url == "http://100.64.0.2:11434"
+
+
+def test_a_trailing_slash_on_the_ollama_url_is_dropped():
+    # #261 review: "http://host:11434/" + "/api/tags" would ask Ollama for //api/tags.
+    assert embedding.for_setting(None, None, "http://100.64.0.2:11434/").url == "http://100.64.0.2:11434"
+
+
+class _Settings:
+    """A plugin context whose `get_config` answers from a dict, as Hermes's does for the build's settings."""
+
+    def __init__(self, **values):
+        self.values = values
+
+    def get_config(self, name):
+        return self.values.get(name)
+
+
+def test_the_provider_builds_its_embedder_from_the_ollama_url_setting():
+    from custom_build import settings
+
+    assert settings.embedder(_Settings(ollama_url=" http://100.64.0.2:11434 ")).url == "http://100.64.0.2:11434"
+    assert settings.embedder(_Settings()).url == embedding.OLLAMA_URL
+
+
+@pytest.mark.parametrize("value", ["http://[::1", "http://[bad]:1"])
+def test_an_ollama_url_urllib_cannot_split_is_config_missing_not_a_crash(value):
+    # #261 review round 2: urlsplit raises ValueError on a bracket typo.
+    from custom_build import settings
+
+    assert settings.missing_embedding_settings(_Settings(ollama_url=value)) == [
+        "plugins.entries.custom_build.settings.ollama_url"]
+
+
+@pytest.mark.parametrize("value", [11434, True, ["http://100.64.0.2:11434"]])
+def test_an_ollama_url_that_is_not_text_does_not_crash_the_provider(value):
+    # #261 review: the provider builds its embedder before the turn check reports config.missing.
+    from custom_build import settings
+
+    assert settings.embedder(_Settings(ollama_url=value)).url == embedding.OLLAMA_URL
+    assert settings.missing_embedding_settings(_Settings(ollama_url=value)) == [
+        "plugins.entries.custom_build.settings.ollama_url"]
+
+
+def test_a_store_embedded_on_another_machines_ollama_passes_on_a_host_that_names_it(ollama, db):
+    # The digest recorded with each vector is the model's build wherever it runs (#261).
+    _store_fact(db["owner"], ollama.build)
+    embedder = embedding.for_setting("local", None, ollama.url)
+    with psycopg.connect(db["agent"]) as conn:
+        embedder.check(conn, timeout=5)
+    assert embedder.build == ollama.build
+
+
 def test_the_check_passes_when_the_reference_vector_comes_back_the_same(deepinfra, reference, db):
     embedder = hosted(deepinfra, reference)
     with psycopg.connect(db["agent"]) as conn:

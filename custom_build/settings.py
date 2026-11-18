@@ -5,6 +5,8 @@ reads them again on every turn, in the process that serves it, which a hand-star
 checked before.
 """
 
+import urllib.parse
+
 import psycopg
 
 from . import failures
@@ -17,6 +19,7 @@ AGENT_HOSTS = "agent_hosts"   # plugins.entries.custom_build.settings.agent_host
 EMBEDDING = "embedding"   # plugins.entries.custom_build.settings.embedding: "local" (unset) or "deepinfra" (#239)
 EMBEDDING_ROUTES = ("local", "deepinfra")
 EMBEDDING_KEY = "DEEPINFRA_API_KEY"   # a secret, in the profile's .env, needed with embedding: deepinfra
+OLLAMA_URL = "ollama_url"   # plugins.entries.custom_build.settings.ollama_url: the local route's Ollama, if not this machine's (#261)
 CONNECT_TIMEOUT = 5   # seconds, well under Hermes's 30-second deadline for a hook
 
 
@@ -24,6 +27,17 @@ def _usable(value):
     """A setting is usable only as text with more than whitespace in it; anything else, an unquoted
     number or date included, counts as missing (#71)."""
     return isinstance(value, str) and bool(value.strip())
+
+
+def http_address(value):
+    """Usable, and an http or https address with a host in it, as the local route's Ollama is named (#261)."""
+    if not _usable(value):
+        return False
+    try:
+        parts = urllib.parse.urlsplit(value.strip())
+        return parts.scheme in ("http", "https") and bool(parts.hostname)
+    except ValueError:   # what urlsplit raises for a malformed address, such as an unclosed [
+        return False
 
 
 def _connection_string(value):
@@ -53,9 +67,10 @@ def missing_embedding_settings(ctx):
     and not set (#239). Recall checks these too: Hermes runs prefetch before the turn check."""
     from agent.secret_scope import get_secret
 
-    route = ctx.get_config(EMBEDDING)
+    route, url = ctx.get_config(EMBEDDING), ctx.get_config(OLLAMA_URL)
     found = (("plugins.entries.custom_build.settings." + EMBEDDING, route is None or route in EMBEDDING_ROUTES),
-             (EMBEDDING_KEY, route != "deepinfra" or _usable(get_secret(EMBEDDING_KEY))))
+             (EMBEDDING_KEY, route != "deepinfra" or _usable(get_secret(EMBEDDING_KEY))),
+             ("plugins.entries.custom_build.settings." + OLLAMA_URL, url is None or http_address(url)))
     return [name for name, ok in found if not ok]
 
 
@@ -76,7 +91,9 @@ def embedder(ctx):
 
     from .memory import embedding
 
-    return embedding.for_setting(ctx.get_config(EMBEDDING), get_secret(EMBEDDING_KEY))
+    url = ctx.get_config(OLLAMA_URL)   # anything but text is left to the turn check's config.missing (#261 review)
+    return embedding.for_setting(ctx.get_config(EMBEDDING), get_secret(EMBEDDING_KEY),
+                                 url.strip() if isinstance(url, str) and url.strip() else None)
 
 
 def agent_hosts(ctx):

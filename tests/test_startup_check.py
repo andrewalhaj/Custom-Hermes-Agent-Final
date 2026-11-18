@@ -182,6 +182,24 @@ def test_the_hosted_embedding_without_its_key_fails_with_config_missing(tmp_path
     assert "config.missing" in output and "DEEPINFRA_API_KEY" in output, output
 
 
+def test_an_ollama_url_that_names_an_http_address_passes(tmp_path, db):
+    config = safe_config()
+    config["plugins"]["entries"]["custom_build"]["settings"]["ollama_url"] = " http://100.64.0.2:11434/ "
+    code, output, rows = run_check(tmp_path, db, config=config)
+    assert code == 0, output
+    assert rows == []
+
+
+@pytest.mark.parametrize("value", ["100.64.0.2:11434", "ftp://host:11434", "   ", 11434, "http://"])
+def test_an_ollama_url_that_is_not_an_http_address_fails_with_config_missing(tmp_path, db, value):
+    # #261: the local route's Ollama, when named, is an http or https address.
+    config = safe_config()
+    config["plugins"]["entries"]["custom_build"]["settings"]["ollama_url"] = value
+    code, output, _rows = run_check(tmp_path, db, config=config)
+    assert code != 0
+    assert "config.missing" in output and "ollama_url" in output, output
+
+
 def test_a_missing_judge_key_fails_with_config_missing(tmp_path, db):
     code, output, rows = run_check(tmp_path, db, judge_key=False)
     assert code != 0

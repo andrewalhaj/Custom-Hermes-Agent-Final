@@ -1,13 +1,14 @@
-"""Move a store to the hosted embedding route, and record the reference that route is checked by (#239).
+"""Move a store between the embedding routes, and record the reference the hosted one is checked by (#239, #261).
 
 Decided on #239 on 2026-11-17: the store is re-embedded once and keeps one build. The maintainer runs this
-from a checkout's root, with DeepInfra's key in DEEPINFRA_API_KEY and, for `store` and `restore`, the store
-owner's connection string in CUSTOM_BUILD_OWNER_URL. Neither is ever an argument. See OPERATIONS.md section 3
+from a checkout's root, with DeepInfra's key in DEEPINFRA_API_KEY (for `record`, `check` and `store`) and, for
+`store`, `local` and `restore`, the store owner's connection string in CUSTOM_BUILD_OWNER_URL. Neither is ever an argument. See OPERATIONS.md section 3
 item 1:
 
     python -m scripts.reembed record                    # once: writes custom_build/memory/embed_reference.json
     python -m scripts.reembed check                     # the cosine with the recorded vector, and its threshold
     python -m scripts.reembed store --backup FILE       # backs up the vectors, then re-embeds every fact
+    python -m scripts.reembed local --ollama-url URL --backup FILE   # the same, through an Ollama, back from hosted (#261)
     python -m scripts.reembed restore FILE              # puts the backed-up vectors and builds back
 
 `store` runs as the store's owner, because the agent's role may not change a vector. Before it, every Hermes
@@ -28,7 +29,7 @@ import sys
 import psycopg
 from agent.redact import redact_sensitive_text, register_redaction_patterns
 
-from custom_build import REDACTION_PATTERNS
+from custom_build import REDACTION_PATTERNS, settings
 from custom_build.memory import embedding, write_path
 
 # A made-up sentence, so the reference holds nothing of anyone's memory.
@@ -68,11 +69,44 @@ def store(owner_url, key, *, backup, url=None, path=None, batch=BATCH):
     """Back up every fact's vector and build to `backup`, then re-embed every fact through the hosted route, in
     one transaction; returns how many facts, and the ids of those whose body the redactor changed before it was
     sent (their vector is of the redacted text)."""
-    backup = pathlib.Path(backup)
-    if backup.exists():
+    if pathlib.Path(backup).exists():
         raise ReembedError(f"{backup} already exists; a backup is never written over")
     hosted = _hosted(key, url, path)
     hosted.check_reference(timeout=TIMEOUT)   # before anything is written
+    return _move(owner_url, backup, batch, lambda texts: hosted.vectors(texts, timeout=TIMEOUT),
+                 embedding.HOSTED_BUILD)
+
+
+def local(owner_url, *, ollama_url, backup, batch=BATCH):
+    """As `store`, through the Ollama at `ollama_url` instead (#261): every fact gets that Ollama's build of the
+    model, which is read before anything is written. Returns what `store` does, and the build."""
+    if pathlib.Path(backup).exists():
+        raise ReembedError(f"{backup} already exists; a backup is never written over")
+    if not settings.http_address(ollama_url):
+        raise ReembedError(f"{ollama_url!r} is not an http or https address with a host, as http://host:11434")
+    ollama_url = ollama_url.strip().rstrip("/")
+    build = embedding.machine_build(ollama_url, timeout=TIMEOUT)   # EmbedUnavailable when it lacks the model
+
+    def vectors(texts):
+        found = embedding._ollama(ollama_url, "/api/embed", {"model": embedding.MODEL, "input": texts},
+                                  timeout=TIMEOUT)["embeddings"]
+        # As the local route's embedder: a short answer is unavailable, a wrong size a different model.
+        if len(found) != len(texts):
+            raise embedding.EmbedUnavailable(f"Ollama returned {len(found)} vectors for {len(texts)} texts")
+        if any(len(vector) != embedding.DIMENSIONS for vector in found):
+            raise embedding.ModelMismatch(f"Ollama returned vectors of {sorted({len(v) for v in found})} numbers, "
+                                          f"not {embedding.DIMENSIONS}")
+        return found
+
+    return {**_move(owner_url, backup, batch, vectors, build), "build": build}
+
+
+def _move(owner_url, backup, batch, vectors, build):
+    """Back up every fact's vector and build to `backup`, then give every fact, live or not, a vector of its body
+    (redacted, then cut to store_chars, as the write path does) from `vectors`, labelled `build`, in one
+    transaction that checks at the end that no fact holds another build. A failure rolls everything back and
+    removes the backup, so a retry may run."""
+    backup = pathlib.Path(backup)
     register_redaction_patterns(REDACTION_PATTERNS)   # the plugin's own, as its load registers them
     cap = write_path.load()["embed"]["store_chars"]
     redacted = []
@@ -87,12 +121,11 @@ def store(owner_url, key, *, backup, url=None, path=None, batch=BATCH):
                 texts = [redact_sensitive_text(body, force=True) for _, body, _, _ in part]
                 redacted += [str(fact_id) for (fact_id, body, _, _), text in zip(part, texts, strict=True)
                              if text != body]
-                vectors = hosted.vectors([text[:cap] for text in texts], timeout=TIMEOUT)
-                for (fact_id, _, _, _), vector in zip(part, vectors, strict=True):
+                for (fact_id, _, _, _), vector in zip(part, vectors([text[:cap] for text in texts]), strict=True):
                     conn.execute("update memory.facts set embedding = %s, embedding_model = %s where id = %s",
-                                 (str(vector), embedding.HOSTED_BUILD, fact_id))
+                                 (str(vector), build, fact_id))
             if other := conn.execute("select count(*) from memory.facts where embedding_model <> %s",
-                                     (embedding.HOSTED_BUILD,)).fetchone()[0]:
+                                     (build,)).fetchone()[0]:
                 raise ReembedError(f"{other} facts still hold another build; nothing was written")
     except BaseException:   # rolled back: the store is as the backup says, so the backup goes, and a retry may run
         backup.unlink(missing_ok=True)
@@ -117,14 +150,17 @@ def main(argv=None):
     commands.add_parser("check", help="print the cosine between the service's vector and the recorded one")
     store_parser = commands.add_parser("store", help="back up, then re-embed every fact through the hosted route")
     store_parser.add_argument("--backup", required=True, help="a file to write the old vectors to; must not exist")
+    local_parser = commands.add_parser("local", help="back up, then re-embed every fact through a named Ollama")
+    local_parser.add_argument("--ollama-url", required=True, help="the Ollama to embed with, as http://host:port")
+    local_parser.add_argument("--backup", required=True, help="a file to write the old vectors to; must not exist")
     restore_parser = commands.add_parser("restore", help="put a backup's vectors and builds back")
     restore_parser.add_argument("backup")
     args = parser.parse_args(argv)
     key = os.environ.get(KEY, "").strip()
-    if not key and args.command != "restore":
+    if not key and args.command not in ("restore", "local"):
         parser.error(f"{KEY} is not set: DeepInfra's key, from the environment, never an argument")
     owner_url = os.environ.get(OWNER_URL, "").strip()
-    if not owner_url and args.command in ("store", "restore"):
+    if not owner_url and args.command in ("store", "local", "restore"):
         parser.error(f"{OWNER_URL} is not set: the store owner's connection string, from the environment")
     try:
         if args.command == "record":
@@ -135,6 +171,8 @@ def main(argv=None):
             print(f"cosine {cosine:.6f} (threshold {threshold})")
         elif args.command == "store":
             print(json.dumps(store(owner_url, key, backup=args.backup)))
+        elif args.command == "local":
+            print(json.dumps(local(owner_url, ollama_url=args.ollama_url, backup=args.backup)))
         else:
             print(f"restored {restore(owner_url, args.backup)} facts")
     except psycopg.Error as exc:   # its message can hold the connection string, password and all

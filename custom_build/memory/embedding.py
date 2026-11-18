@@ -1,7 +1,7 @@
 """Embedding through one build of one model, checked against the store (ARCHITECTURE.md section 3.2).
 
 Every vector in a store comes from one build, stored with each vector in `embedding_model`. The build is
-either this machine's Ollama (`embedding: local`, the default) or DeepInfra's hosted copy of the same model
+either an Ollama (`embedding: local`, the default: this machine's, or the one `ollama_url` names, #261) or DeepInfra's hosted copy of the same model
 (`embedding: deepinfra`, #239). A route whose build differs from one already in the store embeds nothing
 (`embed.model_mismatch`); a service that cannot embed is `embed.unavailable`, and one that refuses the key
 is `embed.refused`: there is no substitute model, and the hosted route does not fall back to Ollama.
@@ -17,7 +17,7 @@ import urllib.request
 MODEL = "qwen3-embedding:4b"
 DIMENSIONS = 2560
 OLLAMA_URL = "http://127.0.0.1:11434"
-# Ollama is on this machine, so its requests, which carry the text they embed, never go through a proxy
+# Ollama is on this machine or the tailnet (#261), so its requests, which carry the text they embed, never go through a proxy
 # that the environment or the system names (OPERATIONS.md section 2).
 _DIRECT = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
@@ -46,9 +46,10 @@ class ModelMismatch(Exception):
     """`embed.model_mismatch`: the route's build differs from one in the store, or its vectors do."""
 
 
-def for_setting(route, key):
-    """The embedder the `embedding` setting names: DeepInfra with `key`, else this machine's Ollama."""
-    return HostedEmbedder(key) if route == "deepinfra" else Embedder(OLLAMA_URL)
+def for_setting(route, key, ollama_url=None):
+    """The embedder the `embedding` setting names: DeepInfra with `key`, else the Ollama at `ollama_url`, this
+    machine's when unset (#261)."""
+    return HostedEmbedder(key) if route == "deepinfra" else Embedder((ollama_url or OLLAMA_URL).rstrip("/"))
 
 
 def _other_build(conn, build):
@@ -82,7 +83,7 @@ def _ollama(url, path, body=None, *, timeout):
 
 
 def machine_build(url=OLLAMA_URL, *, timeout):
-    """This machine's build of the model, as stored with each vector: `<model>@sha256:<digest>`."""
+    """The build of the model that the Ollama at `url` serves, as stored with each vector: `<model>@sha256:<digest>`."""
     for model in _ollama(url, "/api/tags", timeout=timeout)["models"]:
         if model["name"] == MODEL:
             return f"{MODEL}@sha256:{model['digest']}"
@@ -90,7 +91,8 @@ def machine_build(url=OLLAMA_URL, *, timeout):
 
 
 class Embedder:
-    """Embeds through this machine's build once the store has been seen not to hold another.
+    """Embeds through an Ollama's build (this machine's, or the one `ollama_url` names) once the store has been seen
+    not to hold another.
 
     `build` stays None until a check passes, and `embed` checks again until then, so a failed check
     refuses every embedding and a later pass recovers. An empty store holds no build yet: the first
@@ -104,7 +106,7 @@ class Embedder:
     def check(self, conn, *, timeout):
         build = machine_build(self.url, timeout=timeout)
         if other := _other_build(conn, build):
-            raise ModelMismatch(f"this machine has {build}; the store holds vectors from {other}")
+            raise ModelMismatch(f"the Ollama at {self.url} has {build}; the store holds vectors from {other}")
         self.build = build
 
     def embed(self, conn, texts, *, timeout):
@@ -118,7 +120,7 @@ class Embedder:
         vectors = _ollama(self.url, "/api/embed", {"model": MODEL, "input": texts}, timeout=timeout)["embeddings"]
         if (build := machine_build(self.url, timeout=timeout)) != self.build:
             checked, self.build = self.build, None
-            raise ModelMismatch(f"this machine's build changed from {checked} to {build}")
+            raise ModelMismatch(f"the build at {self.url} changed from {checked} to {build}")
         if len(vectors) != len(texts):
             raise EmbedUnavailable(f"Ollama returned {len(vectors)} vectors for {len(texts)} texts")
         if any(len(vector) != DIMENSIONS for vector in vectors):
