@@ -1,8 +1,8 @@
 """Move a store between the embedding routes, and record the reference the hosted one is checked by (#239, #261).
 
 Decided on #239 on 2026-11-17: the store is re-embedded once and keeps one build. The maintainer runs this
-from a checkout's root, with DeepInfra's key in DEEPINFRA_API_KEY and, for `store` and `restore`, the store
-owner's connection string in CUSTOM_BUILD_OWNER_URL. Neither is ever an argument. See OPERATIONS.md section 3
+from a checkout's root, with DeepInfra's key in DEEPINFRA_API_KEY (for `record`, `check` and `store`) and, for
+`store`, `local` and `restore`, the store owner's connection string in CUSTOM_BUILD_OWNER_URL. Neither is ever an argument. See OPERATIONS.md section 3
 item 1:
 
     python -m scripts.reembed record                    # once: writes custom_build/memory/embed_reference.json
@@ -69,9 +69,9 @@ def store(owner_url, key, *, backup, url=None, path=None, batch=BATCH):
     """Back up every fact's vector and build to `backup`, then re-embed every fact through the hosted route, in
     one transaction; returns how many facts, and the ids of those whose body the redactor changed before it was
     sent (their vector is of the redacted text)."""
-    hosted = _hosted(key, url, path)
     if pathlib.Path(backup).exists():
         raise ReembedError(f"{backup} already exists; a backup is never written over")
+    hosted = _hosted(key, url, path)
     hosted.check_reference(timeout=TIMEOUT)   # before anything is written
     return _move(owner_url, backup, batch, lambda texts: hosted.vectors(texts, timeout=TIMEOUT),
                  embedding.HOSTED_BUILD)
@@ -82,14 +82,18 @@ def local(owner_url, *, ollama_url, backup, batch=BATCH):
     model, which is read before anything is written. Returns what `store` does, and the build."""
     if pathlib.Path(backup).exists():
         raise ReembedError(f"{backup} already exists; a backup is never written over")
+    ollama_url = ollama_url.rstrip("/")
     build = embedding.machine_build(ollama_url, timeout=TIMEOUT)   # EmbedUnavailable when it lacks the model
 
     def vectors(texts):
         found = embedding._ollama(ollama_url, "/api/embed", {"model": embedding.MODEL, "input": texts},
                                   timeout=TIMEOUT)["embeddings"]
-        if len(found) != len(texts) or any(len(vector) != embedding.DIMENSIONS for vector in found):
-            raise embedding.EmbedUnavailable(f"Ollama returned {len(found)} vectors for {len(texts)} texts, "
-                                             f"or vectors not of {embedding.DIMENSIONS} numbers")
+        # As the local route's embedder: a short answer is unavailable, a wrong size a different model.
+        if len(found) != len(texts):
+            raise embedding.EmbedUnavailable(f"Ollama returned {len(found)} vectors for {len(texts)} texts")
+        if any(len(vector) != embedding.DIMENSIONS for vector in found):
+            raise embedding.ModelMismatch(f"Ollama returned vectors of {sorted({len(v) for v in found})} numbers, "
+                                          f"not {embedding.DIMENSIONS}")
         return found
 
     return {**_move(owner_url, backup, batch, vectors, build), "build": build}

@@ -49,7 +49,7 @@ class ModelMismatch(Exception):
 def for_setting(route, key, ollama_url=None):
     """The embedder the `embedding` setting names: DeepInfra with `key`, else the Ollama at `ollama_url`, this
     machine's when unset (#261)."""
-    return HostedEmbedder(key) if route == "deepinfra" else Embedder(ollama_url or OLLAMA_URL)
+    return HostedEmbedder(key) if route == "deepinfra" else Embedder((ollama_url or OLLAMA_URL).rstrip("/"))
 
 
 def _other_build(conn, build):
@@ -83,7 +83,7 @@ def _ollama(url, path, body=None, *, timeout):
 
 
 def machine_build(url=OLLAMA_URL, *, timeout):
-    """This machine's build of the model, as stored with each vector: `<model>@sha256:<digest>`."""
+    """The build of the model that the Ollama at `url` serves, as stored with each vector: `<model>@sha256:<digest>`."""
     for model in _ollama(url, "/api/tags", timeout=timeout)["models"]:
         if model["name"] == MODEL:
             return f"{MODEL}@sha256:{model['digest']}"
@@ -91,7 +91,8 @@ def machine_build(url=OLLAMA_URL, *, timeout):
 
 
 class Embedder:
-    """Embeds through this machine's build once the store has been seen not to hold another.
+    """Embeds through an Ollama's build (this machine's, or the one `ollama_url` names) once the store has been seen
+    not to hold another.
 
     `build` stays None until a check passes, and `embed` checks again until then, so a failed check
     refuses every embedding and a later pass recovers. An empty store holds no build yet: the first
@@ -105,7 +106,7 @@ class Embedder:
     def check(self, conn, *, timeout):
         build = machine_build(self.url, timeout=timeout)
         if other := _other_build(conn, build):
-            raise ModelMismatch(f"this machine has {build}; the store holds vectors from {other}")
+            raise ModelMismatch(f"the Ollama at {self.url} has {build}; the store holds vectors from {other}")
         self.build = build
 
     def embed(self, conn, texts, *, timeout):
@@ -119,7 +120,7 @@ class Embedder:
         vectors = _ollama(self.url, "/api/embed", {"model": MODEL, "input": texts}, timeout=timeout)["embeddings"]
         if (build := machine_build(self.url, timeout=timeout)) != self.build:
             checked, self.build = self.build, None
-            raise ModelMismatch(f"this machine's build changed from {checked} to {build}")
+            raise ModelMismatch(f"the build at {self.url} changed from {checked} to {build}")
         if len(vectors) != len(texts):
             raise EmbedUnavailable(f"Ollama returned {len(vectors)} vectors for {len(texts)} texts")
         if any(len(vector) != DIMENSIONS for vector in vectors):
