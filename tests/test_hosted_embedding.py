@@ -44,6 +44,22 @@ def test_the_setting_picks_the_route_and_local_is_the_default():
     assert isinstance(embedding.for_setting("deepinfra", KEY), embedding.HostedEmbedder)
 
 
+def test_the_local_route_uses_the_ollama_the_setting_names_and_this_machines_by_default():
+    # #261: the model can run on another machine on the tailnet; unset, it is this machine's, as before.
+    assert embedding.for_setting(None, None).url == embedding.OLLAMA_URL == "http://127.0.0.1:11434"
+    assert embedding.for_setting("local", None, "http://100.64.0.2:11434").url == "http://100.64.0.2:11434"
+    assert embedding.for_setting(None, None, "http://100.64.0.2:11434").url == "http://100.64.0.2:11434"
+
+
+def test_a_store_embedded_on_another_machines_ollama_passes_on_a_host_that_names_it(ollama, db):
+    # The digest recorded with each vector is the model's build wherever it runs (#261).
+    _store_fact(db["owner"], ollama.build)
+    embedder = embedding.for_setting("local", None, ollama.url)
+    with psycopg.connect(db["agent"]) as conn:
+        embedder.check(conn, timeout=5)
+    assert embedder.build == ollama.build
+
+
 def test_the_check_passes_when_the_reference_vector_comes_back_the_same(deepinfra, reference, db):
     embedder = hosted(deepinfra, reference)
     with psycopg.connect(db["agent"]) as conn:

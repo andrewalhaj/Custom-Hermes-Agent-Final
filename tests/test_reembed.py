@@ -186,3 +186,42 @@ def test_check_prints_the_recorded_threshold(capsys, monkeypatch, deepinfra, tmp
     monkeypatch.setenv("DEEPINFRA_API_KEY", KEY)
     assert reembed.main(["check"]) == 0
     assert "threshold 0.95" in capsys.readouterr().out
+
+
+def _add_hosted(owner, body):
+    owner.execute(
+        "insert into memory.facts (body, body_hash, kind, origin, basis, project, source, embedding, embedding_model)"
+        " values (%s, %s, 'fact', 'explicit', 'user_stated', 'p1', 'host-a', %s, %s)",
+        (body, body[:40], "[" + ",".join(["0.5"] * 2560) + "]", embedding.HOSTED_BUILD))
+
+
+def test_local_moves_every_fact_to_the_named_ollamas_build(ollama, db, tmp_path):
+    # #261: back from the hosted route, to an Ollama on another machine.
+    with psycopg.connect(db["owner"], autocommit=True) as owner:
+        _add_hosted(owner, "The parser tests run with pytest.")
+        _add_hosted(owner, "The deploy script lives in scripts/.")
+        before = owner.execute("select id::text, embedding::text from memory.facts order by id").fetchall()
+    backup = tmp_path / "backup.json"
+    outcome = reembed.local(db["owner"], ollama_url=ollama.url, backup=backup)
+    assert outcome == {"facts": 2, "redacted": [], "build": ollama.build}
+    assert sorted(text for batch in ollama.embedded for text in batch) == [
+        "The deploy script lives in scripts/.", "The parser tests run with pytest."]
+    with psycopg.connect(db["owner"]) as conn:
+        assert {row[0] for row in conn.execute("select embedding_model from memory.facts")} == {ollama.build}
+    with psycopg.connect(db["agent"]) as conn:   # the store passes the local route's own check
+        embedding.Embedder(ollama.url).check(conn, timeout=5)
+    saved = json.loads(backup.read_text(encoding="utf-8"))
+    assert [(fact["id"], fact["embedding"], fact["embedding_model"]) for fact in saved] == [
+        (fact_id, vector, embedding.HOSTED_BUILD) for fact_id, vector in before]
+
+
+def test_local_writes_nothing_when_the_named_ollama_lacks_the_model(ollama, db, tmp_path):
+    with psycopg.connect(db["owner"], autocommit=True) as owner:
+        _add_hosted(owner, "The parser tests run with pytest.")
+    ollama.models = []
+    backup = tmp_path / "backup.json"
+    with pytest.raises(embedding.EmbedUnavailable, match="does not have"):
+        reembed.local(db["owner"], ollama_url=ollama.url, backup=backup)
+    assert not backup.exists() and ollama.embedded == []
+    with psycopg.connect(db["owner"]) as conn:
+        assert conn.execute("select embedding_model from memory.facts").fetchall() == [(embedding.HOSTED_BUILD,)]
