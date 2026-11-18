@@ -64,6 +64,7 @@ Every change answers one issue, is tested first, is reviewed by someone other th
 
 | Document | Read it |
 |---|---|
+| [AGENTS.md](AGENTS.md) | For a coding agent: where to start, and the rules in short; it points at the three below |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | First, in full: what the project is for, the workflow, coding, failure and logging rules, repository guards |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | The sections for the part you are changing: memory, retrieval, the store, guards, failure handling, logging |
 | [OPERATIONS.md](OPERATIONS.md) | Before changing anything about deployment, machine setup or scheduled jobs |
