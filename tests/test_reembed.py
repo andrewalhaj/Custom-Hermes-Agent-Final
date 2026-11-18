@@ -225,3 +225,22 @@ def test_local_writes_nothing_when_the_named_ollama_lacks_the_model(ollama, db, 
     assert not backup.exists() and ollama.embedded == []
     with psycopg.connect(db["owner"]) as conn:
         assert conn.execute("select embedding_model from memory.facts").fetchall() == [(embedding.HOSTED_BUILD,)]
+
+
+@pytest.mark.parametrize(("change", "error"), [("drop", embedding.EmbedUnavailable),
+                                               ("dimensions", embedding.ModelMismatch)])
+def test_local_writes_nothing_when_the_ollama_answers_too_few_or_the_wrong_size_of_vectors(
+        ollama, db, tmp_path, change, error):
+    # #261 review: as the local route's own embedder does, a short answer is unavailable, a wrong size a mismatch.
+    with psycopg.connect(db["owner"], autocommit=True) as owner:
+        _add_hosted(owner, "The parser tests run with pytest.")
+    if change == "drop":
+        ollama.drop = 1
+    else:
+        ollama.dimensions = 1024
+    backup = tmp_path / "backup.json"
+    with pytest.raises(error):
+        reembed.local(db["owner"], ollama_url=ollama.url, backup=backup)
+    assert not backup.exists()
+    with psycopg.connect(db["owner"]) as conn:
+        assert conn.execute("select embedding_model from memory.facts").fetchall() == [(embedding.HOSTED_BUILD,)]
