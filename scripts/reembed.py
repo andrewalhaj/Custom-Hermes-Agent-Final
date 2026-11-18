@@ -1,4 +1,4 @@
-"""Move a store to the hosted embedding route, and record the reference that route is checked by (#239).
+"""Move a store between the embedding routes, and record the reference the hosted one is checked by (#239, #261).
 
 Decided on #239 on 2026-11-17: the store is re-embedded once and keeps one build. The maintainer runs this
 from a checkout's root, with DeepInfra's key in DEEPINFRA_API_KEY and, for `store` and `restore`, the store

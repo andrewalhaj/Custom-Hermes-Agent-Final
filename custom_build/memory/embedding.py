@@ -1,7 +1,7 @@
 """Embedding through one build of one model, checked against the store (ARCHITECTURE.md section 3.2).
 
 Every vector in a store comes from one build, stored with each vector in `embedding_model`. The build is
-either this machine's Ollama (`embedding: local`, the default) or DeepInfra's hosted copy of the same model
+either an Ollama (`embedding: local`, the default: this machine's, or the one `ollama_url` names, #261) or DeepInfra's hosted copy of the same model
 (`embedding: deepinfra`, #239). A route whose build differs from one already in the store embeds nothing
 (`embed.model_mismatch`); a service that cannot embed is `embed.unavailable`, and one that refuses the key
 is `embed.refused`: there is no substitute model, and the hosted route does not fall back to Ollama.
@@ -17,7 +17,7 @@ import urllib.request
 MODEL = "qwen3-embedding:4b"
 DIMENSIONS = 2560
 OLLAMA_URL = "http://127.0.0.1:11434"
-# Ollama is on this machine, so its requests, which carry the text they embed, never go through a proxy
+# Ollama is on this machine or the tailnet (#261), so its requests, which carry the text they embed, never go through a proxy
 # that the environment or the system names (OPERATIONS.md section 2).
 _DIRECT = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
