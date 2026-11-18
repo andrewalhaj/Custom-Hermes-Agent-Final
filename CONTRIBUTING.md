@@ -64,6 +64,7 @@ The same standard applies to contributions. A change that makes the agent sound 
 
 | Document | What it holds | Read it |
 |---|---|---|
+| [`AGENTS.md`](AGENTS.md) | Pointers to these documents and a short restatement of the rules, for an agent | By an agent, first; it points here |
 | `CONTRIBUTING.md` (this file) | The rules and the workflow | First, in full |
 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | How the build works: memory, retrieval, the store, guards, failure handling, logging | The sections for the part you are changing |
 | [`OPERATIONS.md`](OPERATIONS.md) | Where the build runs, machine setup, scheduled jobs | Before changing anything about deployment or jobs |
@@ -428,8 +429,8 @@ Do not look for another route to the same result.
 
 AI coding agents are welcome contributors, under the same rules as everyone else.
 
-- **Keep every file Hermes loads as project context out of this repository.** When a Hermes session runs inside a repository, Hermes loads the first it finds of `.hermes.md` or `HERMES.md`, `AGENTS.override.md`, `AGENTS.md`, `CLAUDE.md`, and `.cursorrules` with `.cursor/rules/*.mdc`. It also picks up these files in subdirectories as the agent reads files there.[23] Any of them would turn development rules into the running agent's instructions. That is why this file is `CONTRIBUTING.md`. On the default macOS file system `Agents.md` and `AGENTS.md` are the same file, so do not use either spelling.
-- **Give a coding agent its rules from outside the repository.** Use the agent's user-level instruction file: point it at this document, and copy in the rules from sections 4.1, 5.1, 6 and 7.
+- **`AGENTS.md` is the one file Hermes loads as project context that this repository keeps.** When a Hermes session runs inside a repository, Hermes loads the first it finds of `.hermes.md` or `HERMES.md`, `AGENTS.override.md`, `AGENTS.md`, `CLAUDE.md`, and `.cursorrules` with `.cursor/rules/*.mdc`. It also picks up these files in subdirectories as the agent reads files there.[23] So the root `AGENTS.md` holds development rules only: pointers to the three documents and a short restatement of sections 4.1, 5.1, 6 and 7. It says nothing about the running agent's identity or behaviour. Do not add `.hermes.md`, `HERMES.md` or `AGENTS.override.md` (each loads instead of it), `CLAUDE.md` or `.cursorrules` (a second copy of the rules to keep in step), or any other file Hermes loads as project context. On the default macOS file system `Agents.md` and `AGENTS.md` are the same file, so use exactly `AGENTS.md`. When a rule changes here, change `AGENTS.md` in the same pull request.
+- **An agent that does not read `AGENTS.md` by itself needs its user-level instruction file to point at it** and at this document.
 - **End every brief with the error-handling rule.** A brief that says code "must never raise" or must "fail open" invites a silent catch-everything handler (C5). Every brief given to a coding agent ends with this line, verbatim:
 
   > Error handling rule: catch the specific exception you expect, by name. Never return a value that also means "nothing found" or "skipped" for a failure; log every caught failure with its failure code, and let anything unexpected crash.

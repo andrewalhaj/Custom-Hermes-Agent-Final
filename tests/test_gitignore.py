@@ -68,6 +68,7 @@ VISIBLE = [
     "custom_build/guards/write_gate.toml",
     "custom_build/guards/verify_gate.toml",
     "README.md",
+    "AGENTS.md",
     "docs/architecture/01-architecture.png",
 ]
 
