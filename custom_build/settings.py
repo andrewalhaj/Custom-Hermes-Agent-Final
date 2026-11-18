@@ -29,12 +29,15 @@ def _usable(value):
     return isinstance(value, str) and bool(value.strip())
 
 
-def _http_address(value):
+def http_address(value):
     """Usable, and an http or https address with a host in it, as the local route's Ollama is named (#261)."""
     if not _usable(value):
         return False
-    parts = urllib.parse.urlsplit(value.strip())
-    return parts.scheme in ("http", "https") and bool(parts.hostname)
+    try:
+        parts = urllib.parse.urlsplit(value.strip())
+        return parts.scheme in ("http", "https") and bool(parts.hostname)
+    except ValueError:   # what urlsplit raises for a malformed address, such as an unclosed [
+        return False
 
 
 def _connection_string(value):
@@ -67,7 +70,7 @@ def missing_embedding_settings(ctx):
     route, url = ctx.get_config(EMBEDDING), ctx.get_config(OLLAMA_URL)
     found = (("plugins.entries.custom_build.settings." + EMBEDDING, route is None or route in EMBEDDING_ROUTES),
              (EMBEDDING_KEY, route != "deepinfra" or _usable(get_secret(EMBEDDING_KEY))),
-             ("plugins.entries.custom_build.settings." + OLLAMA_URL, url is None or _http_address(url)))
+             ("plugins.entries.custom_build.settings." + OLLAMA_URL, url is None or http_address(url)))
     return [name for name, ok in found if not ok]
 
 

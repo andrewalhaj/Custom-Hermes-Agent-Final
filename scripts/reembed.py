@@ -29,7 +29,7 @@ import sys
 import psycopg
 from agent.redact import redact_sensitive_text, register_redaction_patterns
 
-from custom_build import REDACTION_PATTERNS
+from custom_build import REDACTION_PATTERNS, settings
 from custom_build.memory import embedding, write_path
 
 # A made-up sentence, so the reference holds nothing of anyone's memory.
@@ -82,7 +82,9 @@ def local(owner_url, *, ollama_url, backup, batch=BATCH):
     model, which is read before anything is written. Returns what `store` does, and the build."""
     if pathlib.Path(backup).exists():
         raise ReembedError(f"{backup} already exists; a backup is never written over")
-    ollama_url = ollama_url.rstrip("/")
+    if not settings.http_address(ollama_url):
+        raise ReembedError(f"{ollama_url!r} is not an http or https address with a host, as http://host:11434")
+    ollama_url = ollama_url.strip().rstrip("/")
     build = embedding.machine_build(ollama_url, timeout=TIMEOUT)   # EmbedUnavailable when it lacks the model
 
     def vectors(texts):
