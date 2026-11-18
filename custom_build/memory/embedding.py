@@ -46,9 +46,10 @@ class ModelMismatch(Exception):
     """`embed.model_mismatch`: the route's build differs from one in the store, or its vectors do."""
 
 
-def for_setting(route, key):
-    """The embedder the `embedding` setting names: DeepInfra with `key`, else this machine's Ollama."""
-    return HostedEmbedder(key) if route == "deepinfra" else Embedder(OLLAMA_URL)
+def for_setting(route, key, ollama_url=None):
+    """The embedder the `embedding` setting names: DeepInfra with `key`, else the Ollama at `ollama_url`, this
+    machine's when unset (#261)."""
+    return HostedEmbedder(key) if route == "deepinfra" else Embedder(ollama_url or OLLAMA_URL)
 
 
 def _other_build(conn, build):
